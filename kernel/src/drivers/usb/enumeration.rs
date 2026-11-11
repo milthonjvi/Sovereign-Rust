@@ -40,12 +40,12 @@ pub enum EnumerationStage{
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct EnumerationSession{
- stage:EnumerationStage,address:Option<DeviceAddress>,configuration_value:u8,
+ stage:EnumerationStage,address:Option<DeviceAddress>,address_settle_ms:u16,configuration_value:u8,
  configuration_length:u16,device:Option<DeviceDescriptor>,configuration:Option<ParsedConfiguration>,
 }
 impl EnumerationSession{
  pub const fn new()->Self{Self{stage:EnumerationStage::ReadInitialDeviceDescriptor,
-  address:None,configuration_value:0,configuration_length:0,device:None,configuration:None}}
+  address:None,address_settle_ms:0,configuration_value:0,configuration_length:0,device:None,configuration:None}}
  pub const fn stage(&self)->EnumerationStage{self.stage}
  pub const fn address(&self)->Option<DeviceAddress>{self.address}
  pub const fn device_descriptor(&self)->Option<DeviceDescriptor>{self.device}
@@ -71,7 +71,7 @@ impl EnumerationSession{
    match self.stage{
     EnumerationStage::ReadInitialDeviceDescriptor=>{
      if data.len()<8||data[0]!=18||data[1]!=DESC_DEVICE||!matches!(data[7],8|16|32|64|9){return Err(UsbError::MalformedDescriptor)}
-     self.address=Some(pool.allocate()?);self.stage=EnumerationStage::SetAddress;
+     self.address=Some(pool.allocate()?);self.address_settle_ms=0;self.stage=EnumerationStage::SetAddress;
     }
     EnumerationStage::SetAddress=>{
      if !data.is_empty(){return Err(UsbError::MalformedDescriptor)}
@@ -133,7 +133,8 @@ impl EnumerationSession{
  /// The USB specification requires at least 2 ms before the next request.
  pub fn elapse_ms(&mut self,elapsed_ms:u16)->Result<(),UsbError>{
   if self.stage!=EnumerationStage::AddressSettle{return Err(UsbError::Unsupported)}
-  if elapsed_ms<2{return Ok(())}
+  self.address_settle_ms=self.address_settle_ms.saturating_add(elapsed_ms);
+  if self.address_settle_ms<2{return Ok(())}
   self.stage=EnumerationStage::ReadDeviceDescriptor;Ok(())
  }
  /// Releases the address after a failed or disconnected enumeration.
@@ -164,9 +165,17 @@ mod tests{
   s.complete(&[],&mut pool).unwrap();
   assert_eq!(s.stage(),EnumerationStage::AddressSettle);
   assert_eq!(s.request(),None);
+  s.elapse_ms(0).unwrap();assert_eq!(s.stage(),EnumerationStage::AddressSettle);
   s.elapse_ms(1).unwrap();assert_eq!(s.stage(),EnumerationStage::AddressSettle);
   s.elapse_ms(1).unwrap();assert_eq!(s.stage(),EnumerationStage::ReadDeviceDescriptor);
   assert_eq!(s.request().unwrap().length,18);
+ }
+ #[test]fn address_settle_accumulates_elapsed_time_and_saturates(){
+  let mut pool=DeviceAddressPool::new();let mut s=EnumerationSession::new();
+  s.complete(&[18,1,0,2,0,0,0,64],&mut pool).unwrap();
+  s.complete(&[],&mut pool).unwrap();
+  s.elapse_ms(1).unwrap();assert_eq!(s.stage(),EnumerationStage::AddressSettle);
+  s.elapse_ms(u16::MAX).unwrap();assert_eq!(s.stage(),EnumerationStage::ReadDeviceDescriptor);
  }
  #[test]fn failed_enumeration_releases_allocated_address(){
   let mut pool=DeviceAddressPool::new();let mut s=EnumerationSession::new();
