@@ -702,6 +702,53 @@ mod tests {
     }
 
     #[test]
+    fn decodes_gamepad_axes_and_button_edges() {
+        const GAMEPAD: &[u8] = &[
+            0x05,0x01, 0x09,0x05, 0xA1,0x01,
+            0x09,0x30, 0x09,0x31, 0x15,0x81, 0x25,0x7F,
+            0x75,0x08, 0x95,0x02, 0x81,0x02,
+            0x05,0x09, 0x19,0x01, 0x29,0x04, 0x15,0x00, 0x25,0x01,
+            0x75,0x01, 0x95,0x04, 0x81,0x02,
+            0x75,0x04, 0x95,0x01, 0x81,0x01,
+            0xC0,
+        ];
+        let map = HidReportMap::parse(GAMEPAD).unwrap();
+        assert_eq!(map.report_bytes(0), 3);
+        let mut q = SpscQueue::<InputEvent, 16>::new();
+        let (mut producer, mut consumer) = q.split();
+        let mut decoder = HidReportDecoder::new(InputDeviceId(31));
+        decoder.publish_report(&map, &[0x80,0x7F,0x05], &mut producer).unwrap();
+        assert!(matches!(consumer.pop(), Some(InputEvent::GamepadAxis {
+            axis: GamepadAxis::LeftX, value: i16::MIN, ..
+        })));
+        assert!(matches!(consumer.pop(), Some(InputEvent::GamepadAxis {
+            axis: GamepadAxis::LeftY, value: i16::MAX, ..
+        })));
+        assert!(matches!(consumer.pop(), Some(InputEvent::GamepadButton { button: 1, pressed: true, .. })));
+        assert!(matches!(consumer.pop(), Some(InputEvent::GamepadButton { button: 3, pressed: true, .. })));
+        decoder.publish_report(&map, &[0x80,0x7F,0x00], &mut producer).unwrap();
+        assert!(matches!(consumer.pop(), Some(InputEvent::GamepadButton { button: 1, pressed: false, .. })));
+        assert!(matches!(consumer.pop(), Some(InputEvent::GamepadButton { button: 3, pressed: false, .. })));
+    }
+
+    #[test]
+    fn queue_overflow_resets_consumer_before_replaying_state() {
+        let map = HidReportMap::parse(KEYBOARD_DESCRIPTOR).unwrap();
+        let mut q = SpscQueue::<InputEvent, 4>::new();
+        let (mut producer, mut consumer) = q.split();
+        for id in 1..=3 {
+            producer.push(InputEvent::DeviceConnected { device: InputDeviceId(id) }).unwrap();
+        }
+        let mut decoder = HidReportDecoder::new(InputDeviceId(40));
+        let stats = decoder.publish_report(&map, &[0,0,4,0,0,0,0,0], &mut producer).unwrap();
+        assert_eq!(stats.dropped, 1);
+        while consumer.pop().is_some() {}
+        decoder.publish_report(&map, &[0,0,4,0,0,0,0,0], &mut producer).unwrap();
+        assert!(matches!(consumer.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(40) })));
+        assert!(matches!(consumer.pop(), Some(InputEvent::HidKey { usage: 4, pressed: true, .. })));
+    }
+
+    #[test]
     fn rejects_truncated_and_wrong_id_reports() {
         assert_eq!(HidReportMap::parse(&[0x75]), Err(HidReportError::TruncatedDescriptor));
         let descriptor = [0x85,1,0x75,8,0x95,1,0x81,2];
