@@ -81,14 +81,19 @@ impl UsbPortMachine{
     }
     None
    }
-   PortPhase::Disconnected|PortPhase::Failed=>{
+   PortPhase::Disconnected=>{
     if observation.connected{
      self.phase=PortPhase::Debouncing;self.stable_ms=0;self.elapsed_ms=0;
      if observation.connection_changed{return Some(PortAction::ClearConnectionChange)}
     }
     None
    }
+   PortPhase::Failed=>None
   }
+ }
+ pub fn retry(&mut self)->Result<(),UsbError>{
+  if self.phase!=PortPhase::Failed{return Err(UsbError::Unsupported)}
+  self.phase=PortPhase::Debouncing;self.elapsed_ms=0;self.stable_ms=0;Ok(())
  }
  pub fn enumeration_complete(&mut self,success:bool)->Result<(),UsbError>{
   if self.phase!=PortPhase::Enumerating{return Err(UsbError::Unsupported)}
