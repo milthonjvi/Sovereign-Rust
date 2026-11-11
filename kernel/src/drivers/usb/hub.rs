@@ -179,7 +179,8 @@ pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRe
 pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool}
 impl HubPortMachine{
  pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:false}}
- pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true}}\n pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
+ pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true}}
+ pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
  pub fn elapse_ms(&mut self,ms:u32){self.elapsed_ms=self.elapsed_ms.saturating_add(ms);if self.state==HubPortState::PowerGoodWait&&self.elapsed_ms>=self.power_good_ms{self.state=HubPortState::AwaitConnection;self.elapsed_ms=0}else if self.state==HubPortState::Debouncing&&self.elapsed_ms>=100{self.state=HubPortState::ResetRequired;self.elapsed_ms=0}}
  pub fn observe(&mut self,status:HubPortStatus){
   if status.status&HubPortStatus::OVER_CURRENT!=0{self.state=HubPortState::OverCurrent;return}
