@@ -86,6 +86,9 @@ impl SovereignBootInfo {
             && self.kernel_virtual_base.checked_add(self.kernel_image_size).is_some()
             && self.kernel_entry >= self.kernel_virtual_base
             && self.kernel_entry < self.kernel_virtual_base + self.kernel_image_size
+            && is_canonical_x86_64(self.kernel_virtual_base)
+            && is_canonical_x86_64(self.kernel_entry)
+            && is_canonical_x86_64(self.kernel_virtual_base + self.kernel_image_size - 1)
             && (self.flags & BOOT_INFO_FLAG_ACPI_VALID != 0 || self.acpi_rsdp_physical == 0)
             && (self.flags & BOOT_INFO_FLAG_FRAMEBUFFER_VALID != 0
                 || (self.framebuffer_physical == 0 && self.framebuffer_size == 0
@@ -94,6 +97,7 @@ impl SovereignBootInfo {
             && (self.flags & BOOT_INFO_FLAG_ACPI_VALID == 0 || self.acpi_rsdp_physical != 0)
             && (self.flags & BOOT_INFO_FLAG_FRAMEBUFFER_VALID == 0
                 || (self.framebuffer_physical != 0 && self.framebuffer_size != 0
+                    && self.framebuffer_physical.checked_add(self.framebuffer_size).is_some()
                     && self.framebuffer_width != 0 && self.framebuffer_height != 0
                     && self.framebuffer_pixels_per_scanline >= self.framebuffer_width))
             && self.reserved[0] == 0
@@ -101,4 +105,10 @@ impl SovereignBootInfo {
             && self.reserved[2] == 0
             && self.reserved[3] == 0
     }
+}
+
+const fn is_canonical_x86_64(address: u64) -> bool {
+    let upper = address >> 48;
+    let sign = (address >> 47) & 1;
+    (sign == 0 && upper == 0) || (sign == 1 && upper == 0xffff)
 }
