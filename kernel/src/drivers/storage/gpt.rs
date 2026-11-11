@@ -299,4 +299,45 @@ mod tests {
         assert_eq!(partition.last_lba, 19);
         assert_eq!(partition.attributes, 7);
     }
+    struct RedundantDisk { corrupt: [u8; 512], backup: [u8; 512] }
+    impl BlockDevice for RedundantDisk {
+        fn geometry(&self) -> BlockGeometry { BlockGeometry { block_count: 64, block_size: 512 } }
+        fn read_blocks(&mut self, range: BlockRange, buffer: &mut [u8]) -> Result<(), BlockError> {
+            if range.block_count != 1 || buffer.len() != 512 { return Err(BlockError::OutOfBounds); }
+            match range.start_block {
+                2 => buffer.copy_from_slice(&self.corrupt),
+                62 => buffer.copy_from_slice(&self.backup),
+                _ => return Err(BlockError::OutOfBounds),
+            }
+            Ok(())
+        }
+        fn write_blocks(&mut self, _: BlockRange, _: &[u8]) -> Result<(), BlockError> { Err(BlockError::UnsupportedOperation) }
+        fn flush(&mut self) -> Result<(), BlockError> { Ok(()) }
+    }
+    #[test]
+    fn retries_backup_partition_array_after_primary_crc_failure() {
+        let mut backup = [0u8; 512];
+        backup[..16].copy_from_slice(&[1; 16]);
+        backup[16..32].copy_from_slice(&[2; 16]);
+        backup[32..40].copy_from_slice(&10u64.to_le_bytes());
+        backup[40..48].copy_from_slice(&19u64.to_le_bytes());
+        let crc = !crc32_update(!0, &backup[..256]);
+        let mut disk = RedundantDisk { corrupt: [0u8; 512], backup };
+        let primary = GptHeader {
+            revision: 0x0001_0000, header_size: 92, current_lba: 1, backup_lba: 63,
+            first_usable_lba: 4, last_usable_lba: 60, disk_guid: [3; 16],
+            entries_lba: 2, entry_count: 2, entry_size: 128, entries_crc32: crc,
+        };
+        let backup_header = GptHeader { current_lba: 63, backup_lba: 1, entries_lba: 62, ..primary };
+        let pair = GptHeaderPair { primary: Some(primary), backup: Some(backup_header) };
+        let mut block = [0u8; 512];
+        let mut entry = [0u8; 128];
+        let mut output = [None; 2];
+        let count = enumerate_gpt_partitions_redundant(
+            &mut disk, pair, &mut block, &mut entry, &mut output,
+        ).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(output[0].unwrap().first_lba, 10);
+    }
+
 }
