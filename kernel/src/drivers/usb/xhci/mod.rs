@@ -39,14 +39,27 @@ impl<'a,const N:usize>XhciProducerRing<'a,N>{
  }
  fn write_link(&mut self){
   let control=(6u32<<10)|(1<<1)|(self.cycle as u32);
-  unsafe{core::ptr::write_volatile(&mut self.entries[N-1],Trb{parameter:self.physical_base,status:0,control});}
+  let entry=&mut self.entries[N-1];
+  unsafe{
+   core::ptr::write_volatile(&mut entry.control,control^1);
+   core::ptr::write_volatile(&mut entry.parameter,self.physical_base);
+   core::ptr::write_volatile(&mut entry.status,0);
+  }
+  core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+  unsafe{core::ptr::write_volatile(&mut entry.control,control);}
  }
  pub fn push(&mut self,mut trb:Trb)->Result<usize,XhciError>{
   if self.in_flight>=N-1{return Err(XhciError::RingFull)}
   let index=self.enqueue;
   trb=trb.with_cycle(self.cycle);
-  unsafe{core::ptr::write_volatile(&mut self.entries[index],trb);}
+  let entry=&mut self.entries[index];
+  unsafe{
+   core::ptr::write_volatile(&mut entry.control,trb.control^1);
+   core::ptr::write_volatile(&mut entry.parameter,trb.parameter);
+   core::ptr::write_volatile(&mut entry.status,trb.status);
+  }
   core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+  unsafe{core::ptr::write_volatile(&mut entry.control,trb.control);}
   self.in_flight+=1;self.enqueue+=1;
   if self.enqueue==N-1{
    self.write_link();
@@ -75,9 +88,11 @@ impl<'a,const N:usize>XhciEventRing<'a,N>{
   Ok(Self{entries,dequeue:0,cycle:true})
  }
  pub fn pop(&mut self)->Option<Trb>{
-  let trb=self.entries[self.dequeue];
+  let entry=&self.entries[self.dequeue];
+  let cycle=unsafe{core::ptr::read_volatile(&entry.control)&1!=0};
+  if cycle!=self.cycle{return None}
   core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
-  if trb.cycle_bit()!=self.cycle{return None}
+  let trb=unsafe{core::ptr::read_volatile(entry)};
   self.dequeue+=1;
   if self.dequeue==N{self.dequeue=0;self.cycle=!self.cycle;}
   Some(trb)
