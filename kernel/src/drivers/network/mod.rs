@@ -7,6 +7,7 @@
 pub mod device;
 pub mod e1000;
 pub mod e1000_descriptor;
+pub mod e1000_hw;
 pub mod e1000_pci;
 pub mod ethernet;
 
