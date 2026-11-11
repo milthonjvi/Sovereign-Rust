@@ -178,7 +178,9 @@ pub unsafe fn initialize<R: E1000Registers>(
         | (TCTL_COLLISION_DISTANCE << TCTL_COLD_SHIFT);
     registers.write32(REG_TCTL, tctl).map_err(E1000InitError::Register)?;
     registers.dma_write_barrier();
-    registers.write32(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)
+    // LPE admits VLAN-tagged 1522-byte wire frames. The datapath caps delivery
+    // at MTU 1500 (1518 bytes without FCS) and drains/drops larger fragments.
+    registers.write32(REG_RCTL, RCTL_EN | RCTL_LPE | RCTL_BAM | RCTL_SECRC)
         .map_err(E1000InitError::Register)?;
 
     Ok(E1000InitInfo {
