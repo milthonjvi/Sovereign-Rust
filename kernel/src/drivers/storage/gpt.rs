@@ -155,4 +155,55 @@ fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
     crc
 }
 
-#[cfg(test)] mod tests { use super::*; #[test] fn rejects_signature(){let b=[0u8;512];assert_eq!(GptHeader::parse(&b,1,BlockGeometry{block_count:4096,block_size:512}),Err(GptError::InvalidSignature));} #[test] fn crc32_standard_vector(){assert_eq!(crc32_zeroed(b"123456789",9..9),0xcbf4_3926);} }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::block::{BlockDevice, BlockError, BlockRange};
+    #[test]
+    fn rejects_signature() {
+        let b = [0u8; 512];
+        assert_eq!(GptHeader::parse(&b, 1, BlockGeometry { block_count: 4096, block_size: 512 }), Err(GptError::InvalidSignature));
+    }
+    #[test]
+    fn crc32_standard_vector() {
+        assert_eq!(crc32_zeroed(b"123456789", 9..9), 0xcbf4_3926);
+        assert_eq!(!crc32_update(!0, b"123456789"), 0xcbf4_3926);
+    }
+    struct Disk { table: [u8; 512] }
+    impl BlockDevice for Disk {
+        fn geometry(&self) -> BlockGeometry { BlockGeometry { block_count: 64, block_size: 512 } }
+        fn read_blocks(&mut self, range: BlockRange, buffer: &mut [u8]) -> Result<(), BlockError> {
+            if range.start_block != 2 || range.block_count != 1 || buffer.len() != 512 { return Err(BlockError::OutOfBounds); }
+            buffer.copy_from_slice(&self.table);
+            Ok(())
+        }
+        fn write_blocks(&mut self, _: BlockRange, _: &[u8]) -> Result<(), BlockError> { Err(BlockError::UnsupportedOperation) }
+        fn flush(&mut self) -> Result<(), BlockError> { Ok(()) }
+    }
+    #[test]
+    fn validates_crc_and_enumerates_entries() {
+        let mut table = [0u8; 512];
+        table[0..16].copy_from_slice(&[1; 16]);
+        table[16..32].copy_from_slice(&[2; 16]);
+        table[32..40].copy_from_slice(&10u64.to_le_bytes());
+        table[40..48].copy_from_slice(&19u64.to_le_bytes());
+        table[48..56].copy_from_slice(&7u64.to_le_bytes());
+        table[56..60].copy_from_slice(&[b'T' as u8, 0, b'E' as u8, 0]);
+        let crc = !crc32_update(!0, &table[..256]);
+        let mut disk = Disk { table };
+        let header = GptHeader {
+            revision: 0x0001_0000, header_size: 92, current_lba: 1, backup_lba: 63,
+            first_usable_lba: 4, last_usable_lba: 60, disk_guid: [3; 16],
+            entries_lba: 2, entry_count: 2, entry_size: 128, entries_crc32: crc,
+        };
+        let mut block = [0u8; 512];
+        let mut entry = [0u8; 128];
+        let mut output = [None; 2];
+        let count = enumerate_gpt_partitions(&mut disk, header, &mut block, &mut entry, &mut output).unwrap();
+        assert_eq!(count, 1);
+        let partition = output[0].unwrap();
+        assert_eq!(partition.first_lba, 10);
+        assert_eq!(partition.last_lba, 19);
+        assert_eq!(partition.attributes, 7);
+    }
+}
