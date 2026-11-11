@@ -5,7 +5,7 @@
 //! allocates DMA memory, or installs interrupt handlers.
 
 use super::e1000::{
-    RingConfig, RxDescriptor, TxDescriptor, RingCursor, E1000Error, RXD_STATUS_DD, TXD_STATUS_DD, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
+    RingConfig, RxDescriptor, TxDescriptor, RingCursor, E1000Error, TXD_STATUS_DD, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
     REG_CTRL, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
     REG_RDBAH, REG_RDBAL, REG_RDH, REG_RDLEN, REG_RDT,
     REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
@@ -179,11 +179,13 @@ pub enum E1000QueueError<E> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct E1000TxQueue {
     cursor: RingCursor,
+    clean: RingCursor,
+    pending: u16,
 }
 
 impl E1000TxQueue {
     pub fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
-        Ok(Self { cursor: RingCursor::new(descriptor_count)? })
+        Ok(Self { cursor: RingCursor::new(descriptor_count)?, clean: RingCursor::new(descriptor_count)?, pending: 0 })
     }
 
     /// Submit a DMA-mapped frame. The caller must keep its buffer alive until
@@ -202,7 +204,7 @@ impl E1000TxQueue {
             return Err(E1000QueueError::InvalidFrameLength);
         }
         let index = self.cursor.index() as usize;
-        if descriptors[index].status & TXD_STATUS_DD == 0 {
+        if self.pending as usize >= descriptors.len() - 1 || descriptors[index].status & TXD_STATUS_DD == 0 {
             return Err(E1000QueueError::TxRingFull);
         }
         let descriptor = super::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
@@ -210,26 +212,31 @@ impl E1000TxQueue {
         descriptors[index] = descriptor;
         registers.dma_write_barrier();
         let next = self.cursor.advance();
+        self.pending += 1;
         registers.write32(REG_TDT, next as u32).map_err(E1000QueueError::Register)?;
         Ok(index as u16)
     }
 
     /// Count and release completed descriptors in order. The caller may free
     /// the associated DMA buffers only after this reports their completion.
-    pub fn reap(&mut self, registers: &mut R, descriptors: &[TxDescriptor])
-        -> Result<usize, E1000QueueError<R::Error>>
-    where
-        R: E1000Registers,
-    {
+    pub fn reap<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &[TxDescriptor],
+    ) -> Result<usize, E1000QueueError<R::Error>> {
         if descriptors.len() != self.cursor_count() {
             return Err(E1000QueueError::InvalidRing);
         }
         let mut completed = 0;
-        for descriptor in descriptors {
+        while self.pending > 0 {
+            let index = self.clean.index() as usize;
             registers.dma_read_barrier();
-            if descriptor.status & TXD_STATUS_DD != 0 {
-                completed += 1;
+            if descriptors[index].status & TXD_STATUS_DD == 0 {
+                break;
             }
+            self.clean.advance();
+            self.pending -= 1;
+            completed += 1;
         }
         Ok(completed)
     }
@@ -371,6 +378,34 @@ mod tests {
         assert!(regs.writes.contains(&(REG_TDT, 0)));
         assert!(regs.writes.contains(&(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)));
         assert!(regs.writes.iter().any(|(reg, value)| *reg == REG_TCTL && value & TCTL_EN != 0));
+    }
+
+    #[test]
+    fn tx_queue_tracks_in_flight_descriptors_and_reclaims_in_order() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut queue = E1000TxQueue::new(8).unwrap();
+        assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x8000, 128), Ok(0));
+        assert_eq!(queue.reap(&mut regs, &descriptors), Ok(0));
+        descriptors[0].status = TXD_STATUS_DD;
+        assert_eq!(queue.reap(&mut regs, &descriptors), Ok(1));
+        assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x9000, 256), Ok(1));
+    }
+
+    #[test]
+    fn rx_queue_rearms_only_a_completed_descriptor() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [RxDescriptor::for_buffer(0xa000); 8];
+        let mut queue = E1000RxQueue::new(8).unwrap();
+        assert_eq!(queue.poll(&mut regs, &mut descriptors), Ok(None));
+        descriptors[0].length = 96;
+        descriptors[0].status = super::super::e1000::RXD_STATUS_DD | super::super::e1000::RXD_STATUS_EOP;
+        let (index, completion) = queue.poll(&mut regs, &mut descriptors).unwrap().unwrap();
+        assert_eq!(index, 0);
+        assert_eq!(completion.length, 96);
+        assert_eq!(descriptors[0].buffer_address, 0xa000);
+        assert_eq!(descriptors[0].status, 0);
+        assert!(regs.writes.contains(&(REG_RDT, 0)));
     }
 
     #[test]
