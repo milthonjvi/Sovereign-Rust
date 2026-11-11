@@ -5,7 +5,7 @@
 mod irq;
 mod rx;
 mod tx;
-pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, receive_dropped_bytes, receive_high_watermark, receive_statistics, interrupt_statistics, set_auto_rts_flow_control, receive_byte, set_cts_flow_control, transmit_async, transmit_pending, transmit_statistics, UartIrqError, UartIrqStatistics, UartRxStatistics, UartTxStatistics};
+pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, receive_dropped_bytes, receive_high_watermark, receive_pressure, receive_statistics, interrupt_statistics, set_auto_rts_flow_control, receive_byte, set_cts_flow_control, transmit_async, transmit_pending, transmit_statistics, UartIrqError, UartIrqStatistics, UartRxPressure, UartRxStatistics, UartTxStatistics};
 pub use rx::UartRxBuffer;
 pub use tx::UartTxBuffer;
 
