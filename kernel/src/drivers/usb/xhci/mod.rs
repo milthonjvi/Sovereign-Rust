@@ -333,6 +333,7 @@ impl XhciController{
   let value=io.read32(offset)?;
   if value&1==0{return Err(XhciError::NotReady)}
   let speed=(value>>10)&0xf;
+  if speed==0||speed>5{return Err(XhciError::InvalidCapability)}
   let reset=if speed==4||speed==5{1u32<<31}else{1u32<<4};
   io.write32(offset,(value&(1<<9))|reset)
  }
@@ -341,6 +342,7 @@ impl XhciController{
   if port==0||port>self.capabilities.max_ports{return Err(XhciError::InvalidCapability)}
   let value=io.read32(self.op(OP_PORT_BASE)+(port as usize-1)*OP_PORT_STRIDE)?;
   let speed=(value>>10)&0xf;
+  if speed==0||speed>5{return Err(XhciError::InvalidCapability)}
   let change=if speed==4||speed==5{1<<19}else{1<<21};
   Ok(value&change!=0)
  }
