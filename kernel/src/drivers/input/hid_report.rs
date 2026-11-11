@@ -34,6 +34,8 @@ pub struct HidInputField {
     pub usage_page: u16,
     pub usage_min: u16,
     pub usage_max: u16,
+    pub usage_list: [u16; 16],
+    pub usage_count: u8,
     pub logical_min: i32,
     pub logical_max: i32,
     /// HID Input item flags. Bit 1=Variable, bit 2=Relative.
@@ -45,6 +47,7 @@ impl HidInputField {
     const EMPTY: Self = Self {
         report_id: 0, bit_offset: 0, report_size: 0, report_count: 0,
         value_slot: 0, usage_page: 0, usage_min: 0, usage_max: 0,
+        usage_list: [0; 16], usage_count: 0,
         logical_min: 0, logical_max: 0, flags: 0,
         application_page: 0, application_usage: 0,
     };
@@ -73,9 +76,11 @@ struct LocalState {
     usage_min: Option<u16>,
     usage_max: Option<u16>,
     first_usage: Option<u16>,
+    usages: [u16; 16],
+    usage_count: u8,
 }
 impl LocalState {
-    const EMPTY: Self = Self { usage_min: None, usage_max: None, first_usage: None };
+    const EMPTY: Self = Self { usage_min: None, usage_max: None, first_usage: None, usages: [0; 16], usage_count: 0 };
     fn clear(&mut self) { *self = Self::EMPTY; }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,7 +178,13 @@ impl HidReportMap {
                 2 => { // Local items
                     let usage = raw as u16;
                     match tag {
-                        0 => if local.first_usage.is_none() { local.first_usage = Some(usage); },
+                        0 => {
+                            if local.first_usage.is_none() { local.first_usage = Some(usage); }
+                            if (local.usage_count as usize) < local.usages.len() {
+                                local.usages[local.usage_count as usize] = usage;
+                                local.usage_count += 1;
+                            }
+                        },
                         1 => local.usage_min = Some(usage),
                         2 => local.usage_max = Some(usage),
                         _ => {}
@@ -208,6 +219,8 @@ impl HidReportMap {
                                 usage_page: global.usage_page,
                                 usage_min,
                                 usage_max,
+                                usage_list: local.usages,
+                                usage_count: local.usage_count,
                                 logical_min: global.logical_min,
                                 logical_max: global.logical_max,
                                 flags: raw as u8,
@@ -365,7 +378,9 @@ impl HidReportDecoder {
                 let value = decode_signed(raw, field.report_size, field.logical_min);
                 let slot = field.value_slot as usize + element;
                 if slot >= MAX_HID_VALUES { return Err(HidReportError::InvalidField); }
-                let usage = if field.usage_min <= field.usage_max {
+                let usage = if element < field.usage_count as usize {
+                    field.usage_list[element]
+                } else if field.usage_min <= field.usage_max && field.usage_max != field.usage_min {
                     field.usage_min.saturating_add(element as u16).min(field.usage_max)
                 } else { field.usage_min };
                 let old = self.previous[slot];
@@ -374,7 +389,7 @@ impl HidReportDecoder {
 
                 if field.usage_page == 0x07 {
                     if variable {
-                        if usage != 0 && (!had_old || old != value) {
+                        if usage != 0 && ((!had_old && value != 0) || (had_old && old != value)) {
                             self.emit(InputEvent::HidKey {
                                 device: self.device, usage_page: 0x07, usage,
                                 pressed: value != 0, modifiers,
@@ -395,7 +410,7 @@ impl HidReportDecoder {
                         && (field.application_usage == 0x04 || field.application_usage == 0x05);
                     if gamepad {
                         let button = if variable { usage } else { value.max(0) as u16 };
-                        if button != 0 && (!had_old || old != value) {
+                        if button != 0 && ((!had_old && value != 0) || (had_old && old != value)) {
                             self.emit(InputEvent::GamepadButton {
                                 device: self.device, button, pressed: value != 0,
                             }, producer, &mut stats);
@@ -403,7 +418,7 @@ impl HidReportDecoder {
                     } else { pointer_button_seen = true; }
                 } else if field.usage_page == 0x0C {
                     if variable {
-                        if usage != 0 && (!had_old || old != value) {
+                        if usage != 0 && ((!had_old && value != 0) || (had_old && old != value)) {
                             self.emit(InputEvent::ConsumerControl { device: self.device,
                                 usage_page: 0x0C, usage, pressed: value != 0 }, producer, &mut stats);
                         }
