@@ -98,6 +98,7 @@ pub struct RingConfig { pub dma_base: u64, pub byte_length: u32, pub descriptor_
 
 impl RingConfig {
     /// Validate a legacy descriptor ring before programming RDBA/TDBA registers.
+    /// Head/tail indices are 16-bit, supporting up to 65,536 descriptors.
     /// The DMA allocator must guarantee that the returned device-visible range remains
     /// pinned and device-accessible for the entire lifetime of the ring.
     pub fn new(dma_base: u64, descriptor_count: usize) -> Result<Self, E1000Error> {
