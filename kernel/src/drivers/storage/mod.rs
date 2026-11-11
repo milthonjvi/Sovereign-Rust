@@ -34,7 +34,7 @@ pub mod cache;
 pub use cache::{BlockCache, CacheStats};
 
 pub mod nvme;
-pub use nvme::{build_prps, doorbell_offset, initialize_controller, ring_completion_doorbell, ring_submission_doorbell, identify_command, read_command, write_command, NvmeAdminQueueMemory, NvmeControllerInfo, NvmeRegisterIo, NvmeCapabilities, NvmeCommand, NvmeCompletion, NvmeCompletionQueue, NvmeError, NvmeNamespace, NvmePrpMapping, NvmeSubmissionQueue, NvmeCommandTracker};
+pub use nvme::{build_prps, doorbell_offset, initialize_controller, create_io_completion_queue_command, create_io_submission_queue_command, set_number_of_queues_command, ring_completion_doorbell, ring_submission_doorbell, identify_command, read_command, write_command, NvmeAdminQueueMemory, NvmeControllerInfo, NvmeRegisterIo, NvmeCapabilities, NvmeCommand, NvmeCompletion, NvmeCompletionQueue, NvmeError, NvmeNamespace, NvmePrpMapping, NvmeSubmissionQueue, NvmeCommandTracker};
 
 pub mod ahci;
 pub use ahci::{build_prdt, command_header, configure_port, start_port, stop_port, issue_command, command_complete, AhciPortMemory, AhciRegisterIo, AhciCapabilities, AhciCommandHeader, AhciError, AhciIdentify, AhciPrdtEntry, RegisterFisH2d, AhciCommandSlots, AhciCommandTable, AhciDeviceType, detect_port_device};
