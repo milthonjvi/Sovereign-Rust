@@ -20,7 +20,24 @@ const DATA_READY: u8 = 1;
 const THR_EMPTY: u8 = 1 << 5;
 const TRANSMITTER_EMPTY: u8 = 1 << 6;
 const MODEM_STATUS: u16 = 6;
+const INTERRUPT_IDENTIFICATION: u16 = 2;
+const FIFO_ENABLE: u8 = 1 << 0;
+const FIFO_CLEAR_RX_TX: u8 = (1 << 1) | (1 << 2);
+const FIFO_64_BYTE_ENABLE: u8 = 1 << 5;
+const FIFO_STATUS_MASK: u8 = 0xC0;
+const FIFO_64_BYTE_STATUS: u8 = 0xE0;
 const DEFAULT_POLL_LIMIT: usize = 1_000_000;
+
+/// Hardware FIFO capability detected during initialization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UartFifo {
+    /// 8250/16450-compatible device without a working FIFO.
+    None,
+    /// 16550A-compatible 16-byte transmit/receive FIFO.
+    Bytes16,
+    /// 16750-compatible 64-byte FIFO.
+    Bytes64,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Parity { None, Odd, Even }
@@ -76,6 +93,7 @@ pub struct Uart16550 {
     base: u16,
     config: UartConfig,
     initialized: bool,
+    fifo: UartFifo,
     poll_limit: usize,
 }
 
@@ -85,7 +103,13 @@ impl Uart16550 {
     /// # Safety
     /// The caller must guarantee exclusive ownership of the selected port range.
     pub const unsafe fn new(base: u16, config: UartConfig) -> Self {
-        Self { base, config, initialized: false, poll_limit: DEFAULT_POLL_LIMIT }
+        Self {
+            base,
+            config,
+            initialized: false,
+            fifo: UartFifo::None,
+            poll_limit: DEFAULT_POLL_LIMIT,
+        }
     }
 
     pub fn set_poll_limit(&mut self, limit: usize) { self.poll_limit = limit; }
@@ -123,7 +147,34 @@ impl Uart16550 {
                 Parity::None => 0, Parity::Odd => 0b001 << 3, Parity::Even => 0b011 << 3,
             };
             io::out8(self.port(LCR), line);
-            io::out8(self.port(FCR), 0xC7);
+
+            // Probe FIFO support with interrupts disabled. A legacy 8250/16450
+            // ignores FCR; a 16550A reports FIFO bits in IIR; a 16750 additionally
+            // reports the 64-byte enable bit after FCR bit 5 is set.
+            io::out8(self.port(FCR), FIFO_ENABLE);
+            let iir = io::in8(self.port(INTERRUPT_IDENTIFICATION));
+            let fifo_present = iir & FIFO_STATUS_MASK == FIFO_STATUS_MASK;
+            let fifo_64 = if fifo_present {
+                io::out8(self.port(FCR), FIFO_ENABLE | FIFO_64_BYTE_ENABLE);
+                io::in8(self.port(INTERRUPT_IDENTIFICATION)) & FIFO_64_BYTE_STATUS
+                    == FIFO_64_BYTE_STATUS
+            } else {
+                false
+            };
+
+            self.fifo = if fifo_64 {
+                io::out8(
+                    self.port(FCR),
+                    FIFO_ENABLE | FIFO_CLEAR_RX_TX | FIFO_64_BYTE_ENABLE | 0xC0,
+                );
+                UartFifo::Bytes64
+            } else if fifo_present {
+                io::out8(self.port(FCR), 0xC7);
+                UartFifo::Bytes16
+            } else {
+                io::out8(self.port(FCR), 0);
+                UartFifo::None
+            };
             io::out8(self.port(MCR), 0x0B);
         }
         self.initialized = true;
@@ -270,6 +321,9 @@ impl Uart16550 {
     }
 
     pub const fn base_port(&self) -> u16 { self.base }
+
+    /// Returns the FIFO capability detected by the last successful initialization.
+    pub const fn fifo_capability(&self) -> UartFifo { self.fifo }
 }
 
 impl Driver for Uart16550 {
