@@ -34,6 +34,11 @@ framebuffer metadata. The contract is currently a definition only: the loader
 does not yet populate or pass this structure, and the kernel does not yet
 consume it. The kernel must validate all ranges before dereferencing addresses.
 
+A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support
+and enables EFER.NXE only when the processor advertises NX. It is an explicit
+unsafe operation and is not called automatically by the current UEFI entry
+point.
+
 The loader also contains a four-level x86_64 page-table builder in
 `loader/src/page_tables.rs`, plus a UEFI `AllocatePages` provider in
 `loader/src/uefi/page_table_memory.rs`. It maps 4 KiB pages, rejects duplicate
