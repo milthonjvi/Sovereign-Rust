@@ -661,6 +661,15 @@ mod tests {
 
         let first = [0x11u8; 64];
         let second = [0x22u8; 96];
+        let oversized: [&[u8]; 8] = [&first; 8];
+        let mut oversized_slots = [u16::MAX; 8];
+        let mut oversized_submissions = [(0u64, 0usize); 8];
+        assert_eq!(
+            device.transmit_batch(&oversized, &mut oversized_slots, &mut oversized_submissions),
+            Err(DriverError::ResourceUnavailable),
+        );
+        assert!(!device.registers.writes.iter().any(|(reg, _)| *reg == REG_TDT));
+
         let frames: [&[u8]; 2] = [&first, &second];
         let mut slots = [u16::MAX; 2];
         let mut submissions = [(0u64, 0usize); 2];
