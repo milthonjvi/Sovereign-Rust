@@ -49,4 +49,12 @@ mod tests {
   assert_eq!(out[0],Some(InputEvent::MouseMotion{dx:-1,dy:1}));
   assert_eq!(out[2],Some(InputEvent::MouseWheel{delta:-1}));
  }
+
+ #[test] fn overflow_flags_suppress_invalid_axis_deltas() {
+  let mut d=Ps2MouseDecoder::new(false); let mut out=[None;3];
+  d.feed(0x48,&mut out); // X overflow, valid packet header.
+  d.feed(0x7F,&mut out);
+  assert_eq!(d.feed(0,&mut out),1);
+  assert_eq!(out[0],Some(InputEvent::MouseButtons{buttons:MouseButtons::from_bits(0)}));
+ }
 }
