@@ -8,3 +8,4 @@ pub mod control;
 pub mod cpuid;
 pub mod io;
 pub mod msr;
+pub mod init;
