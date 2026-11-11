@@ -359,7 +359,8 @@ impl X2ApicTimer {
         let count = core::cmp::min(core::cmp::max(1, ticks), u32::MAX as u128) as u32;
         // SAFETY: Caller guarantees this CPU's x2APIC timer is configured and unmasked.
         let mut apic = unsafe { X2Apic::new() };
-        apic.arm_one_shot_timer(count).map_err(map_x2apic_error)?;
+        // SAFETY: Caller guarantees the one-shot LVT is configured and unmasked.
+        unsafe { apic.arm_one_shot_timer(count) }.map_err(map_x2apic_error)?;
         Ok(count)
     }
 
@@ -370,7 +371,8 @@ impl X2ApicTimer {
     pub unsafe fn arm_count(&mut self, count: u32) -> Result<(), DriverError> {
         // SAFETY: Caller guarantees this CPU's x2APIC timer is configured and unmasked.
         let mut apic = unsafe { X2Apic::new() };
-        apic.arm_one_shot_timer(count).map_err(map_x2apic_error)
+        // SAFETY: Caller guarantees the one-shot LVT is configured and unmasked.
+        unsafe { apic.arm_one_shot_timer(count) }.map_err(map_x2apic_error)
     }
 
     /// Read the current local APIC countdown.
