@@ -2,6 +2,7 @@
 //! USB4 tunnelling is usable when platform firmware exposes a compatible xHCI
 //! controller; native USB4 router management is a separate future subsystem.
 pub mod controller;
+pub mod cdc;
 pub mod control;
 pub mod descriptors;
 pub mod enumeration;
