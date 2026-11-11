@@ -115,7 +115,7 @@ impl CdcLineCoding{
   value.validate()?;Ok(value)
  }
  pub fn validate(self)->Result<(),UsbError>{
-  if self.baud_rate==0||self.stop_bits>2||self.parity>4||!(5..=8).contains(&self.data_bits){
+  if self.baud_rate==0||self.stop_bits>2||self.parity>4||(!(5..=8).contains(&self.data_bits)&&self.data_bits!=16){
    return Err(UsbError::MalformedDescriptor)
   }
   Ok(())
@@ -155,9 +155,9 @@ mod tests{
   let brk=send_break(3,250);assert_eq!(brk.value,250);
  }
  #[test]fn finds_union_mapping_for_control_interface(){
-  let descriptors=[9,2,35,0,2,1,0,0x80,50,
+  let descriptors=[9,2,42,0,2,1,0,0x80,50,
    9,4,0,0,1,2,2,1,0,5,0x24,0,0x10,0x01,
-   4,0x24,2,2,5,0x24,6,0,1,
+   5,0x24,1,2,1,5,0x24,6,0,1,
    9,4,1,0,2,0x0a,0,0,0];
   let d=CdcAcmFunctionalDescriptors::parse(&descriptors,0).unwrap();
   assert_eq!(d.data_interface,Some(1));assert_eq!(d.capabilities,2);
