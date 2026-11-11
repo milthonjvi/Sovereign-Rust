@@ -141,6 +141,15 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         wakeups: &mut [Option<TaskId>],
     ) -> TaskWakeupReport {
         let capacity = core::cmp::min(events.len(), wakeups.len());
+        if capacity == 0 {
+            // Do not re-arm an already-expired head for another immediate IRQ
+            // when the caller supplied no storage to consume its event.
+            crate::time::interrupt::signal_timer_work_pending();
+            return TaskWakeupReport {
+                wakeups: 0,
+                timer_reprogram_error: Some(crate::drivers::api::DriverError::ResourceUnavailable),
+            };
+        }
         // SAFETY: Same-CPU and deferred-context requirements are part of the
         // caller contract for this method.
         let processed = unsafe { self.timers.process_expired(&mut events[..capacity]) };
