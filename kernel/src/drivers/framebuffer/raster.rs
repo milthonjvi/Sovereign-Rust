@@ -41,18 +41,10 @@ fn validate_edge_range(
 
 /// One exact scanline intersection. The private representation keeps the
 /// integer floor and fractional remainder paired during sorting.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ScanlineIntersection {
     x_floor: i128,
     fractional: bool,
-}
-
-impl ScanlineIntersection {
-    #[inline]
-    fn is_left_of(self, other: Self) -> bool {
-        self.x_floor < other.x_floor
-            || (self.x_floor == other.x_floor && !self.fractional && other.fractional)
-    }
 }
 
 /// Fill a polygon using the even-odd rule.
@@ -135,16 +127,9 @@ pub fn fill_polygon(
             count += 1;
         }
 
-        // Insertion sort suits small UI polygons and requires no allocator.
-        for i in 1..count {
-            let value = scratch[i];
-            let mut j = i;
-            while j > 0 && value.is_left_of(scratch[j - 1]) {
-                scratch[j] = scratch[j - 1];
-                j -= 1;
-            }
-            scratch[j] = value;
-        }
+        // Core's unstable slice sort is allocation-free and scales better than
+        // insertion sort for complex paths with many active edges.
+        scratch[..count].sort_unstable();
 
         let mut pair = 0usize;
         while pair + 1 < count {
