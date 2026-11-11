@@ -41,7 +41,8 @@ bounded ELF64 x86_64 `ET_EXEC` images. Its loader currently performs:
 8. A final GetMemoryMap refresh and bounded ExitBootServices retry sequence.
    The preallocated boot-info page is refreshed between each map capture and
    exit attempt without allocating or calling another firmware service.
-9. Installation of a minimal emergency IDT, CR3 switch, SysV stack setup, and
+9. Installation of a minimal emergency IDT, dedicated stack switch, CR0.WP
+   activation, CR3 switch, global-TLB invalidation when PGE is active, and
    transfer to the kernel entry point. No firmware service is called after
    ExitBootServices succeeds.
 
@@ -49,7 +50,9 @@ The page-table implementation rejects duplicate leaf mappings, invalid
 physical/virtual addresses, and writable+executable leaves. A private NX
 proof token ensures EFER.NXE was enabled before installing NX entries.
 CR0.WP is enabled immediately before the CR3 switch so supervisor writes
-respect read-only mappings without changing firmware behavior during Boot Services. The
+respect read-only mappings without changing firmware behavior during Boot Services.
+The transition also invalidates global TLB entries when CR4.PGE is set; a CR3
+reload alone does not guarantee that those translations are discarded. The
 four-/five-level choice follows the firmware's active CR4.LA57 setting.
 
 The handoff contract is defined in `loader/src/boot_info.rs`. Its kernel-side
