@@ -87,8 +87,9 @@ impl<'a> FramebufferSurface<'a> {
             return Err(FramebufferError::BufferTooSmall);
         }
         if source.alpha == 255 {
+            // The fourth framebuffer byte is reserved, not an alpha channel.
             // SAFETY: the complete destination pixel was checked above.
-            unsafe { self.write_pixel_unchecked(offset, source); }
+            unsafe { self.write_pixel_unchecked(offset, Color::new(source.red, source.green, source.blue)); }
             return Ok(());
         }
 
