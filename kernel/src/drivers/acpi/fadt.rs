@@ -250,9 +250,16 @@ impl Fadt {
         Ok(Some((control, status)))
     }
 
-    /// Hardware-reduced ACPI requires FADT revision 5 or newer.
+    /// Hardware-reduced ACPI requires the ACPI 5.0 FADT layout.
+    ///
+    /// Revision alone is not sufficient: firmware is known to publish an
+    /// incorrect FADT revision, so the declared length must also include the
+    /// complete ACPI 5.0 tail containing the Sleep Control/Status GAS fields.
+    /// Those registers remain semantically optional and may both be zero.
     pub fn validate_hardware_mode(&self) -> Result<(), AcpiError> {
-        if self.pm_hardware_mode() == PmHardwareMode::HardwareReduced && self.revision < 5 {
+        if self.pm_hardware_mode() == PmHardwareMode::HardwareReduced
+            && (self.revision < 5 || self.table_length < 268)
+        {
             return Err(AcpiError::MalformedTable);
         }
         Ok(())
@@ -948,7 +955,7 @@ mod tests {
 
     #[test]
     fn hardware_reduced_mode_requires_fadt_revision_five_or_newer() {
-        let mut b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        let mut b = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
         b[8] = 4;
         b[9] = 0;
         b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
@@ -956,10 +963,42 @@ mod tests {
         assert_eq!(fadt.validate_hardware_mode(), Err(AcpiError::MalformedTable));
         assert_eq!(fadt.resolve_pm_register_map(), Err(AcpiError::MalformedTable));
     }
+ 
+    #[test]
+    fn hardware_reduced_mode_requires_complete_acpi_5_fadt_layout() {
+        // A revision-5 FADT that stops before the ACPI 5.0 tail is not a
+        // conforming Hardware Reduced FADT, even though the sleep registers
+        // are optional at the semantic level.
+        let mut truncated = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        truncated[8] = 5;
+        truncated[9] = 0;
+        truncated[9] = 0u8.wrapping_sub(truncated.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&truncated).unwrap();
+        assert_eq!(fadt.validate_hardware_mode(), Err(AcpiError::MalformedTable));
+
+        // The physical fields may be present but a pre-v5 revision remains
+        // invalid for this hardware programming model.
+        let mut old_revision = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
+        old_revision[8] = 4;
+        old_revision[9] = 0;
+        old_revision[9] = 0u8.wrapping_sub(old_revision.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&old_revision).unwrap();
+        assert_eq!(fadt.validate_hardware_mode(), Err(AcpiError::MalformedTable));
+
+        // ACPI 5+ with the complete layout and absent (zero) optional sleep
+        // GAS descriptors is valid.
+        let mut valid = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
+        valid[8] = 5;
+        valid[9] = 0;
+        valid[9] = 0u8.wrapping_sub(valid.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&valid).unwrap();
+        assert_eq!(fadt.validate_hardware_mode(), Ok(()));
+        assert_eq!(fadt.validated_sleep_registers(), Ok(None));
+    }
 
     #[test]
     fn hardware_reduced_validation_ignores_legacy_pm_register_metadata() {
-        let mut b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        let mut b = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
         b[88] = 3; // Invalid PM1 event block length in legacy mode.
         b[89] = 7; // Invalid PM1 control block length in legacy mode.
         b[90] = 9; // Invalid PM2 control block length in legacy mode.
@@ -1000,7 +1039,7 @@ mod tests {
 
     #[test]
     fn reduced_hardware_sleep_registers_are_optional_but_must_be_a_pair() {
-        let b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        let b = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
         let fadt = Fadt::parse(&b).unwrap();
         assert_eq!(fadt.validated_sleep_registers(), Ok(None));
 
