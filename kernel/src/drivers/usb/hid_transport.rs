@@ -120,18 +120,38 @@ pub struct HidInterruptEndpoint{
  pub bytes_per_interval:u16,
 }
 impl HidInterruptEndpoint{
+ /// Reads one raw interrupt report; report decoding remains the Input subsystem's job.
+ pub fn read_report<C:HostController>(
+  self,controller:&mut C,address:DeviceAddress,buffer:&mut[u8],
+ )->Result<usize,UsbError>{
+  read_interrupt_report(controller,address,self.endpoint,buffer)
+ }
  pub fn from_parsed(parsed:super::descriptors::ParsedEndpoint,speed:super::transfer::UsbSpeed)->Result<Self,UsbError>{
   if parsed.address&0x80==0||(parsed.attributes&3)!=TransferType::Interrupt as u8
    ||parsed.max_packet_size==0||parsed.interval==0{
    return Err(UsbError::MalformedDescriptor)
   }
   let service_interval=match speed{
-   super::transfer::UsbSpeed::Low|super::transfer::UsbSpeed::Full=>{
-    if parsed.interval<1{return Err(UsbError::MalformedDescriptor)}
+   super::transfer::UsbSpeed::Low=>{
+    if parsed.interval<10||parsed.max_packet_size>8||parsed.transactions_per_microframe!=1{
+     return Err(UsbError::MalformedDescriptor)
+    }
     HidServiceInterval::Frames(parsed.interval)
    }
-   super::transfer::UsbSpeed::High|super::transfer::UsbSpeed::Super|super::transfer::UsbSpeed::SuperPlus=>{
-    if parsed.interval>16{return Err(UsbError::MalformedDescriptor)}
+   super::transfer::UsbSpeed::Full=>{
+    if parsed.max_packet_size>64||parsed.transactions_per_microframe!=1{
+     return Err(UsbError::MalformedDescriptor)
+    }
+    HidServiceInterval::Frames(parsed.interval)
+   }
+   super::transfer::UsbSpeed::High=>{
+    if parsed.interval>16||parsed.max_packet_size>1024{return Err(UsbError::MalformedDescriptor)}
+    HidServiceInterval::Microframes(1u16<<(parsed.interval-1))
+   }
+   super::transfer::UsbSpeed::Super|super::transfer::UsbSpeed::SuperPlus=>{
+    if parsed.interval>16||parsed.max_packet_size>1024||parsed.transactions_per_microframe!=1{
+     return Err(UsbError::MalformedDescriptor)
+    }
     HidServiceInterval::Microframes(1u16<<(parsed.interval-1))
    }
   };
