@@ -104,7 +104,8 @@ impl<'a,const N:usize>XhciEventRing<'a,N>{
   if self.dequeue==N{self.dequeue=0;self.cycle=!self.cycle;}
   Some(trb)
  }
- pub const fn dequeue_index(&self)->usize{self.dequeue}\n pub const fn dequeue_physical(&self)->u64{self.physical_base+(self.dequeue as u64*TRB_SIZE as u64)}
+ pub const fn dequeue_index(&self)->usize{self.dequeue}
+ pub const fn dequeue_physical(&self)->u64{self.physical_base+(self.dequeue as u64*TRB_SIZE as u64)}
  pub const fn consumer_cycle(&self)->bool{self.cycle}
 }
 
