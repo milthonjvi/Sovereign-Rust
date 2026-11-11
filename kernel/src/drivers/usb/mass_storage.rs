@@ -60,7 +60,9 @@ impl BulkOnlyTransport{
  pub fn select_lun(&mut self,lun:u8)->Result<(),UsbError>{if lun>15{return Err(UsbError::MalformedDescriptor)}self.lun=lun;Ok(())}
  pub fn max_lun<C:HostController>(&self,controller:&mut C)->Result<u8,UsbError>{
   let mut data=[0u8;1];
-  let report=execute_control(controller,self.device,get_max_lun_request(self.interface.interface_number),&mut data)?;
+  let report=match execute_control(controller,self.device,get_max_lun_request(self.interface.interface_number),&mut data){
+   Ok(report)=>report,Err(UsbError::Unsupported)=>return Ok(0),Err(error)=>return Err(error),
+  };
   if report.bytes_transferred!=1{return Err(UsbError::TransferFailed)}
   parse_max_lun(&data)
  }
@@ -187,5 +189,17 @@ impl ScsiCapacity10{
   let c=ScsiCapacity10::parse(&[0,0,0,99,0,0,2,0]).unwrap();
   assert_eq!(c.block_count(),100);assert_eq!(c.block_size,512);
   assert_eq!(ScsiCapacity10::parse(&[0;8]),Err(UsbError::MalformedDescriptor));
+ }
+}
+
+#[cfg(test)]mod lun_selection_tests{
+ use super::*;
+ #[test]fn accepts_only_valid_lun_ids(){
+  let interface=MassStorageInterface{interface_number:0,
+   bulk_in:Endpoint{address:EndpointAddress::from_raw(0x81),transfer_type:TransferType::Bulk,max_packet_size:512,interval:0},
+   bulk_out:Endpoint{address:EndpointAddress::from_raw(0x02),transfer_type:TransferType::Bulk,max_packet_size:512,interval:0}};
+  let mut bot=BulkOnlyTransport::new(DeviceAddress::DEFAULT,interface);
+  assert_eq!(bot.select_lun(4),Ok(()));assert_eq!(bot.lun,4);
+  assert_eq!(bot.select_lun(16),Err(UsbError::MalformedDescriptor));
  }
 }
