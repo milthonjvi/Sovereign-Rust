@@ -56,12 +56,15 @@ impl AcpiTables {
             }
             let bytes = map_table(address).ok_or(AcpiError::UnsupportedAddress)?;
             let table = Sdt::parse(bytes)?;
-            match table.signature() {
-                *b"APIC" if found.madt.is_none() => found.madt = Some(address),
-                *b"FACP" if found.fadt.is_none() => found.fadt = Some(address),
-                *b"HPET" if found.hpet.is_none() => found.hpet = Some(address),
-                *b"DSDT" if found.dsdt.is_none() => found.dsdt = Some(address),
-                _ => {}
+            let signature = table.signature();
+            if signature == *b"APIC" && found.madt.is_none() {
+                found.madt = Some(address);
+            } else if signature == *b"FACP" && found.fadt.is_none() {
+                found.fadt = Some(address);
+            } else if signature == *b"HPET" && found.hpet.is_none() {
+                found.hpet = Some(address);
+            } else if signature == *b"DSDT" && found.dsdt.is_none() {
+                found.dsdt = Some(address);
             }
         }
         Ok(found)
