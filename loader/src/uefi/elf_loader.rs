@@ -104,12 +104,17 @@ pub fn load_kernel_file(
     if status != EFI_SUCCESS { return Err(status); }
     if root.is_null() { return Err(EFI_COMPROMISED_DATA); }
 
-    let result = open_and_load(root, boot);
+    let result = open_and_load(root, boot, loader_image_base, loader_image_size);
     close_file(root);
     result
 }
 
-fn open_and_load(root: *mut EfiFileProtocol, boot: &mut EfiBootServices) -> Result<LoadedKernel, EfiStatus> {
+fn open_and_load(
+    root: *mut EfiFileProtocol,
+    boot: &mut EfiBootServices,
+    loader_image_base: u64,
+    loader_image_size: u64,
+) -> Result<LoadedKernel, EfiStatus> {
     // SAFETY: Root is a valid protocol returned by OpenVolume.
     let open = unsafe { root.as_ref() }.and_then(|f| f.open).ok_or(EFI_UNSUPPORTED)?;
     let mut file: *mut EfiFileProtocol = ptr::null_mut();
@@ -117,12 +122,17 @@ fn open_and_load(root: *mut EfiFileProtocol, boot: &mut EfiBootServices) -> Resu
     let status = unsafe { open(root, &mut file, KERNEL_PATH.as_ptr(), EFI_FILE_MODE_READ, 0) };
     if status != EFI_SUCCESS { return Err(status); }
     if file.is_null() { return Err(EFI_COMPROMISED_DATA); }
-    let result = load_open_file(file, boot);
+    let result = load_open_file(file, boot, loader_image_base, loader_image_size);
     close_file(file);
     result
 }
 
-fn load_open_file(file: *mut EfiFileProtocol, boot: &mut EfiBootServices) -> Result<LoadedKernel, EfiStatus> {
+fn load_open_file(
+    file: *mut EfiFileProtocol,
+    boot: &mut EfiBootServices,
+    loader_image_base: u64,
+    loader_image_size: u64,
+) -> Result<LoadedKernel, EfiStatus> {
     // SAFETY: File is a live EFI_FILE_PROTOCOL handle.
     let protocol = unsafe { file.as_ref() }.ok_or(EFI_INVALID_PARAMETER)?;
     let read = protocol.read.ok_or(EFI_UNSUPPORTED)?;
