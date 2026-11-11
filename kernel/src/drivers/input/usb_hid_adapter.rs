@@ -84,6 +84,9 @@ impl UsbBootKeyboardAdapter {
     fn emit<const N: usize>(
         &mut self, e: InputEvent, p: &mut SpscProducer<'_, InputEvent, N>, s: &mut HidPublishStats,
     ) {
+        // Stop this report at the first lost edge. The next report begins
+        // with DeviceStateReset and then reconstructs state from its snapshot.
+        if self.resync_required { return; }
         if p.push(e).is_ok() { s.published = s.published.saturating_add(1); }
         else {
             s.dropped = s.dropped.saturating_add(1);
@@ -159,6 +162,9 @@ impl UsbBootMouseAdapter {
     fn emit<const N: usize>(
         &mut self, e: InputEvent, p: &mut SpscProducer<'_, InputEvent, N>, s: &mut HidPublishStats,
     ) {
+        // Stop this report at the first lost edge. The next report begins
+        // with DeviceStateReset and then reconstructs state from its snapshot.
+        if self.resync_required { return; }
         if p.push(e).is_ok() { s.published = s.published.saturating_add(1); }
         else {
             s.dropped = s.dropped.saturating_add(1);
