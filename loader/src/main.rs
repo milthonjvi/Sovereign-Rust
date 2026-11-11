@@ -319,7 +319,6 @@ pub extern "efiapi" fn efi_main(
     }
 
     let kernel_page_table_root = page_tables.root_physical();
-    let kernel_stack_size = (KERNEL_STACK_PAGES as u64) * 4096;
     let kernel_stack_top_offset = (KERNEL_STACK_PAGES as u64 + KERNEL_STACK_GUARD_PAGES) * 4096;
     let kernel_stack_top = match kernel_stack_physical.checked_add(kernel_stack_top_offset) {
         Some(top) => top,
