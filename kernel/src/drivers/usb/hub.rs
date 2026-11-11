@@ -325,3 +325,21 @@ mod superspeed_resume_tests{
   assert_eq!(request.index,2);
  }
 }
+
+#[cfg(test)]
+mod superspeed_status_tests{
+ use super::*;
+ use super::super::transfer::UsbSpeed;
+ #[test]fn decodes_usb2_speed_without_confusing_full_speed(){
+  assert_eq!(HubPortStatus::parse(&[1,0,0,0]).unwrap().usb2_speed(),Some(UsbSpeed::Full));
+  assert_eq!(HubPortStatus::parse(&[1,2,0,0]).unwrap().usb2_speed(),Some(UsbSpeed::Low));
+  assert_eq!(HubPortStatus::parse(&[1,4,0,0]).unwrap().usb2_speed(),Some(UsbSpeed::High));
+  assert_eq!(HubPortStatus::parse(&[0,0,0,0]).unwrap().usb2_speed(),None);
+ }
+ #[test]fn decodes_superspeed_power_link_state_and_speed(){
+  let status=SuperSpeedPortStatus::parse(&[1,0x24,1,0]).unwrap();
+  assert!(status.connected());assert!(status.powered());
+  assert_eq!(status.link_state,1);assert_eq!(status.speed(),Some(UsbSpeed::Super));
+  assert!(status.has_change());
+ }
+}
