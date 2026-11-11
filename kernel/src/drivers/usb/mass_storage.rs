@@ -1,5 +1,5 @@
 //! USB Mass Storage Bulk-Only Transport (BOT) and core SCSI command framing.
-use super::{controller::{HostController,TransferStatus},descriptors::ParsedConfiguration,
+use super::{control::execute_control,controller::{HostController,TransferStatus},descriptors::ParsedConfiguration,
  transfer::{DeviceAddress,Endpoint,EndpointAddress,SetupPacket,TransferType},UsbError};
 
 pub const USB_CLASS_MASS_STORAGE:u8=8;
@@ -57,6 +57,30 @@ pub struct BotResult{pub tag:u32,pub bytes_transferred:u32,pub residue:u32,pub c
 pub struct BulkOnlyTransport{pub device:DeviceAddress,pub interface:MassStorageInterface,next_tag:u32}
 impl BulkOnlyTransport{
  pub const fn new(device:DeviceAddress,interface:MassStorageInterface)->Self{Self{device,interface,next_tag:1}}
+ pub fn max_lun<C:HostController>(&self,controller:&mut C)->Result<u8,UsbError>{
+  let mut data=[0u8;1];
+  let report=execute_control(controller,self.device,get_max_lun_request(self.interface.interface_number),&mut data)?;
+  if report.bytes_transferred!=1{return Err(UsbError::TransferFailed)}
+  parse_max_lun(&data)
+ }
+ /// BOT reset recovery order: class reset, clear bulk-IN halt, clear bulk-OUT halt.
+ pub fn recover<C:HostController>(&self,controller:&mut C)->Result<(),UsbError>{
+  let mut empty=[];
+  execute_control(controller,self.device,bulk_only_reset_request(self.interface.interface_number),&mut empty)?;
+  execute_control(controller,self.device,clear_endpoint_halt_request(self.interface.bulk_in.address.raw()),&mut empty)?;
+  execute_control(controller,self.device,clear_endpoint_halt_request(self.interface.bulk_out.address.raw()),&mut empty)?;
+  Ok(())
+ }
+ pub fn read_blocks<C:HostController>(&mut self,controller:&mut C,lba:u32,blocks:u16,block_size:u32,data:&mut[u8])->Result<BotResult,UsbError>{
+  let expected=(blocks as usize).checked_mul(block_size as usize).ok_or(UsbError::NoResources)?;
+  if expected!=data.len()||blocks==0{return Err(UsbError::BufferTooShort)}
+  self.execute(controller,ScsiCommand::read_10(lba,blocks),DataDirection::In,data)
+ }
+ pub fn write_blocks<C:HostController>(&mut self,controller:&mut C,lba:u32,blocks:u16,block_size:u32,data:&mut[u8])->Result<BotResult,UsbError>{
+  let expected=(blocks as usize).checked_mul(block_size as usize).ok_or(UsbError::NoResources)?;
+  if expected!=data.len()||blocks==0{return Err(UsbError::BufferTooShort)}
+  self.execute(controller,ScsiCommand::write_10(lba,blocks),DataDirection::Out,data)
+ }
  pub fn execute<C:HostController>(&mut self,controller:&mut C,command:ScsiCommand,direction:DataDirection,data:&mut[u8])->Result<BotResult,UsbError>{
   if command.length==0||command.length>16{return Err(UsbError::MalformedDescriptor)}
   if (direction==DataDirection::None)!=data.is_empty(){return Err(UsbError::MalformedDescriptor)}
