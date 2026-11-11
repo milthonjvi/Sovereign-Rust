@@ -155,6 +155,29 @@ mod tests {
     }
 
     #[test]
+    fn fractional_edges_do_not_overdraw_scanline_pixels() {
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        fill_triangle(
+            &mut target,
+            (1, 1),
+            (6, 1),
+            (3, 6),
+            Color::RED,
+        ).unwrap();
+        drop(target);
+
+        let pixel = |x: usize, y: usize| {
+            let offset = (y * 8 + x) * 4;
+            memory[offset] == 255
+        };
+        assert!(!pixel(1, 2));
+        assert!(pixel(2, 2));
+        assert!(pixel(5, 2));
+        assert!(!pixel(6, 2));
+    }
+
+    #[test]
     fn rejects_unrepresentable_intersection_arithmetic() {
         let mut memory = [0u8; 8 * 8 * 4];
         let mut target = surface(&mut memory);
