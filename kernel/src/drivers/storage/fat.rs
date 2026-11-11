@@ -22,7 +22,7 @@ pub struct FatBpb {
     pub root_directory_sectors: u32, pub first_data_sector: u32,
     pub data_sectors: u32, pub cluster_count: u32,
     pub root_cluster: Option<u32>, pub fs_info_sector: Option<u16>,
-    pub backup_boot_sector: Option<u16>, pub volume_id: u32,
+    pub backup_boot_sector: Option<u16>, pub volume_id: u32,\n    pub fat_mirroring_enabled: bool, pub active_fat: u8,
 }
 fn le16(b: &[u8], o: usize) -> u16 { u16::from_le_bytes([b[o], b[o + 1]]) }
 fn le32(b: &[u8], o: usize) -> u32 { u32::from_le_bytes([b[o], b[o+1], b[o+2], b[o+3]]) }
@@ -81,7 +81,7 @@ pub fn parse_bpb(sector: &[u8], device_block_size: u32) -> Result<FatBpb, FatErr
         reserved_sectors: reserved, fat_count: fats, root_entry_count: root_entries,
         total_sectors: total, sectors_per_fat: spf, root_directory_sectors: root_secs,
         first_data_sector: first_data, data_sectors: data_secs, cluster_count: clusters,
-        root_cluster, fs_info_sector: fs_info, backup_boot_sector: backup, volume_id })
+        root_cluster, fs_info_sector: fs_info, backup_boot_sector: backup, volume_id, fat_mirroring_enabled: mirroring, active_fat })
 }
 
 /// Probe the boot sector of a partition-relative block device; performs no writes.
