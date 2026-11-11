@@ -29,6 +29,13 @@ const RX_IRQ_ENABLES: u8 = RX_INTERRUPT_ENABLE | LINE_STATUS_INTERRUPT_ENABLE;
 const THRE_INTERRUPT_ENABLE: u8 = 1 << 1;
 const MODEM_STATUS_INTERRUPT_ENABLE: u8 = 1 << 3;
 const CTS_INPUT: u8 = 1 << 4;
+
+#[inline]
+const fn transmit_interrupt_mask(cts_enabled: bool, cts_asserted: bool, pending: bool) -> u8 {
+    RX_IRQ_ENABLES
+        | if cts_enabled { MODEM_STATUS_INTERRUPT_ENABLE } else { 0 }
+        | if pending && (!cts_enabled || cts_asserted) { THRE_INTERRUPT_ENABLE } else { 0 }
+}
 const MAX_TX_PER_IRQ: usize = 64;
 const MAX_IRQ_CAUSES: usize = 32;
 const OVERRUN_ERROR: u8 = 1 << 1;
@@ -360,13 +367,12 @@ pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, Ua
         // CTS mode also keeps modem-status IRQ enabled so a later CTS assertion
         // can resume the queued bytes without polling.
         let cts_enabled = port.cts_flow.load(Ordering::Acquire) != 0;
+        // Avoid reading MSR when CTS gating is disabled: that read clears
+        // modem delta flags even though this path does not own modem IRQs.
         // SAFETY: Caller owns the UART and IF is clear by this API contract.
-        let modem = unsafe { io::in8(uart.base_port() + MODEM_STATUS) };
-        let mut ier = RX_IRQ_ENABLES;
-        if cts_enabled { ier |= MODEM_STATUS_INTERRUPT_ENABLE; }
-        if !cts_enabled || modem & CTS_INPUT != 0 {
-            ier |= THRE_INTERRUPT_ENABLE;
-        }
+        let cts_asserted = !cts_enabled
+            || unsafe { io::in8(uart.base_port() + MODEM_STATUS) } & CTS_INPUT != 0;
+        let ier = transmit_interrupt_mask(cts_enabled, cts_asserted, true);
         // SAFETY: Exclusive UART ownership is held by the caller.
         unsafe { io::out8(uart.base_port() + IER, ier); }
     }
@@ -399,13 +405,11 @@ pub unsafe fn set_cts_flow_control(
     // Reading MSR acknowledges any stale modem delta before enabling its IRQ.
     // SAFETY: Caller owns this UART and executes with IF clear.
     let modem = unsafe { io::in8(uart.base_port() + MODEM_STATUS) };
-    let mut ier = RX_IRQ_ENABLES;
-    if enabled {
-        ier |= MODEM_STATUS_INTERRUPT_ENABLE;
-    }
-    if !port.tx_queue.is_empty() && (!enabled || modem & CTS_INPUT != 0) {
-        ier |= THRE_INTERRUPT_ENABLE;
-    }
+    let ier = transmit_interrupt_mask(
+        enabled,
+        modem & CTS_INPUT != 0,
+        !port.tx_queue.is_empty(),
+    );
     // SAFETY: Caller owns the UART and serializes access to IER.
     unsafe { io::out8(uart.base_port() + IER, ier); }
     Ok(())
@@ -475,7 +479,7 @@ fn service_transmit(
         // SAFETY: This shared handler owns the attached UART's registers.
         if unsafe { io::in8(base + MODEM_STATUS) } & CTS_INPUT == 0 {
             // SAFETY: Preserve RX and modem-status interrupts, suppress THRE.
-            unsafe { io::out8(base + IER, RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE); }
+            unsafe { io::out8(base + IER, transmit_interrupt_mask(true, false, false)); }
             return;
         }
     }
@@ -497,11 +501,9 @@ fn service_transmit(
     if queue.is_empty() {
         // Disable THRE only; RX-ready and line-status IRQs remain enabled.
         // SAFETY: RX_IRQ_ENABLES preserves both receive interrupt sources.
-        let modem_irq = if cts_flow.load(Ordering::Acquire) != 0 {
-            MODEM_STATUS_INTERRUPT_ENABLE
-        } else { 0 };
+        let cts_enabled = cts_flow.load(Ordering::Acquire) != 0;
         // SAFETY: Preserve RX and optional CTS-change interrupts.
-        unsafe { io::out8(base + IER, RX_IRQ_ENABLES | modem_irq); }
+        unsafe { io::out8(base + IER, transmit_interrupt_mask(cts_enabled, true, false)); }
     }
 }
 
@@ -551,10 +553,11 @@ fn service_port(
                 // SAFETY: The handler exclusively owns the attached UART.
                 let modem = unsafe { io::in8(base + MODEM_STATUS) };
                 if cts_flow.load(Ordering::Acquire) != 0 {
-                    let mut ier = RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE;
-                    if modem & CTS_INPUT != 0 && !tx.is_empty() {
-                        ier |= THRE_INTERRUPT_ENABLE;
-                    }
+                    let ier = transmit_interrupt_mask(
+                        true,
+                        modem & CTS_INPUT != 0,
+                        !tx.is_empty(),
+                    );
                     // SAFETY: Shared handler has exclusive register access.
                     unsafe { io::out8(base + IER, ier); }
                 }
@@ -664,9 +667,11 @@ mod tests {
 
     #[test]
     fn cts_flow_control_masks_preserve_receive_sources() {
-        assert_eq!(RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE, 0b0000_1101);
-        assert_eq!(RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE | THRE_INTERRUPT_ENABLE, 0b0000_1111);
-        assert_eq!(MODEM_STATUS_INTERRUPT_ENABLE & RX_IRQ_ENABLES, 0);
+        assert_eq!(transmit_interrupt_mask(true, false, false), 0b0000_1101);
+        assert_eq!(transmit_interrupt_mask(true, true, true), 0b0000_1111);
+        assert_eq!(transmit_interrupt_mask(true, false, true), 0b0000_1101);
+        assert_eq!(transmit_interrupt_mask(false, false, true), 0b0000_0111);
+        assert_eq!(transmit_interrupt_mask(false, false, false), RX_IRQ_ENABLES);
     }
 
     #[test]
