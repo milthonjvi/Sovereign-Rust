@@ -82,6 +82,8 @@ impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
     pub fn feed(&mut self, status: u8, byte: u8) {
         if status & (STATUS_TIMEOUT | STATUS_PARITY) != 0 {
             self.stats.controller_errors = self.stats.controller_errors.saturating_add(1);
+            self.keyboard.reset_stream();
+            self.mouse.reset_stream();
             return;
         }
 
@@ -135,6 +137,20 @@ mod tests {
         assert_eq!(consumer.pop(), None);
         assert_eq!(pipeline.stats().keyboard_bytes, 1);
         assert_eq!(pipeline.stats().mouse_bytes, 3);
+    }
+
+    #[test]
+    fn corrupt_transport_byte_resets_partial_protocol_frames() {
+        let mut queue = SpscQueue::<InputEvent, 8>::new();
+        let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&mut queue, false);
+        pipeline.feed(STATUS_AUXILIARY, 0x09); // Partial mouse packet.
+        pipeline.feed(STATUS_PARITY, 0x00); // Corrupt byte invalidates both streams.
+        pipeline.feed(STATUS_AUXILIARY, 0x04); // Invalid header is ignored.
+        pipeline.feed(STATUS_AUXILIARY, 0x08);
+        pipeline.feed(STATUS_AUXILIARY, 0x02);
+        pipeline.feed(STATUS_AUXILIARY, 0x00);
+        assert_eq!(consumer.pop(), Some(InputEvent::MouseMotion { dx: 2, dy: 0 }));
+        assert_eq!(pipeline.stats().controller_errors, 1);
     }
 
     #[test]
