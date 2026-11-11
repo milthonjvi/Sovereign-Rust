@@ -231,7 +231,7 @@ impl E1000TxQueue {
     /// Submit one DMA-mapped frame and publish its descriptor to hardware.
     /// Frame bytes must already be present in the buffer and remain immutable
     /// until reap_one() returns the descriptor index.
-    pub fn submit<R: E1000Registers>(
+    pub(crate) fn submit<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &mut [TxDescriptor],
@@ -247,7 +247,7 @@ impl E1000TxQueue {
     /// Before calling, the producer must have established CPU ownership of all
     /// target slots and executed dma_read_barrier() after observing DD. The
     /// internal E1000Device path obtains that ownership through slot discovery.
-    pub fn submit_batch<R: E1000Registers>(
+    pub(crate) fn submit_batch<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &mut [TxDescriptor],
@@ -314,7 +314,7 @@ impl E1000TxQueue {
     /// The caller may write its matching DMA buffer only after this returns
     /// Some(index). The queue still validates descriptor availability again
     /// during submit(), so all accesses must remain externally serialized.
-    pub fn next_available_slot<R: E1000Registers>(
+    pub(crate) fn next_available_slot<R: E1000Registers>(
         &self,
         registers: &mut R,
         descriptors: &[TxDescriptor],
@@ -341,7 +341,7 @@ impl E1000TxQueue {
     /// The returned indices are in submission order and can be passed directly
     /// to submit_batch(). The caller must serialize queue access between this
     /// availability check and publication.
-    pub fn available_slots<R: E1000Registers>(
+    pub(crate) fn available_slots<R: E1000Registers>(
         &self,
         registers: &mut R,
         descriptors: &[TxDescriptor],
@@ -378,7 +378,7 @@ impl E1000TxQueue {
 
     /// Reclaim completed descriptors and collect free producer slots in one scan
     /// phase and one DMA read barrier. Intended for high-throughput batch TX.
-    pub fn reclaim_and_available_slots<R: E1000Registers>(
+    pub(crate) fn reclaim_and_available_slots<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &[TxDescriptor],
@@ -427,7 +427,7 @@ impl E1000TxQueue {
 
     /// Return the next completed descriptor index in submission order.
     /// The caller can use this index to release the matching DMA buffer.
-    pub fn reap_one<R: E1000Registers>(
+    pub(crate) fn reap_one<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &[TxDescriptor],
@@ -453,7 +453,7 @@ impl E1000TxQueue {
 
     /// Reclaim all currently completed descriptors with one DMA read barrier.
     /// Completion is consumed strictly in submission order.
-    pub fn reap<R: E1000Registers>(
+    pub(crate) fn reap<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &[TxDescriptor],
@@ -503,7 +503,7 @@ impl E1000RxQueue {
 
     /// Consume one completed descriptor without returning its buffer to hardware.
     /// The caller owns the packet buffer until recycle() succeeds.
-    pub fn poll<R: E1000Registers>(
+    pub(crate) fn poll<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &[RxDescriptor],
@@ -520,7 +520,7 @@ impl E1000RxQueue {
 
     /// Drain a contiguous batch of completed RX descriptors with one DMA
     /// read barrier. Output is caller-owned; no heap allocation is performed.
-    pub fn poll_batch<R: E1000Registers>(
+    pub(crate) fn poll_batch<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &[RxDescriptor],
@@ -571,7 +571,7 @@ impl E1000RxQueue {
     /// `backup` must have room for every completion. The descriptors are saved
     /// before rearming so a failed MMIO tail update can restore CPU-visible
     /// completion metadata and leave queue ownership unchanged.
-    pub fn recycle_batch<R: E1000Registers>(
+    pub(crate) fn recycle_batch<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &mut [RxDescriptor],
@@ -636,7 +636,7 @@ impl E1000RxQueue {
 
     /// Return a processed RX buffer to hardware. Recycling must follow descriptor
     /// order so RDT never advances past an unreleased buffer.
-    pub fn recycle<R: E1000Registers>(
+    pub(crate) fn recycle<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &mut [RxDescriptor],
