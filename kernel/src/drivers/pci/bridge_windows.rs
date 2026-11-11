@@ -52,7 +52,12 @@ impl PciBridgeWindows {
             .map_err(BridgeWindowError::Access)?;
         let io_base_type = (io_base_limit & 0x0f) as u8;
         let io_limit_type = ((io_base_limit >> 8) & 0x0f) as u8;
-        if io_base_type != io_limit_type || io_base_type > 1 {
+        if io_base_type != io_limit_type
+            || io_base_type > 1
+            || (io_base_type == 0 && io_upper != 0)
+        {
+            // The upper I/O base/limit register is reserved for 16-bit
+            // windows and must not contain stale address bits in that mode.
             return Err(BridgeWindowError::InvalidEncoding);
         }
         let io_base_upper = if io_base_type == 1 { (io_upper & 0xffff) as u64 } else { 0 };
@@ -90,7 +95,16 @@ impl PciBridgeWindows {
                 io.read_u32(function.address, PREFETCH_LIMIT_UPPER)
                     .map_err(BridgeWindowError::Access)? as u64,
             )
-        } else { (0, 0) };
+        } else {
+            let reserved_base = io.read_u32(function.address, PREFETCH_BASE_UPPER)
+                .map_err(BridgeWindowError::Access)?;
+            let reserved_limit = io.read_u32(function.address, PREFETCH_LIMIT_UPPER)
+                .map_err(BridgeWindowError::Access)?;
+            if reserved_base != 0 || reserved_limit != 0 {
+                return Err(BridgeWindowError::InvalidEncoding);
+            }
+            (0, 0)
+        };
         let prefetch_base = (base_upper << 32) | (((prefetch & 0x0000_fff0) as u64) << 16);
         let prefetch_limit = (limit_upper << 32)
             | ((((prefetch >> 16) & 0x0000_fff0) as u64) << 16)
@@ -172,6 +186,17 @@ mod tests {
         let prefetch = windows.prefetchable_memory.unwrap();
         assert_eq!(prefetch.base(), 0x1_0000_0000);
         assert_eq!(prefetch.end(), 0x1_0010_0000);
+    }
+
+    #[test]
+    fn rejects_nonzero_reserved_upper_registers_for_32_bit_windows() {
+        let mut registers = [0u32; 64];
+        registers[(COMMAND_STATUS / 4) as usize] = 3;
+        registers[(IO_BASE_LIMIT / 4) as usize] = 0x0000_1010;
+        registers[(IO_BASE_UPPER_LIMIT / 4) as usize] = 1;
+        registers[(PREFETCH_BASE_LIMIT / 4) as usize] = 0x0000_fff0;
+        let result = PciBridgeWindows::read(bridge(), &MockConfig(registers));
+        assert_eq!(result, Err(BridgeWindowError::InvalidEncoding));
     }
 
     #[test]
