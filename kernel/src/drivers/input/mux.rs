@@ -9,7 +9,7 @@ use super::queue::SpscConsumer;
 /// Stable slot assigned by the input subsystem when a source is attached.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
-pub struct InputSourceId(pub u8);
+pub struct InputSourceId(pub u16);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourcedInputEvent {
@@ -38,7 +38,7 @@ impl<'a, const SOURCES: usize, const N: usize> InputEventMux<'a, SOURCES, N> {
                 if let Some(event) = consumer.pop() {
                     self.cursor = (index + 1) % SOURCES;
                     return Some(SourcedInputEvent {
-                        source: InputSourceId(index as u8),
+                        source: InputSourceId(index as u16),
                         event,
                     });
                 }
