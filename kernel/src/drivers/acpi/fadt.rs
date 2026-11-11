@@ -280,6 +280,15 @@ impl Fadt {
         Ok(())
     }
 
+    /// Validate reserved and currently-defined encodings in FADT Flags.
+    pub fn validate_fixed_feature_flags(&self) -> Result<(), AcpiError> {
+        // ACPI 6.5 defines bits 0..23. Persistent CPU cache encoding 3 is reserved.
+        if self.flags & 0xFF00_0000 != 0 || ((self.flags >> 22) & 0b11) == 0b11 {
+            return Err(AcpiError::MalformedTable);
+        }
+        Ok(())
+    }
+
     /// Validate reserved bits in the IA-PC and ARM boot-architecture fields.
     /// This is explicit so callers can inspect older or non-x86 firmware data.
     pub fn validate_boot_architecture_flags(&self) -> Result<(), AcpiError> {
@@ -658,6 +667,26 @@ mod tests {
         let old = Fadt::parse(&make_fadt(129, 0, None, None)).unwrap();
         assert_eq!(old.arm_boot_architecture, None);
         assert_eq!(old.minor_version, None);
+    }
+
+    #[test]
+    fn validates_fixed_feature_flag_reserved_bits_and_cache_encoding() {
+        let mut b = make_fadt(116, 0, None, None);
+        b[112..116].copy_from_slice(&(1u32 << 23).to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validate_fixed_feature_flags(), Ok(()));
+
+        for flags in [(1u32 << 24), (0b11u32 << 22)] {
+            let mut malformed = make_fadt(116, flags, None, None);
+            malformed[9] = 0;
+            malformed[9] = 0u8.wrapping_sub(
+                malformed.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+            );
+            let fadt = Fadt::parse(&malformed).unwrap();
+            assert_eq!(fadt.validate_fixed_feature_flags(), Err(AcpiError::MalformedTable));
+        }
     }
 
     #[test]
