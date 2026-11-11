@@ -173,7 +173,7 @@ impl Fadt {
         let status = self.sleep_status_register.ok_or(AcpiError::InvalidGas)?;
         for gas in [control, status] {
             gas.validate()?;
-            if !gas.is_system_memory_or_io()
+            if !gas.is_system_memory_io_or_pci_config_bus0()
                 || gas.bit_width != 8
                 || gas.bit_offset != 0
                 || gas.access_size != GenericAddress::ACCESS_BYTE
@@ -246,7 +246,7 @@ impl Fadt {
         let gas = self.reset_register.ok_or(AcpiError::InvalidGas)?;
         let value = self.reset_value.ok_or(AcpiError::InvalidGas)?;
         gas.validate()?;
-        if !gas.is_system_memory_or_io()
+        if !gas.is_system_memory_io_or_pci_config_bus0()
             || gas.bit_width != 8
             || gas.bit_offset != 0
             || gas.access_size != GenericAddress::ACCESS_BYTE
@@ -378,6 +378,7 @@ pub struct GenericAddress {
 impl GenericAddress {
     pub const ADDRESS_SPACE_SYSTEM_MEMORY: u8 = 0;
     pub const ADDRESS_SPACE_SYSTEM_IO: u8 = 1;
+    pub const ADDRESS_SPACE_PCI_CONFIG: u8 = 2;
 
     pub const ACCESS_UNDEFINED: u8 = 0;
     pub const ACCESS_BYTE: u8 = 1;
@@ -429,6 +430,23 @@ impl GenericAddress {
     pub const fn is_system_memory_or_io(self) -> bool {
         self.address_space == Self::ADDRESS_SPACE_SYSTEM_MEMORY
             || self.address_space == Self::ADDRESS_SPACE_SYSTEM_IO
+    }
+
+    /// Whether this GAS uses an address space permitted for FADT reset and
+    /// HW-reduced sleep registers. PCI configuration is restricted by ACPI to
+    /// segment group 0, bus 0; its GAS address encodes device, function, offset.
+    pub const fn is_system_memory_io_or_pci_config_bus0(self) -> bool {
+        if self.is_system_memory_or_io() {
+            return true;
+        }
+        if self.address_space != Self::ADDRESS_SPACE_PCI_CONFIG {
+            return false;
+        }
+
+        let device = (self.address >> 32) & 0xFFFF;
+        let function = (self.address >> 16) & 0xFFFF;
+        let offset = self.address & 0xFFFF;
+        (self.address >> 48) == 0 && device <= 31 && function <= 7 && offset <= 0x0FFF
     }
 }
 
@@ -738,6 +756,55 @@ mod tests {
             fadt.extended_pm_registers.unwrap().validate(),
             Err(AcpiError::InvalidGas)
         );
+    }
+
+    #[test]
+    fn accepts_bus_zero_pci_configuration_reset_register() {
+        let gas = GenericAddress {
+            address_space: GenericAddress::ADDRESS_SPACE_PCI_CONFIG,
+            bit_width: 8,
+            bit_offset: 0,
+            access_size: GenericAddress::ACCESS_BYTE,
+            // Offset 0x23, function 2, device 7, segment 0 / bus 0.
+            address: 0x0000_0007_0002_0023,
+        };
+        let fadt = Fadt::parse(&make_fadt(
+            148, FADT_RESET_REG_SUP, Some(gas), Some(6),
+        )).unwrap();
+        assert_eq!(fadt.validated_reset_register(), Ok(Some((gas, 6))));
+
+        let mut invalid = gas;
+        invalid.address = 0x0001_0007_0002_0023; // Reserved highest word.
+        let fadt = Fadt::parse(&make_fadt(
+            148, FADT_RESET_REG_SUP, Some(invalid), Some(6),
+        )).unwrap();
+        assert_eq!(fadt.validated_reset_register(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn accepts_bus_zero_pci_configuration_sleep_registers() {
+        let mut b = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
+        for (offset, address) in [
+            (244usize, 0x0000_0007_0002_0023u64),
+            (256usize, 0x0000_0007_0002_0024u64),
+        ] {
+            b[offset] = GenericAddress::ADDRESS_SPACE_PCI_CONFIG;
+            b[offset + 1] = 8;
+            b[offset + 3] = GenericAddress::ACCESS_BYTE;
+            b[offset + 4..offset + 12].copy_from_slice(&address.to_le_bytes());
+        }
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        let (control, status) = fadt.validated_sleep_registers().unwrap().unwrap();
+        assert_eq!(control.address_space, GenericAddress::ADDRESS_SPACE_PCI_CONFIG);
+        assert_eq!(status.address_space, GenericAddress::ADDRESS_SPACE_PCI_CONFIG);
+
+        b[244 + 4..244 + 12].copy_from_slice(&0x0001_0007_0002_0023u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let malformed = Fadt::parse(&b).unwrap();
+        assert_eq!(malformed.validated_sleep_registers(), Err(AcpiError::InvalidGas));
     }
 
     #[test]
