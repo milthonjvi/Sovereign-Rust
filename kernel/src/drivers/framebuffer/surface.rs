@@ -574,6 +574,32 @@ mod raster_tests {
     use super::integer_sqrt;
 
     #[test]
+    fn optimized_fill_keeps_reserved_byte_zero() {
+        use super::super::color::{Color, PixelFormat};
+        use super::super::info::FramebufferInfo;
+        use super::FramebufferSurface;
+
+        let mut memory = [0u8; 4 * 4 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 4,
+            height: 4,
+            pitch: 4 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the backing array is writable, correctly sized and exclusively borrowed.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        target.fill_rect(0, 0, 4, 2, Color::with_alpha(10, 20, 30, 255));
+        drop(target);
+
+        assert_eq!(&memory[0..4], &[10, 20, 30, 0]);
+        assert_eq!(&memory[4..8], &[10, 20, 30, 0]);
+    }
+
+    #[test]
     fn integer_square_root_handles_boundaries() {
         assert_eq!(integer_sqrt(0), 0);
         assert_eq!(integer_sqrt(1), 1);
