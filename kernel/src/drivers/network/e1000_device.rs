@@ -911,18 +911,31 @@ mod tests {
         assert!(device.registers.writes.contains(&(REG_TDT, 2)));
 
         assert_eq!(
+            device.transmit_batch_with(2, &mut slots, &mut submissions, |index, buffer| {
+                let length = 32 + index;
+                buffer[..length].fill(0x44 + index as u8);
+                Ok(length)
+            }),
+            Ok(2),
+        );
+        assert_eq!(slots, [2, 3]);
+        assert_eq!(&device.tx_buffers[2].as_slice()[..32], &[0x44; 32]);
+        assert_eq!(&device.tx_buffers[3].as_slice()[..33], &[0x45; 33]);
+        assert!(device.registers.writes.contains(&(REG_TDT, 4)));
+
+        assert_eq!(
             device.transmit_with(|buffer| {
-                buffer[..32].fill(0x44);
-                32
+                buffer[..16].fill(0x55);
+                16
             }),
             Ok(()),
         );
-        assert_eq!(&device.tx_buffers[2].as_slice()[..32], &[0x44; 32]);
-        assert!(device.registers.writes.contains(&(REG_TDT, 3)));
+        assert_eq!(&device.tx_buffers[4].as_slice()[..16], &[0x55; 16]);
+        assert!(device.registers.writes.contains(&(REG_TDT, 5)));
 
         device.registers.fail_register = Some(REG_TDT);
         assert_eq!(device.transmit(&[0x33; 64]), Err(DriverError::HardwareFault));
-        assert_eq!(device.tx_descriptors[3].status, TXD_STATUS_DD);
+        assert_eq!(device.tx_descriptors[5].status, TXD_STATUS_DD);
         assert!(!device.ready);
         assert!(device.faulted);
         assert_eq!(device.shutdown(), Ok(()));
