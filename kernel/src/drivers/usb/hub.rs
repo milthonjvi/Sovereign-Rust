@@ -9,7 +9,7 @@ impl HubDescriptor{
   if b.len()<7||b[1]!=HUB_DESCRIPTOR||b[2]==0{return Err(UsbError::MalformedDescriptor)}
   let bitmap_bytes=((b[2] as usize+1)+7)/8;
   let required=7+bitmap_bytes*2;
-  if b[0] as usize<required||b.len()<required{return Err(UsbError::BufferTooShort)}
+  if (b[0] as usize)<required||b.len()<required{return Err(UsbError::BufferTooShort)}
   Ok(Self{ports:b[2],characteristics:u16::from_le_bytes([b[3],b[4]]),power_on_to_good:b[5],controller_current:b[6]})
  }
 }
