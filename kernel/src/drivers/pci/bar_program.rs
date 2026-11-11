@@ -205,6 +205,100 @@ mod tests {
         assert_eq!(registers[1] >> 16, 0xa55a);
     }
 
+    struct FaultConfig {
+        registers: RefCell<[u32; 64]>,
+        accesses: core::cell::Cell<usize>,
+        fail_first: usize,
+        fail_second: usize,
+    }
+
+    impl FaultConfig {
+        fn should_fail(&self) -> bool {
+            let next = self.accesses.get() + 1;
+            self.accesses.set(next);
+            next == self.fail_first || next == self.fail_second
+        }
+    }
+
+    impl ConfigAccess for FaultConfig {
+        fn read_u32(&self, _address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+            if self.should_fail() { return Err(ConfigError::OutOfRange); }
+            self.registers.borrow().get((register / 4) as usize)
+                .copied().ok_or(ConfigError::OutOfRange)
+        }
+
+        fn write_u32(&self, _address: PciAddress, register: u16, value: u32) -> Result<(), ConfigError> {
+            if self.should_fail() { return Err(ConfigError::OutOfRange); }
+            let mut registers = self.registers.borrow_mut();
+            let slot = registers.get_mut((register / 4) as usize).ok_or(ConfigError::OutOfRange)?;
+            if register == COMMAND_STATUS {
+                let old_status = *slot >> 16;
+                *slot = ((old_status & !(value >> 16)) << 16) | (value & 0xffff);
+            } else {
+                *slot = value;
+            }
+            Ok(())
+        }
+    }
+
+    fn allocation_32() -> (ResourceAllocation, BarSize) {
+        (
+            ResourceAllocation {
+                address: function().address, bar_index: 0,
+                kind: BarKind::Memory32, prefetchable: true,
+                base: 0x9000_0000, size: 0x1000, end: 0x9000_1000,
+            },
+            BarSize { address: function().address, index: 0, size: 0x1000 },
+        )
+    }
+
+    #[test]
+    fn restores_bar_and_command_when_readback_fails() {
+        let mut registers = [0u32; 64];
+        registers[1] = (0xa55a << 16) | 7;
+        registers[4] = 0x8000_0008;
+        let io = FaultConfig {
+            registers: RefCell::new(registers),
+            accesses: core::cell::Cell::new(0),
+            // Six BAR reads, Command read, decode-disable write, BAR write,
+            // then the BAR read-back failure.
+            fail_first: 10,
+            fail_second: usize::MAX,
+        };
+        let (allocation, size) = allocation_32();
+        assert_eq!(
+            unsafe { program_bar(&io, function(), allocation, size) },
+            Err(BarProgramError::Access(ConfigError::OutOfRange))
+        );
+        let restored = io.registers.borrow();
+        assert_eq!(restored[4], 0x8000_0008);
+        assert_eq!(restored[1] as u16, 7);
+        assert_eq!(restored[1] >> 16, 0xa55a);
+    }
+
+    #[test]
+    fn leaves_decode_disabled_when_bar_rollback_fails() {
+        let mut registers = [0u32; 64];
+        registers[1] = (0xa55a << 16) | 7;
+        registers[4] = 0x8000_0008;
+        let io = FaultConfig {
+            registers: RefCell::new(registers),
+            accesses: core::cell::Cell::new(0),
+            // Fail BAR read-back and then the attempted BAR restoration.
+            fail_first: 10,
+            fail_second: 11,
+        };
+        let (allocation, size) = allocation_32();
+        assert_eq!(
+            unsafe { program_bar(&io, function(), allocation, size) },
+            Err(BarProgramError::RestoreFailed)
+        );
+        let state = io.registers.borrow();
+        assert_eq!(state[4], 0x9000_0008);
+        assert_eq!(state[1] as u16 & (COMMAND_IO_SPACE | COMMAND_MEMORY_SPACE), 0);
+        assert_eq!(state[1] >> 16, 0xa55a);
+    }
+
     #[test]
     fn programs_64_bit_bar_as_one_pair() {
         let mut registers = [0u32; 64];
