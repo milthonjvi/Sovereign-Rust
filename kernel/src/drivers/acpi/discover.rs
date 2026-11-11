@@ -380,6 +380,45 @@ mod tests {
     }
 
     #[test]
+    fn does_not_hide_malformed_mapped_extended_facs_with_legacy_pointer() {
+        let root = make_xsdt(0x2000);
+        let mut fadt = make_fadt(0, 0);
+        fadt[36..40].copy_from_slice(&0x5000u32.to_le_bytes());
+        fadt[132..140].copy_from_slice(&0x6000u64.to_le_bytes());
+        fadt[9] = 0;
+        fadt[9] = 0u8.wrapping_sub(fadt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+
+        let mut malformed_facs = std::vec![0u8; 64];
+        malformed_facs[0..4].copy_from_slice(b"BAD!");
+        malformed_facs[4..8].copy_from_slice(&64u32.to_le_bytes());
+        let mut legacy_facs = std::vec![0u8; 64];
+        legacy_facs[0..4].copy_from_slice(b"FACS");
+        legacy_facs[4..8].copy_from_slice(&64u32.to_le_bytes());
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover_with_mappers(
+            &rsdp,
+            |address| match address {
+                0x1000 => Some(root.as_slice()),
+                0x2000 => Some(fadt.as_slice()),
+                _ => None,
+            },
+            |address| match address {
+                0x6000 => Some(malformed_facs.as_slice()),
+                0x5000 => Some(legacy_facs.as_slice()),
+                _ => None,
+            },
+        );
+
+        assert_eq!(result, Err(AcpiError::InvalidSignature));
+    }
+
+    #[test]
     fn rejects_fadt_dsdt_pointer_to_wrong_signature() {
         let root = make_xsdt(0x2000);
         let fadt = make_fadt(0x3000, 0);
