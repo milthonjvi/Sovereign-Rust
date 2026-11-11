@@ -578,8 +578,10 @@ mod recovery_status_tests {
         let busy = AhciPortSnapshot { task_file_data: 1 << 7, ..ready };
         let data_request = AhciPortSnapshot { task_file_data: 1 << 3, ..ready };
         let error = AhciPortSnapshot { task_file_data: 1, ..ready };
+        let device_fault = AhciPortSnapshot { task_file_data: 1 << 5, ..ready };
         assert!(!busy.task_file_ready());
         assert!(!data_request.task_file_ready());
         assert!(!error.task_file_ready());
+        assert!(!device_fault.task_file_ready());
     }
 }
