@@ -189,8 +189,8 @@ pub fn stroke_line_aa(
     let dy = (end.1 as i128 - start.1 as i128).unsigned_abs();
     if dx == 0 && dy == 0 {
         if start.0 >= 0 && start.1 >= 0
-            && start.0 < info.width as i64
-            && start.1 < info.height as i64
+            && (start.0 as i128) < info.width as i128
+            && (start.1 as i128) < info.height as i128
         {
             target.blend_pixel(start.0 as usize, start.1 as usize, color)?;
         }
