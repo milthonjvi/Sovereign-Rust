@@ -68,22 +68,47 @@ impl<'a> ImageView<'a> {
     }
 
     /// Alpha-composite this image at native resolution.
-    ///
-    /// Pixels with alpha 0 are skipped; alpha 255 use the opaque fast path.
-    /// Intermediate alpha values are blended against the current framebuffer.
     pub fn draw_alpha_blended(
         &self,
         target: &mut FramebufferSurface<'_>,
         destination_x: i64,
         destination_y: i64,
     ) -> Result<(), FramebufferError> {
+        self.draw_alpha_blended_clipped(
+            target,
+            destination_x,
+            destination_y,
+            0,
+            0,
+            target.info().width,
+            target.info().height,
+            255,
+        )
+    }
+
+    /// Alpha-composite only the intersection with a target-space clip rectangle.
+    /// Global opacity is multiplied by each source pixel's alpha.
+    pub(crate) fn draw_alpha_blended_clipped(
+        &self,
+        target: &mut FramebufferSurface<'_>,
+        destination_x: i64,
+        destination_y: i64,
+        clip_x: usize,
+        clip_y: usize,
+        clip_width: usize,
+        clip_height: usize,
+        opacity: u8,
+    ) -> Result<(), FramebufferError> {
+        if opacity == 0 || clip_width == 0 || clip_height == 0 {
+            return Ok(());
+        }
         let target_info = *target.info();
-        let left = (destination_x as i128).max(0);
-        let top = (destination_y as i128).max(0);
+        let left = (destination_x as i128).max(clip_x as i128).max(0);
+        let top = (destination_y as i128).max(clip_y as i128).max(0);
         let right = (destination_x as i128 + self.width as i128)
-            .min(target_info.width as i128);
+            .min((clip_x as i128 + clip_width as i128).min(target_info.width as i128));
         let bottom = (destination_y as i128 + self.height as i128)
-            .min(target_info.height as i128);
+            .min((clip_y as i128 + clip_height as i128).min(target_info.height as i128));
         if left >= right || top >= bottom {
             return Ok(());
         }
@@ -98,7 +123,8 @@ impl<'a> ImageView<'a> {
             let source_row = source_y * self.stride;
             for target_x in visible_left..visible_right {
                 let source_x = (target_x as i128 - destination_x as i128) as usize;
-                let color = self.pixels[source_row + source_x];
+                let mut color = self.pixels[source_row + source_x];
+                color.alpha = ((color.alpha as u16 * opacity as u16 + 127) / 255) as u8;
                 target.blend_pixel(target_x, target_y, color)?;
             }
         }
