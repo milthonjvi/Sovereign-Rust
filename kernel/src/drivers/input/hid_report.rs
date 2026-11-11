@@ -78,11 +78,13 @@ struct LocalState {
     usage_min: Option<u16>,
     usage_max: Option<u16>,
     first_usage: Option<u16>,
+    usage_page: Option<u16>,
     usages: [u16; 16],
     usage_count: u8,
 }
 impl LocalState {
-    const EMPTY: Self = Self { usage_min: None, usage_max: None, first_usage: None, usages: [0; 16], usage_count: 0 };
+    const EMPTY: Self = Self { usage_min: None, usage_max: None, first_usage: None,
+        usage_page: None, usages: [0; 16], usage_count: 0 };
     fn clear(&mut self) { *self = Self::EMPTY; }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,6 +181,9 @@ impl HidReportMap {
                 }
                 2 => { // Local items
                     let usage = raw as u16;
+                    if size == 4 && (raw >> 16) != 0 {
+                        local.usage_page = Some((raw >> 16) as u16);
+                    }
                     match tag {
                         0 => {
                             if local.first_usage.is_none() { local.first_usage = Some(usage); }
@@ -223,7 +228,7 @@ impl HidReportMap {
                                 report_size: global.report_size as u8,
                                 report_count: global.report_count as u8,
                                 value_slot: map.value_count,
-                                usage_page: global.usage_page,
+                                usage_page: local.usage_page.unwrap_or(global.usage_page),
                                 usage_min,
                                 usage_max,
                                 usage_list: local.usages,
@@ -246,7 +251,9 @@ impl HidReportMap {
                             collections[collection_depth] = application;
                             collection_depth += 1;
                             if raw as u8 == 1 {
-                                application = Collection { page: global.usage_page, usage };
+                                application = Collection {
+                                    page: local.usage_page.unwrap_or(global.usage_page), usage,
+                                };
                             }
                         }
                         12 => {
