@@ -217,7 +217,7 @@ mod trb_builder_tests{
 pub struct EventRingSegmentTableEntry{pub ring_segment_base:u64,pub ring_segment_size:u32,pub reserved:u32}
 impl EventRingSegmentTableEntry{
  pub fn new(base:u64,trb_count:u32)->Result<Self,XhciError>{
-  if base&0x0f!=0||trb_count==0||trb_count>u16::MAX as u32{return Err(XhciError::InvalidDmaAddress)}
+  if base&0x3f!=0||trb_count==0||trb_count>u16::MAX as u32{return Err(XhciError::InvalidDmaAddress)}
   Ok(Self{ring_segment_base:base,ring_segment_size:trb_count,reserved:0})
  }
 }
@@ -281,7 +281,7 @@ impl XhciController{
  /// ERST entry at erst_physical with event_ring_physical and trb_count.
  pub fn configure_event_ring<I:RegisterIo>(&mut self,io:&mut I,erst_physical:u64,event_ring_physical:u64,trb_count:u16)->Result<(),XhciError>{
   if self.state!=ControllerState::Reset||!self.dma_configured||self.event_ring_configured{return Err(XhciError::InvalidState)}
-  if erst_physical&0x3f!=0||event_ring_physical&0x0f!=0||trb_count==0{return Err(XhciError::InvalidDmaAddress)}
+  if erst_physical&0x3f!=0||event_ring_physical&0x3f!=0||trb_count==0{return Err(XhciError::InvalidDmaAddress)}
   let interrupter=self.runtime_base+0x20;
   io.write32(interrupter+0x04,0)?;
   io.write32(interrupter+0x08,1)?;
@@ -335,11 +335,14 @@ mod controller_state_tests{
  }
  #[test]fn runs_halt_reset_configure_and_start_sequence(){
   let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<24);io.words[17]=USBSTS_HALTED;
+  io.words[0x14/4]=0x80;io.words[0x18/4]=0x100;
   let mut h=XhciController::discover(&io).unwrap();
   h.request_halt(&mut io).unwrap();assert!(h.poll_halted(&io).unwrap());
   h.request_reset(&mut io).unwrap();assert!(h.poll_reset(&io).unwrap());
   h.configure_dma(&mut io,0x2000,0x3000,8).unwrap();
   assert_eq!(io.words[0x40/4+OP_CONFIG/4],8);
+  h.configure_event_ring(&mut io,0x4000,0x5000,256).unwrap();
+  assert_eq!(io.words[(0x100+0x20+0x08)/4],1);
   h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());
   assert_eq!(h.state,ControllerState::Running);
  }
