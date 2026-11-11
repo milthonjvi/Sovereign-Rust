@@ -17,7 +17,7 @@ impl MacAddress {
     pub const ZERO: Self = Self([0; ETHERNET_ADDRESS_LEN]);
     pub const fn is_broadcast(self) -> bool { self.0 == [0xff; ETHERNET_ADDRESS_LEN] }
     pub const fn is_multicast(self) -> bool { self.0[0] & 1 != 0 }
-    pub const fn is_unicast(self) -> bool { !self.is_multicast() && self != Self::ZERO }
+    pub fn is_unicast(self) -> bool { !self.is_multicast() && self != Self::ZERO }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
