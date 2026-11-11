@@ -28,7 +28,8 @@ bounded ELF64 x86_64 `ET_EXEC` images. Its loader currently performs:
    and BSS/inter-segment zeroing.
 4. PE32+ inspection of the loaded EFI application. Headers are mapped RO/NX,
    executable sections RX, and writable data sections RW/NX.
-5. CR0.WP and EFER.NXE enablement, plus active CR4.LA57 detection. The page-table
+5. EFER.NXE enablement and active CR4.LA57 detection. CR0.WP is enabled only
+   in the final transition, after ExitBootServices. The page-table
    builder creates the matching four- or five-level hierarchy with 4 KiB leaves.
 6. Identity mappings for the EFI image, firmware GDT, emergency IDT, a dedicated
    256 KiB kernel stack, boot-info page, and 1 MiB memory-map buffer. Kernel
@@ -47,7 +48,8 @@ bounded ELF64 x86_64 `ET_EXEC` images. Its loader currently performs:
 The page-table implementation rejects duplicate leaf mappings, invalid
 physical/virtual addresses, and writable+executable leaves. A private NX
 proof token ensures EFER.NXE was enabled before installing NX entries.
-CR0.WP is enabled so supervisor writes respect read-only mappings. The
+CR0.WP is enabled immediately before the CR3 switch so supervisor writes
+respect read-only mappings without changing firmware behavior during Boot Services. The
 four-/five-level choice follows the firmware's active CR4.LA57 setting.
 
 The handoff contract is defined in `loader/src/boot_info.rs`. Its kernel-side
