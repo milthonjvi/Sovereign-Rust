@@ -15,6 +15,7 @@ pub mod transfer;
 pub mod topology;
 pub mod strings;
 pub mod hid;
+pub mod hid_transport;
 pub mod mass_storage;
 pub mod uhci;
 pub mod xhci;
