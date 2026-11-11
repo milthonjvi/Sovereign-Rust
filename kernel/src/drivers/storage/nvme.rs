@@ -65,7 +65,7 @@ impl<'a> NvmeSubmissionQueue<'a> {
         if head>=self.depth{return Err(NvmeError::InvalidQueueDepth);} self.head=head; Ok(())
     }
     /// Returns the new tail for the submission doorbell.
-    pub fn submit(&mut self,cmd:NvmeCommand)->Result<u16,NvmeError>{
+    pub fn submit(&mut self,cmd:NvmeCommand)->Result<u32,NvmeError>{
         let next=(self.tail+1)%self.depth;
         if next==self.head{return Err(NvmeError::QueueFull);}
         self.entries[self.tail as usize]=cmd; self.tail=next; Ok(next)
@@ -92,13 +92,16 @@ pub struct NvmePrpMapping{pub prp1:u64,pub prp2:u64,pub list_entries:usize}
 pub fn build_prps(buffer_phys:u64,byte_len:usize,page_size:u32,list_phys:u64,list:&mut[u64])->Result<NvmePrpMapping,NvmeError>{
     if byte_len==0 || !page_size.is_power_of_two() || page_size<4096{return Err(NvmeError::InvalidTransfer);}
     let page=page_size as u64;
-    let total=byte_len as u64;\n    buffer_phys.checked_add(total).ok_or(NvmeError::AddressOverflow)?;\n    let first=core::cmp::min(total,page-(buffer_phys&(page-1)));
+    let total=byte_len as u64;
+    buffer_phys.checked_add(total).ok_or(NvmeError::AddressOverflow)?;
+    let first=core::cmp::min(total,page-(buffer_phys&(page-1)));
     let remaining=byte_len as u64-first;
     let pages=if remaining==0{0}else{remaining.checked_add(page-1).ok_or(NvmeError::AddressOverflow)?/page};
     if pages==0{return Ok(NvmePrpMapping{prp1:buffer_phys,prp2:0,list_entries:0});}
     let second=buffer_phys.checked_add(first).ok_or(NvmeError::AddressOverflow)?;
     if pages==1{return Ok(NvmePrpMapping{prp1:buffer_phys,prp2:second,list_entries:0});}
-    if list_phys&(page-1)!=0{return Err(NvmeError::InvalidAlignment);}\n    list_phys.checked_add(page).ok_or(NvmeError::AddressOverflow)?;
+    if list_phys&(page-1)!=0{return Err(NvmeError::InvalidAlignment);}
+    list_phys.checked_add(page).ok_or(NvmeError::AddressOverflow)?;
     if pages as usize>list.len() || pages*8>page{return Err(NvmeError::PrpListTooSmall);}
     for (i,slot) in list[..pages as usize].iter_mut().enumerate(){
         *slot=second.checked_add((i as u64).checked_mul(page).ok_or(NvmeError::AddressOverflow)?).ok_or(NvmeError::AddressOverflow)?;
