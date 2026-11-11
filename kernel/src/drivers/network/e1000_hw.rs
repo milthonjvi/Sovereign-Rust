@@ -8,7 +8,7 @@ use super::e1000::{
     RingConfig, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
     REG_CTRL, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
     REG_RDBAH, REG_RDBAL, REG_RDH, REG_RDLEN, REG_RDT,
-    REG_STATUS, REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
+    REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
     RCTL_BAM, RCTL_EN, RCTL_SECRC, TCTL_COLD_SHIFT, TCTL_CT_SHIFT, TCTL_EN, TCTL_PSP,
 };
 use super::e1000_descriptor::mac_address_from_registers;
@@ -35,6 +35,7 @@ pub enum E1000InitError<E> {
     Register(E),
     ResetTimeout,
     InvalidRingConfiguration,
+    BusMasterDisabled,
     MissingMacAddress,
 }
 
@@ -83,7 +84,7 @@ pub fn initialize<R: E1000Registers>(
     bus_master_enabled: bool,
 ) -> Result<E1000InitInfo, E1000InitError<R::Error>> {
     if !bus_master_enabled {
-        return Err(E1000InitError::InvalidRingConfiguration);
+        return Err(E1000InitError::BusMasterDisabled);
     }
     validate_queue(&queues).map_err(|_| E1000InitError::InvalidRingConfiguration)?;
 
@@ -182,7 +183,6 @@ mod tests {
     #[derive(Default)]
     struct MockRegisters {
         writes: Vec<(u32, u32)>,
-        ctrl_reads: usize,
     }
 
     impl E1000Registers for MockRegisters {
@@ -190,7 +190,6 @@ mod tests {
 
         fn read32(&mut self, offset: u32) -> Result<u32, Self::Error> {
             if offset == REG_CTRL {
-                self.ctrl_reads += 1;
                 return Ok(0);
             }
             if offset == REG_RAL0 { return Ok(0x4433_2211); }
@@ -228,7 +227,7 @@ mod tests {
     fn refuses_to_initialize_without_bus_mastering() {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1000, 0x2000).unwrap();
-        assert_eq!(initialize(&mut regs, queues, false), Err(E1000InitError::InvalidRingConfiguration));
+        assert_eq!(initialize(&mut regs, queues, false), Err(E1000InitError::BusMasterDisabled));
         assert!(regs.writes.is_empty());
     }
 }
