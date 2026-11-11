@@ -23,6 +23,7 @@ mod tx_queue;
 pub(crate) use rx_queue::E1000RxQueue;
 
 const RESET_POLL_LIMIT: usize = 1_000_000;
+const RESET_POST_WRITE_SPINS: usize = 4_096;
 const RING_LENGTH_ALIGNMENT: u32 = 128;
 const TCTL_COLLISION_THRESHOLD: u32 = 0x10;
 const TCTL_COLLISION_DISTANCE: u32 = 0x40;
@@ -55,6 +56,16 @@ pub unsafe trait E1000Registers {
     /// preceding device writes to descriptor metadata and packet buffers visible
     /// before the CPU reads that metadata or reuses the completed buffer.
     fn dma_read_barrier(&mut self);
+
+    /// Wait for the device's post-reset settling interval before polling CTRL.
+    ///
+    /// The default is a conservative x86 pause loop. Platform implementations
+    /// should override it with a calibrated delay of at least 1 microsecond.
+    fn post_reset_delay(&mut self) {
+        for _ in 0..RESET_POST_WRITE_SPINS {
+            core::hint::spin_loop();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +91,7 @@ pub fn reset<R: E1000Registers>(registers: &mut R) -> Result<(), E1000ResetError
     registers.write32(REG_IMC, u32::MAX).map_err(E1000ResetError::Register)?;
     let control = registers.read32(REG_CTRL).map_err(E1000ResetError::Register)?;
     registers.write32(REG_CTRL, control | CTRL_RST).map_err(E1000ResetError::Register)?;
+    registers.post_reset_delay();
 
     for _ in 0..RESET_POLL_LIMIT {
         let value = registers.read32(REG_CTRL).map_err(E1000ResetError::Register)?;
