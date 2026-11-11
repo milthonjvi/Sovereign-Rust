@@ -195,10 +195,6 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         {
             return Err(DriverError::InvalidConfiguration);
         }
-        if frames.iter().any(|frame| frame.len() > self.tx_buffers[0].len()) {
-            return Err(DriverError::InvalidConfiguration);
-        }
-
         let available = self.tx_queue.reclaim_and_available_slots(
             self.registers,
             self.tx_descriptors,
@@ -208,12 +204,20 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             return Err(DriverError::ResourceUnavailable);
         }
 
+        // Preflight every selected buffer before staging any packet. A short
+        // later slot must not leave a partially copied batch behind.
+        for (frame_index, frame) in frames.iter().enumerate() {
+            let slot = slots[frame_index] as usize;
+            if slot >= self.tx_buffers.len()
+                || frame.len() > self.tx_buffers[slot].len()
+            {
+                return Err(DriverError::InvalidConfiguration);
+            }
+        }
+
         for (frame_index, frame) in frames.iter().enumerate() {
             let slot = slots[frame_index] as usize;
             let buffer = &mut self.tx_buffers[slot];
-            if frame.len() > buffer.len() {
-                return Err(DriverError::InvalidConfiguration);
-            }
             buffer.as_mut_slice()[..frame.len()].copy_from_slice(frame);
             submissions[frame_index] = (buffer.dma_address(), frame.len());
         }
