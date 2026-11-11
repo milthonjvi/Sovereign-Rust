@@ -5,3 +5,4 @@
 //! Allocators must not be enabled before their backing memory is validated.
 
 pub mod boot_map;
+pub mod frame;
