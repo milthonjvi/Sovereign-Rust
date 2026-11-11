@@ -7,6 +7,7 @@
 use super::e1000::{
     RingConfig, RxDescriptor, TxDescriptor, RingCursor, E1000Error, TXD_STATUS_DD, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
     REG_CTRL, REG_STATUS, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
+    REG_MTA_BASE, E1000_MTA_REGISTER_COUNT,
     REG_RDBAH, REG_RDBAL, REG_RDH, REG_RDLEN, REG_RDT,
     REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
     RCTL_BAM, RCTL_EN, RCTL_SECRC, TCTL_COLD_SHIFT, TCTL_CT_SHIFT, TCTL_EN, TCTL_PSP,
@@ -183,6 +184,13 @@ pub unsafe fn initialize<R: E1000Registers>(
         E1000ResetError::Register(error) => E1000InitError::Register(error),
         E1000ResetError::Timeout => E1000InitError::ResetTimeout,
     })?;
+
+    // Start with an explicit empty multicast table. The adapter later installs
+    // only the multicast groups requested by the network stack.
+    for index in 0..E1000_MTA_REGISTER_COUNT {
+        registers.write32(REG_MTA_BASE + index as u32 * 4, 0)
+            .map_err(E1000InitError::Register)?;
+    }
 
     // Hardware queues are stopped and reset; now initialize the DMA-visible rings.
     for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
