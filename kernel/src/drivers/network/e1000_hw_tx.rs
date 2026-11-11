@@ -273,10 +273,3 @@ impl E1000TxQueue {
     }
 }
 
-/// Consumer cursor for the device's legacy RX descriptor ring.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct E1000RxQueue {
-    cursor: RingCursor,
-    recycle: RingCursor,
-    outstanding: u16,
-}
