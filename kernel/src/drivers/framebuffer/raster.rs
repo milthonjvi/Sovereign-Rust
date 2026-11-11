@@ -169,6 +169,97 @@ pub fn stroke_polygon(
     }
 }
 
+/// Draw an antialiased line using fixed-point coverage interpolation.
+///
+/// The major axis is clipped before iteration, so work is bounded by the
+/// framebuffer dimensions even for endpoints near the limits of `i64`.
+/// Coverage is composited through the surface's RGB/BGR-aware alpha path.
+pub fn stroke_line_aa(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    end: (i64, i64),
+    color: Color,
+) -> Result<(), FramebufferError> {
+    let info = *target.info();
+    if info.width == 0 || info.height == 0 || color.alpha == 0 {
+        return Ok(());
+    }
+
+    let dx = (end.0 as i128 - start.0 as i128).unsigned_abs();
+    let dy = (end.1 as i128 - start.1 as i128).unsigned_abs();
+    if dx == 0 && dy == 0 {
+        if start.0 >= 0 && start.1 >= 0 {
+            let _ = target.blend_pixel(start.0 as usize, start.1 as usize, color);
+        }
+        return Ok(());
+    }
+
+    let steep = dy > dx;
+    let (mut x0, mut y0, mut x1, mut y1) = if steep {
+        (start.1, start.0, end.1, end.0)
+    } else {
+        (start.0, start.1, end.0, end.1)
+    };
+    if x0 > x1 {
+        core::mem::swap(&mut x0, &mut x1);
+        core::mem::swap(&mut y0, &mut y1);
+    }
+
+    let major_limit = if steep { info.height } else { info.width };
+    let minor_limit = if steep { info.width } else { info.height };
+    if major_limit == 0 || minor_limit == 0 {
+        return Ok(());
+    }
+    let major_delta = (x1 as i128 - x0 as i128) as u128;
+    let minor_delta = (y1 as i128 - y0 as i128).unsigned_abs();
+    let direction = if y1 >= y0 { 1i128 } else { -1i128 };
+    let first = x0.max(0);
+    let last = x1.min(i64::try_from(major_limit - 1).unwrap_or(i64::MAX));
+    if first > last {
+        return Ok(());
+    }
+
+    for major in first..=last {
+        let distance = (major as i128 - x0 as i128) as u128;
+        // distance and minor_delta are each at most 2^64-1, so this
+        // multiplication fits in u128. Split quotient/remainder before
+        // converting to 16.16 fixed point to avoid a 2^144 intermediate.
+        let product = distance * minor_delta;
+        let whole = product / major_delta;
+        let remainder = product % major_delta;
+        let fraction = (remainder * 65_536 + major_delta / 2) / major_delta;
+        let offset = whole * 65_536 + fraction;
+        let minor_fixed = y0 as i128 * 65_536 + direction * offset as i128;
+        let minor_floor = minor_fixed.div_euclid(65_536);
+        let minor_fraction = minor_fixed.rem_euclid(65_536) as u32;
+
+        let primary_coverage = 65_536 - minor_fraction;
+        let primary_alpha = ((color.alpha as u32 * primary_coverage + 32_768) / 65_536) as u8;
+        if minor_floor >= 0 && minor_floor < minor_limit as i128 && primary_alpha != 0 {
+            let (x, y) = if steep {
+                (minor_floor as usize, major as usize)
+            } else {
+                (major as usize, minor_floor as usize)
+            };
+            target.blend_pixel(x, y, Color::with_alpha(color.red, color.green, color.blue, primary_alpha))?;
+        }
+
+        if minor_fraction != 0 {
+            let secondary = minor_floor + 1;
+            let secondary_alpha = ((color.alpha as u32 * minor_fraction + 32_768) / 65_536) as u8;
+            if secondary >= 0 && secondary < minor_limit as i128 && secondary_alpha != 0 {
+                let (x, y) = if steep {
+                    (secondary as usize, major as usize)
+                } else {
+                    (major as usize, secondary as usize)
+                };
+                target.blend_pixel(x, y, Color::with_alpha(color.red, color.green, color.blue, secondary_alpha))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Stroke an open polyline by connecting consecutive vertices.
 ///
 /// Unlike `stroke_polygon`, this function does not connect the last vertex
@@ -708,6 +799,23 @@ mod tests {
         drop(target);
         assert!(memory.iter().all(|byte| *byte == 0));
     }
+    #[test]
+    fn antialiased_line_blends_fractional_coverage() {
+        use super::stroke_line_aa;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        target.clear(Color::BLACK);
+        stroke_line_aa(&mut target, (0, 0), (7, 3), Color::WHITE).unwrap();
+        drop(target);
+        let has_partial = (0..memory.len()).step_by(4).any(|offset| {
+            let value = memory[offset];
+            value != 0 && value != 255
+        });
+        assert!(has_partial);
+        assert!(memory[0] > 0);
+        assert_eq!(memory[3], 0);
+    }
+
     #[test]
     fn strokes_open_polyline_without_closing_last_segment() {
         use super::stroke_polyline;
