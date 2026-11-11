@@ -19,6 +19,7 @@ impl PortAction{
  /// Converts an actionable state-machine output into an external-hub class
  /// request. Root-hub actions must instead use the host-controller interface.
  pub fn hub_request(self,port:u8)->Option<SetupPacket>{
+  if port==0{return None}
   let action=match self{
    Self::PowerOn=>HubPortAction::PowerOn,
    Self::PowerOff=>HubPortAction::PowerOff,
