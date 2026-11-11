@@ -2,12 +2,13 @@
 use super::block::{BlockError, BlockGeometry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NvmeError { InvalidCapabilities, InvalidQueueDepth, QueueFull, InvalidNamespace, UnsupportedLbaFormat, InvalidTransfer, AddressOverflow, InvalidAlignment, PrpListTooSmall, Timeout, ControllerFatal, UnsupportedPageSize }
+pub enum NvmeError { InvalidCapabilities, InvalidQueueDepth, QueueFull, InvalidNamespace, UnsupportedLbaFormat, InvalidTransfer, AddressOverflow, InvalidAlignment, PrpListTooSmall, Timeout, ControllerFatal, UnsupportedPageSize, UnsupportedCommandSet }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NvmeCapabilities {
     pub max_queue_entries: u32,
     pub contiguous_queues_required: bool,
+    pub supports_nvm_command_set: bool,
     pub timeout_units_500ms: u8,
     pub doorbell_stride_bytes: u32,
     pub min_page_size: u32,
@@ -21,6 +22,7 @@ impl NvmeCapabilities {
         Ok(Self {
             max_queue_entries: (cap & 0xFFFF) as u32 + 1,
             contiguous_queues_required: cap & (1 << 16) != 0,
+            supports_nvm_command_set: cap & (1u64 << 37) != 0,
             timeout_units_500ms: (cap >> 24) as u8,
             doorbell_stride_bytes: 4u32.checked_shl(((cap >> 32) & 0xF) as u32).ok_or(NvmeError::InvalidCapabilities)?,
             min_page_size: 1u32.checked_shl(min_shift).ok_or(NvmeError::InvalidCapabilities)?,
@@ -179,7 +181,7 @@ mod capability_tests {
     use super::*;
     #[test]
     fn capabilities_decode_queue_and_page_limits() {
-        let cap = 63u64 | (1u64 << 16) | (10u64 << 24) | (1u64 << 32) | (1u64 << 48) | (2u64 << 52);
+        let cap = 63u64 | (1u64 << 16) | (1u64 << 37) | (10u64 << 24) | (1u64 << 32) | (1u64 << 48) | (2u64 << 52);
         let decoded = NvmeCapabilities::parse(cap).unwrap();
         assert_eq!(decoded.max_queue_entries, 64);
         assert!(decoded.contiguous_queues_required);
@@ -246,6 +248,7 @@ pub fn initialize_controller<R: NvmeRegisterIo>(
     registers.write32(CC,cc)?;
     wait_ready(registers,false,poll_limit)?;
     let capabilities=NvmeCapabilities::parse(registers.read64(CAP)?)?;
+    if !capabilities.supports_nvm_command_set { return Err(NvmeError::UnsupportedCommandSet); }
     if capabilities.min_page_size>4096 || capabilities.max_page_size<4096 {
         return Err(NvmeError::UnsupportedPageSize);
     }
@@ -317,7 +320,7 @@ mod controller_tests {
     }
     #[test]
     fn initializes_admin_queues_and_controller_enable(){
-        let mut registers=Registers{cap:63,cc:0,status:0,aqa:0,asq:0,acq:0};
+        let mut registers=Registers{cap:63|(1u64<<37),cc:0,status:0,aqa:0,asq:0,acq:0};
         let mut sq=[NvmeCommand::default();2];
         let mut cq=[NvmeCompletion{status:1,..NvmeCompletion::default()};2];
         let mut queues=NvmeAdminQueueMemory{submission_phys:0x1000,completion_phys:0x2000,submission:&mut sq,completion:&mut cq,depth:2};
