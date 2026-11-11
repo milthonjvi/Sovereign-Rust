@@ -27,13 +27,16 @@ impl FatVolume {
     }
 }
 
-fn read_fat_bytes<D: BlockDevice>(device: &mut D, volume: &FatVolume, offset: u64, out: &mut [u8], scratch: &mut [u8]) -> Result<(), FatError> {
+fn read_fat_bytes<D: BlockDevice>(device: &mut D, volume: &FatVolume, offset: u64, fat_index: u8, out: &mut [u8], scratch: &mut [u8]) -> Result<(), FatError> {
     let bps = volume.bpb.bytes_per_sector as usize;
     if scratch.len() < bps * 2 { return Err(FatError::FatSectorBufferTooSmall); }
     let sector_index = offset / bps as u64;
     let within = (offset % bps as u64) as usize;
     let count = if within + out.len() > bps { 2u64 } else { 1u64 };
-    let fat_start = volume.bpb.reserved_sectors as u64;
+    if fat_index >= volume.bpb.fat_count { return Err(FatError::FatEntryIo); }
+    let fat_start = (volume.bpb.reserved_sectors as u64)
+        .checked_add((fat_index as u64).checked_mul(volume.bpb.sectors_per_fat as u64).ok_or(FatError::FatEntryIo)?)
+        .ok_or(FatError::FatEntryIo)?;
     let absolute = fat_start.checked_add(sector_index).ok_or(FatError::FatEntryIo)?;
     let fat_end = fat_start.checked_add(volume.bpb.sectors_per_fat as u64).ok_or(FatError::FatEntryIo)?;
     if absolute.checked_add(count).filter(|end| *end <= fat_end).is_none() { return Err(FatError::FatEntryIo); }
@@ -44,7 +47,7 @@ fn read_fat_bytes<D: BlockDevice>(device: &mut D, volume: &FatVolume, offset: u6
 }
 
 /// Resolve a FAT entry, including FAT12 packed entries that cross sector boundaries.
-pub fn read_fat_entry<D: BlockDevice>(device: &mut D, volume: &FatVolume, cluster: u32, scratch: &mut [u8]) -> Result<FatChainValue, FatError> {
+pub fn read_fat_entry_from_copy<D: BlockDevice>(device: &mut D, volume: &FatVolume, fat_index: u8, cluster: u32, scratch: &mut [u8]) -> Result<FatChainValue, FatError> {
     if cluster >= volume.bpb.cluster_count + 2 { return Err(FatError::InvalidCluster); }
     let (offset, width) = match volume.bpb.kind {
         FatKind::Fat12 => ((cluster as u64 * 3) / 2, 2usize),
@@ -52,7 +55,7 @@ pub fn read_fat_entry<D: BlockDevice>(device: &mut D, volume: &FatVolume, cluste
         FatKind::Fat32 => (cluster as u64 * 4, 4),
     };
     let mut raw = [0u8; 4];
-    read_fat_bytes(device, volume, offset, &mut raw[..width], scratch)?;
+    read_fat_bytes(device, volume, offset, fat_index, &mut raw[..width], scratch)?;
     let value = match volume.bpb.kind {
         FatKind::Fat12 => { let v = u16::from_le_bytes([raw[0], raw[1]]); if cluster & 1 == 0 { (v & 0x0fff) as u32 } else { (v >> 4) as u32 } }
         FatKind::Fat16 => u16::from_le_bytes([raw[0], raw[1]]) as u32,
@@ -168,4 +171,23 @@ pub fn enumerate_directory<D: BlockDevice>(
         }
     }
     Ok(count)
+}
+
+/// Read from the primary FAT copy (copy zero).
+pub fn read_fat_entry<D: BlockDevice>(device: &mut D, volume: &FatVolume, cluster: u32, scratch: &mut [u8]) -> Result<FatChainValue, FatError> {
+    read_fat_entry_from_copy(device, volume, 0, cluster, scratch)
+}
+
+/// Compare a cluster-chain entry across all FAT copies and report divergence.
+pub fn verify_fat_mirrors<D: BlockDevice>(
+    device: &mut D, volume: &FatVolume, cluster: u32, scratch: &mut [u8],
+) -> Result<FatChainValue, FatError> {
+    let primary = read_fat_entry_from_copy(device, volume, 0, cluster, scratch)?;
+    let mut copy = 1u8;
+    while copy < volume.bpb.fat_count {
+        let candidate = read_fat_entry_from_copy(device, volume, copy, cluster, scratch)?;
+        if candidate != primary { return Err(FatError::FatMirrorMismatch); }
+        copy += 1;
+    }
+    Ok(primary)
 }
