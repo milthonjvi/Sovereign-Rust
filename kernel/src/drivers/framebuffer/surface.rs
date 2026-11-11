@@ -290,16 +290,43 @@ impl<'a> FramebufferSurface<'a> {
         // pixel offset is inside the mapping. Keep the hot loop free of
         // per-pixel Result handling and repeated bounds checks.
         let first_column_offset = start_x * 4;
-        let row_bytes = (end_x - start_x) * 4;
+        let pixel_count = end_x - start_x;
+        let row_bytes = pixel_count * 4;
+        let bytes = color.memory_bytes(self.info.pixel_format);
+        let packed_pair = u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[0], bytes[1], bytes[2], bytes[3],
+        ]);
+
         for row in start_y..end_y {
             let row_offset = row * self.info.pitch + first_column_offset;
-            for pixel_offset in (0..row_bytes).step_by(4) {
+            // A pair store halves the number of volatile transactions for
+            // large fills. The fallback handles odd alignment and final pixels.
+            let row_address = unsafe { self.base.as_ptr().add(row_offset) };
+            let mut pixel = 0;
+            if (row_address as usize) & (core::mem::align_of::<u64>() - 1) == 0 {
+                let pairs = pixel_count / 2;
+                // SAFETY: each pair covers two clipped pixels in this row.
+                unsafe {
+                    let destination = row_address.cast::<u64>();
+                    for pair in 0..pairs {
+                        ptr::write_volatile(destination.add(pair), packed_pair);
+                    }
+                }
+                pixel = pairs * 2;
+            }
+
+            for column in pixel..pixel_count {
                 // SAFETY: row and column ranges are clipped to validated
                 // dimensions; pitch * height was checked at construction.
                 unsafe {
-                    self.write_pixel_unchecked(row_offset + pixel_offset, color);
+                    self.write_pixel_unchecked(row_offset + column * 4, color);
                 }
             }
+
+            // row_bytes is retained in the calculation above to make the
+            // clipped byte span explicit and guard future format extensions.
+            let _ = row_bytes;
         }
     }
 }
