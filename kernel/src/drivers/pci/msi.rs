@@ -259,6 +259,40 @@ mod tests {
     }
 
     #[test]
+    fn validates_msix_structures_against_bar_aperture_sizes() {
+        let msix = MsixCapability {
+            offset: 0x60, enabled: false, function_masked: true, table_size: 8,
+            table_bar: 2, table_offset: 0x2000,
+            pending_bit_array_bar: 4, pending_bit_array_offset: 0x3000,
+        };
+        let table_bar = Bar {
+            index: 2, kind: BarKind::Memory32, prefetchable: false,
+            base: 0x100000, raw_low: 0x100000, raw_high: None,
+        };
+        let pba_bar = Bar {
+            index: 4, kind: BarKind::Memory32, prefetchable: false,
+            base: 0x200000, raw_low: 0x200000, raw_high: None,
+        };
+        let table = BarResource::new(table_bar, 0x4000).unwrap();
+        let pba = BarResource::new(pba_bar, 0x4000).unwrap();
+        assert_eq!(msix.validate_resources(&[table, pba]), Ok(()));
+
+        let undersized_table = BarResource::new(table_bar, 0x2000).unwrap();
+        assert_eq!(msix.validate_resources(&[undersized_table, pba]), Err(ConfigError::InvalidBar));
+    }
+
+    #[test]
+    fn rejects_msix_capability_whose_registers_cross_config_boundary() {
+        let mut registers = [0u32; 1024];
+        registers[0xf8 / 4] = 0x0001_0011;
+        let io = MockConfig { registers };
+        assert_eq!(
+            MsixCapability::read(&io, address(), Capability { id: MSIX_CAPABILITY_ID, offset: 0xf8 }),
+            Err(ConfigError::OutOfRange)
+        );
+    }
+
+    #[test]
     fn refuses_to_read_past_conventional_configuration_space() {
         let mut registers = [0u32; 1024];
         registers[0xfc / 4] = 0x0081_0005;
