@@ -11,9 +11,17 @@ impl Color {
     pub const RED: Self = Self::new(255, 0, 0);
     pub const GREEN: Self = Self::new(0, 255, 0);
     pub const BLUE: Self = Self::new(0, 0, 255);
+    /// Construct a color with the framebuffer's reserved byte cleared.
+    /// For image data intended for alpha compositing, use `opaque` or
+    /// `with_alpha` so the source opacity is explicit.
     pub const fn new(red: u8, green: u8, blue: u8) -> Self {
         Self { red, green, blue, alpha: 0 }
     }
+    /// Construct a fully opaque color suitable for image layers.
+    pub const fn opaque(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue, alpha: 255 }
+    }
+    /// Construct an RGBA color where alpha 0 is transparent and 255 opaque.
     pub const fn with_alpha(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
         Self { red, green, blue, alpha }
     }
