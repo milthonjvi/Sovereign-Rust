@@ -53,7 +53,7 @@ pub unsafe fn read_cr4() -> u64 {
 pub fn read_rflags() -> u64 {
     let value: u64;
     // SAFETY: PUSHFQ/POP do not access privileged state.
-    unsafe { core::arch::asm!("pushfq", "pop {}", out(reg) value, options(nomem)); }
+    unsafe { core::arch::asm!("pushfq", "pop {}", out(reg) value, options()); }
     value
 }
 
