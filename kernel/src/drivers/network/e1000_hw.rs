@@ -6,7 +6,7 @@
 
 use super::e1000::{
     RingConfig, RxDescriptor, TxDescriptor, RingCursor, E1000Error, TXD_STATUS_DD, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
-    REG_CTRL, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
+    REG_CTRL, REG_STATUS, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
     REG_RDBAH, REG_RDBAL, REG_RDH, REG_RDLEN, REG_RDT,
     REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
     RCTL_BAM, RCTL_EN, RCTL_SECRC, TCTL_COLD_SHIFT, TCTL_CT_SHIFT, TCTL_EN, TCTL_PSP,
@@ -18,6 +18,10 @@ const RESET_POLL_LIMIT: usize = 1_000_000;
 const RING_LENGTH_ALIGNMENT: u32 = 128;
 const TCTL_COLLISION_THRESHOLD: u32 = 0x10;
 const TCTL_COLLISION_DISTANCE: u32 = 0x40;
+const STATUS_FD: u32 = 1 << 0;
+const STATUS_LU: u32 = 1 << 1;
+const STATUS_SPEED_MASK: u32 = 0b11 << 6;
+const STATUS_SPEED_SHIFT: u32 = 6;
 
 /// Minimal interface implemented by the platform's already-mapped MMIO window.
 ///
@@ -100,7 +104,7 @@ pub fn initialize<R: E1000Registers>(
     if rx_descriptors.len() != queues.rx.descriptor_count as usize
         || rx_buffer_dma.len() != rx_descriptors.len()
         || tx_descriptors.len() != queues.tx.descriptor_count as usize
-        || rx_buffer_dma.iter().any(|address| *address == 0)
+        || rx_buffer_dma.iter().any(|address| *address == 0 || *address & 0xf != 0)
     {
         return Err(E1000InitError::InvalidDescriptorBuffers);
     }
@@ -164,6 +168,26 @@ pub fn initialize<R: E1000Registers>(
     })
 }
 
+/// Read the physical link state from the E1000 STATUS register.
+pub fn read_link_state<R: E1000Registers>(
+    registers: &mut R,
+) -> Result<super::device::LinkState, R::Error> {
+    let status = registers.read32(REG_STATUS)?;
+    if status & STATUS_LU == 0 {
+        return Ok(super::device::LinkState::Down);
+    }
+    let speed_mbps = match (status & STATUS_SPEED_MASK) >> STATUS_SPEED_SHIFT {
+        0 => Some(10),
+        1 => Some(100),
+        2 => Some(1000),
+        _ => None,
+    };
+    Ok(super::device::LinkState::Up {
+        speed_mbps,
+        full_duplex: status & STATUS_FD != 0,
+    })
+}
+
 /// Runtime error returned by allocation-free RX/TX queue operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum E1000QueueError<E> {
@@ -199,7 +223,7 @@ impl E1000TxQueue {
         if descriptors.len() != self.cursor_count() {
             return Err(E1000QueueError::InvalidRing);
         }
-        if length == 0 || length > u16::MAX as usize || buffer_dma == 0 {
+        if length == 0 || length > u16::MAX as usize || buffer_dma == 0 || buffer_dma & 0xf != 0 {
             return Err(E1000QueueError::InvalidFrameLength);
         }
         let index = self.cursor.index() as usize;
@@ -394,6 +418,7 @@ mod tests {
                 return Ok(0);
             }
             if offset == REG_RAL0 { return Ok(0x4433_2211); }
+            if offset == REG_STATUS { return Ok(STATUS_LU | STATUS_FD | (2 << STATUS_SPEED_SHIFT)); }
             if offset == REG_RAH0 { return Ok(0x8000_6655); }
             Ok(0)
         }
@@ -404,6 +429,14 @@ mod tests {
         }
         fn dma_write_barrier(&mut self) { core::sync::atomic::fence(core::sync::atomic::Ordering::Release); }
         fn dma_read_barrier(&mut self) { core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire); }
+    }
+
+    #[test]
+    fn link_state_reports_speed_and_duplex() {
+        let mut regs = MockRegisters::default();
+        assert_eq!(read_link_state(&mut regs), Ok(super::super::device::LinkState::Up {
+            speed_mbps: Some(1000), full_duplex: true,
+        }));
     }
 
     #[test]
