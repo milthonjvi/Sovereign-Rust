@@ -437,7 +437,29 @@ fn point_within_chord_tolerance(
     let scale = dx.unsigned_abs().max(dy.unsigned_abs());
     // tolerance is capped at i64::MAX, so this product is strictly below
     // 2^127 even for the largest possible difference of two i64 coordinates.
-    cross.unsigned_abs() <= tolerance * scale
+    let margin = tolerance * scale;
+    if cross.unsigned_abs() > margin {
+        return false;
+    }
+
+    // Distance to the infinite chord alone is insufficient: a collinear
+    // control point can lie beyond either endpoint and make the curve reverse
+    // along the same line. Bound its projection to the finite segment too.
+    let Some(projection) = dx.checked_mul(px)
+        .and_then(|x| dy.checked_mul(py).and_then(|y| x.checked_add(y)))
+    else {
+        return false;
+    };
+    let Some(chord_length_squared) = dx.checked_mul(dx)
+        .and_then(|x| dy.checked_mul(dy).and_then(|y| x.checked_add(y)))
+    else {
+        return false;
+    };
+    let margin_i128 = margin as i128;
+    let Some(upper_projection) = chord_length_squared.checked_add(margin_i128) else {
+        return false;
+    };
+    projection >= -margin_i128 && projection <= upper_projection
 }
 
 /// Fill a triangle using integer scanline intersections.
@@ -614,6 +636,20 @@ mod tests {
         assert!(red(6, 6));
         assert!(green(0, 0));
         assert!(green(7, 0));
+    }
+
+    #[test]
+    fn adaptive_bezier_detects_collinear_control_overshoot() {
+        use super::stroke_quadratic_bezier_adaptive;
+        let mut memory = [0u8; 8 * 4 * 4];
+        let mut target = surface(&mut memory);
+        stroke_quadratic_bezier_adaptive(
+            &mut target, (1, 1), (10, 1), (5, 1), 0, 10, Color::RED,
+        );
+        drop(target);
+        // The control point lies beyond the endpoint; the curve reverses and
+        // reaches pixels that a direct endpoint chord would omit.
+        assert!(memory[(1 * 8 + 6) * 4] == 255);
     }
 
     #[test]
