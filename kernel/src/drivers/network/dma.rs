@@ -29,7 +29,18 @@ pub struct DmaBuffer<'a> {
 }
 
 impl<'a> DmaBuffer<'a> {
-    pub fn new(dma_address: u64, bytes: &'a mut [u8]) -> Result<Self, DmaBufferError> {
+    /// Create a DMA buffer from a platform-established mapping.
+    ///
+    /// # Safety
+    /// `dma_address..dma_address + bytes.len()` must be the device-visible DMA
+    /// mapping of exactly `bytes` for the complete lifetime `'a`. The backing
+    /// pages must remain pinned and accessible to the device, the mapping must
+    /// grant the device the required read/write permissions, and no other
+    /// device or CPU owner may access the region outside the ownership protocol
+    /// enforced by the driver. The platform must provide coherent DMA or perform
+    /// the required cache maintenance before ownership is transferred. A valid,
+    /// aligned address alone does not establish any of these properties.
+    pub unsafe fn new(dma_address: u64, bytes: &'a mut [u8]) -> Result<Self, DmaBufferError> {
         if bytes.is_empty() {
             return Err(DmaBufferError::Empty);
         }
@@ -108,7 +119,7 @@ mod tests {
     #[test]
     fn pairs_cpu_slice_with_dma_address() {
         let mut bytes = [0u8; 2048];
-        let mut buffer = DmaBuffer::new(0x4000, &mut bytes).unwrap();
+        let mut buffer = unsafe { DmaBuffer::new(0x4000, &mut bytes) }.unwrap();
         buffer[0] = 0xaa;
         assert_eq!(buffer.dma_address(), 0x4000);
         assert_eq!(buffer.as_slice()[0], 0xaa);
@@ -119,7 +130,7 @@ mod tests {
         let mut empty = [];
         assert_eq!(DmaBuffer::new(0x4000, &mut empty).err(), Some(DmaBufferError::Empty));
         let mut bytes = [0u8; 32];
-        assert_eq!(DmaBuffer::new(0x4001, &mut bytes).err(), Some(DmaBufferError::MisalignedAddress));
+        assert_eq!(unsafe { DmaBuffer::new(0x4001, &mut bytes) }.err(), Some(DmaBufferError::MisalignedAddress));
     }
 
     #[test]
@@ -127,8 +138,8 @@ mod tests {
         let mut a = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let mut b = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let pool = [
-            DmaBuffer::new(0x4000, &mut a).unwrap(),
-            DmaBuffer::new(0x4800, &mut b).unwrap(),
+            unsafe { DmaBuffer::new(0x4000, &mut a) }.unwrap(),
+            unsafe { DmaBuffer::new(0x4800, &mut b) }.unwrap(),
         ];
         assert_eq!(DmaBuffer::validate_rx_pool(&pool), Ok(()));
     }
@@ -139,7 +150,7 @@ mod tests {
         let mut b = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let pool = [
             DmaBuffer::new(0x4000, &mut a).unwrap(),
-            DmaBuffer::new(0x4400, &mut b).unwrap(),
+            unsafe { DmaBuffer::new(0x4400, &mut b) }.unwrap(),
         ];
         assert_eq!(DmaBuffer::validate_rx_pool(&pool), Err(DmaBufferError::OverlappingBuffers));
     }
@@ -147,7 +158,7 @@ mod tests {
     #[test]
     fn rejects_rx_buffers_smaller_than_2kib() {
         let mut bytes = [0u8; 1024];
-        let pool = [DmaBuffer::new(0x4000, &mut bytes).unwrap()];
+        let pool = [unsafe { DmaBuffer::new(0x4000, &mut bytes) }.unwrap()];
         assert_eq!(DmaBuffer::validate_rx_pool(&pool), Err(DmaBufferError::RxBufferTooSmall));
     }
 }
