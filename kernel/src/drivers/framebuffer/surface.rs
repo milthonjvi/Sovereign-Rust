@@ -19,7 +19,11 @@ fn rounded_mul_div(a: u128, b: u128, divisor: u128) -> u128 {
     let product = a * b;
     let quotient = product / divisor;
     let remainder = product % divisor;
-    quotient + u128::from(remainder >= divisor / 2 + divisor % 2)
+    if remainder >= divisor / 2 + divisor % 2 {
+        quotient + 1
+    } else {
+        quotient
+    }
 }
 
 impl<'a> FramebufferSurface<'a> {
