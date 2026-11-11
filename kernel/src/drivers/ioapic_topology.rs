@@ -144,7 +144,6 @@ pub fn configure_gsi_masked(
             super::ioapic::RedirectionEntry {
                 vector,
                 destination_apic_id,
-                masked: true,
                 mode,
             },
         )
