@@ -153,6 +153,61 @@ impl<'a> MsixTable<'a> {
     }
 }
 
+/// Read-only access to an MSI-X pending-bit array in a mapped BAR aperture.
+pub struct MsixPendingBitArray<'a> {
+    base: NonNull<u8>,
+    mapped_len: usize,
+    vectors: u16,
+    _mapping_lifetime: PhantomData<&'a [u8]>,
+}
+
+impl<'a> MsixPendingBitArray<'a> {
+    /// Construct access to the PBA region identified by an MSI-X capability.
+    ///
+    /// # Safety
+    /// mapped_base must point to a live, uncached/device mapping of the PBA
+    /// region in capability.pending_bit_array_bar. It must cover the required
+    /// PBA bytes, remain valid for 'a, and not be concurrently unmapped.
+    pub unsafe fn new(
+        capability: MsixCapability,
+        mapped_base: *mut u8,
+        mapped_len: usize,
+    ) -> Result<Self, MsixTableError> {
+        let required = capability.pending_bit_array_bytes()
+            .ok_or(MsixTableError::InvalidMapping)? as usize;
+        if required == 0 || mapped_len < required {
+            return Err(MsixTableError::InvalidMapping);
+        }
+        let base = NonNull::new(mapped_base).ok_or(MsixTableError::InvalidMapping)?;
+        if (base.as_ptr() as usize) & 7 != 0 {
+            return Err(MsixTableError::InvalidMapping);
+        }
+        Ok(Self {
+            base,
+            mapped_len,
+            vectors: capability.table_size,
+            _mapping_lifetime: PhantomData,
+        })
+    }
+
+    /// Return the device-reported pending state for one MSI-X table vector.
+    pub fn is_pending(&self, vector: u16) -> Result<bool, MsixTableError> {
+        if vector >= self.vectors {
+            return Err(MsixTableError::OutOfRange);
+        }
+        let word_offset = (vector as usize / 64) * 8;
+        let end = word_offset.checked_add(8).ok_or(MsixTableError::OutOfRange)?;
+        if end > self.mapped_len {
+            return Err(MsixTableError::InvalidMapping);
+        }
+        // SAFETY: Constructor and bounds checks guarantee an aligned in-range u64.
+        let word = unsafe {
+            core::ptr::read_volatile(self.base.as_ptr().add(word_offset).cast::<u64>())
+        };
+        Ok(word & (1u64 << (vector % 64)) != 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
