@@ -189,6 +189,21 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         Ok(())
     }
 
+    /// Replace a layer's borrowed image and invalidate both old and new bounds.
+    pub fn set_layer_image(
+        &mut self,
+        id: LayerId,
+        image: ImageView<'a>,
+    ) -> Result<(), CompositorError> {
+        let old = *self.layer(id)?;
+        self.mark_layer_bounds(old.image, old.x, old.y);
+        self.layers[id.slot].as_mut()
+            .ok_or(CompositorError::InvalidLayer)?
+            .image = image;
+        self.mark_layer_bounds(image, old.x, old.y);
+        Ok(())
+    }
+
     /// Change layer opacity (0 transparent, 255 fully opaque).
     pub fn set_opacity(&mut self, id: LayerId, opacity: u8) -> Result<(), CompositorError> {
         let old = *self.layer(id)?;
