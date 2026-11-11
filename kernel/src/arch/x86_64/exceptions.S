@@ -1,6 +1,6 @@
-//! x86_64 exception entry stubs.
-//! The common path captures general-purpose registers and transfers to Rust.
-//! Exception dispatch is deliberately fatal until diagnostics and recovery are ready.
+# x86_64 exception entry stubs.
+# The common path captures general-purpose registers and transfers to Rust.
+# Exception dispatch is deliberately fatal until diagnostics and recovery are ready.
 
 .intel_syntax noprefix
 
@@ -17,7 +17,7 @@ sovereign_isr_\num:
 .global sovereign_isr_\num
 .type sovereign_isr_\num, @function
 sovereign_isr_\num:
-    // The processor already pushed the exception error code.
+    # The processor already pushed the exception error code.
     push \num
     jmp sovereign_exception_common
 .endm
@@ -72,7 +72,7 @@ sovereign_exception_stub_table:
 .global sovereign_exception_common
 .type sovereign_exception_common, @function
 sovereign_exception_common:
-    // Save all general-purpose registers. The stack layout is ExceptionFrame.
+    # Save all general-purpose registers. The stack layout is ExceptionFrame.
     push rax
     push rbx
     push rcx
