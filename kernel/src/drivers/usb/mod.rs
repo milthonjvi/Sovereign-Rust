@@ -9,6 +9,7 @@ pub mod hub;
 pub mod ohci;
 pub mod transfer;
 pub mod topology;
+pub mod strings;
 pub mod hid;
 pub mod uhci;
 pub mod xhci;
