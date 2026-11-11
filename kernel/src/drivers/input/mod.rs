@@ -11,4 +11,4 @@ pub mod ps2;
 pub mod queue;
 
 pub use event::{InputEvent, KeyCode, MouseButtons};
-pub use queue::EventQueue;
+pub use queue::{EventQueue, SpscConsumer, SpscProducer, SpscQueue};
