@@ -20,7 +20,9 @@ impl CapabilityRegisters{
   let len=(cap0&255)as u8;let version=(cap0>>16)as u16;
   if len<0x20{return Err(XhciError::InvalidCapability)}
   if version<0x0100{return Err(XhciError::UnsupportedVersion)}
-  Ok(Self{capability_length:len,interface_version:version,max_device_slots:(hcs1&255)as u8,max_interrupters:((hcs1>>8)&0x7ff)as u16,max_ports:(hcs1>>24)as u8})
+  let slots=(hcs1&255)as u8;let interrupters=((hcs1>>8)&0x7ff)as u16;let ports=(hcs1>>24)as u8;
+  if slots==0||interrupters==0{return Err(XhciError::InvalidCapability)}
+  Ok(Self{capability_length:len,interface_version:version,max_device_slots:slots,max_interrupters:interrupters,max_ports:ports})
  }
 }
 
