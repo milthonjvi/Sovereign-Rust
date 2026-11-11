@@ -112,3 +112,59 @@ pub fn consume_lfn_record(state: &mut FatLongName, raw: &[u8]) -> Result<Option<
         Err(_) => { state.reset(); Ok(None) }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn make_record(sequence: u8, last: bool, checksum: u8, units: &[u16; 13]) -> [u8; 32] {
+        let mut raw = [0u8; 32];
+        raw[0] = sequence | if last { 0x40 } else { 0 };
+        raw[11] = 0x0F;
+        raw[12] = 0;
+        raw[13] = checksum;
+        raw[26] = 0;
+        raw[27] = 0;
+        let offsets = [1usize,3,5,7,9,14,16,18,20,22,24,28,30];
+        for (i, offset) in offsets.iter().enumerate() {
+            raw[*offset..*offset+2].copy_from_slice(&units[i].to_le_bytes());
+        }
+        raw
+    }
+    #[test]
+    fn assembles_single_record_name_and_checks_short_alias() {
+        let short = *b"HELLO   TXT";
+        let checksum = short_name_checksum(&short);
+        let mut units = [0xFFFFu16; 13];
+        units[0..5].copy_from_slice(&[72,101,108,108,111]);
+        units[5] = 0;
+        let record = make_record(1, true, checksum, &units);
+        let mut state = FatLongName::new();
+        state.push_record(&record).unwrap();
+        let (name, len) = state.finish(&short).unwrap().unwrap();
+        assert_eq!(len, 5);
+        assert_eq!(&name[..len], &[72,101,108,108,111]);
+    }
+    #[test]
+    fn rejects_checksum_mismatch() {
+        let short = *b"HELLO   TXT";
+        let mut units = [0xFFFFu16; 13];
+        units[0] = 65;
+        let record = make_record(1, true, 0xA5, &units);
+        let mut state = FatLongName::new();
+        state.push_record(&record).unwrap();
+        assert_eq!(state.finish(&short), Err(LfnError::InvalidChecksum));
+    }
+    #[test]
+    fn rejects_unpaired_surrogate() {
+        let short = *b"HELLO   TXT";
+        let checksum = short_name_checksum(&short);
+        let mut units = [0xFFFFu16; 13];
+        units[0] = 0xD800;
+        units[1] = 0;
+        let record = make_record(1, true, checksum, &units);
+        let mut state = FatLongName::new();
+        state.push_record(&record).unwrap();
+        assert_eq!(state.finish(&short), Err(LfnError::InvalidUtf16));
+    }
+}
