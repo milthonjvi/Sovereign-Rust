@@ -203,6 +203,38 @@ mod tests {
         })));
     }
     #[test]
+    fn boot_keyboard_resets_consumer_state_after_queue_overflow() {
+        let mut q = SpscQueue::<InputEvent, 4>::new();
+        let (mut p, mut c) = q.split();
+        for id in 1..=3 {
+            p.push(InputEvent::DeviceConnected { device: InputDeviceId(id) }).unwrap();
+        }
+        let mut a = UsbBootKeyboardAdapter::new(InputDeviceId(70));
+        let first = a.publish_report(&[0,0,4,0,0,0,0,0], &mut p).unwrap();
+        assert_eq!(first.dropped, 1);
+        while c.pop().is_some() {}
+        a.publish_report(&[0,0,4,0,0,0,0,0], &mut p).unwrap();
+        assert!(matches!(c.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(70) })));
+        assert!(matches!(c.pop(), Some(InputEvent::HidKey { usage: 4, pressed: true, .. })));
+    }
+
+    #[test]
+    fn boot_mouse_resets_button_state_after_queue_overflow() {
+        let mut q = SpscQueue::<InputEvent, 4>::new();
+        let (mut p, mut c) = q.split();
+        for id in 1..=3 {
+            p.push(InputEvent::DeviceConnected { device: InputDeviceId(id) }).unwrap();
+        }
+        let mut a = UsbBootMouseAdapter::new(InputDeviceId(71));
+        let first = a.publish_report(&[1,1,0], &mut p).unwrap();
+        assert_eq!(first.dropped, 1);
+        while c.pop().is_some() {}
+        a.publish_report(&[1,1,0], &mut p).unwrap();
+        assert!(matches!(c.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(71) })));
+        assert!(matches!(c.pop(), Some(InputEvent::PointerMotion { buttons: 1, .. })));
+    }
+
+    #[test]
     fn malformed_keyboard_report_is_rejected() {
         let mut q = SpscQueue::<InputEvent, 8>::new();
         let (mut p, mut c) = q.split();
