@@ -20,7 +20,6 @@ pub fn read_interrupt_report<C:HostController>(
   return Err(UsbError::MalformedDescriptor)
  }
  if buffer.is_empty(){return Err(UsbError::BufferTooShort)}
- if buffer.len()>endpoint.max_packet_size as usize{return Err(UsbError::NoResources)}
  let result=controller.interrupt_transfer(address,endpoint,buffer)?;
  match result.status{
   TransferStatus::Success=>{},
@@ -180,11 +179,12 @@ mod tests{
   host.status=TransferStatus::Success;host.bytes=9;
   assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),endpoint,&mut buffer),Err(UsbError::TransferFailed));
  }
- #[test]fn raw_report_reader_rejects_invalid_endpoint_and_oversized_buffer(){
+ #[test]fn raw_report_reader_rejects_invalid_endpoint_but_allows_multi_packet_reports(){
   let mut host=MockHost{status:TransferStatus::Success,bytes:0};
   let out=Endpoint{address:EndpointAddress::from_raw(0x01),transfer_type:TransferType::Interrupt,max_packet_size:8,interval:1};
   assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),out,&mut[0;8]),Err(UsbError::MalformedDescriptor));
   let input=Endpoint{address:EndpointAddress::from_raw(0x81),..out};
-  assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),input,&mut[0;9]),Err(UsbError::NoResources));
+  host.bytes=9;
+  assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),input,&mut[0;9]),Ok(9));
  }
 }
