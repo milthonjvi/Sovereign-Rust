@@ -26,6 +26,7 @@ pub const EFI_SUCCESS: EfiStatus = 0;
 pub const EFI_ERROR_BIT: EfiStatus = 1usize << (usize::BITS - 1);
 pub const EFI_INVALID_PARAMETER: EfiStatus = EFI_ERROR_BIT | 2;
 pub const EFI_UNSUPPORTED: EfiStatus = EFI_ERROR_BIT | 3;
+pub const EFI_BUFFER_TOO_SMALL: EfiStatus = EFI_ERROR_BIT | 5;
 pub const EFI_NOT_FOUND: EfiStatus = EFI_ERROR_BIT | 14;
 pub const EFI_COMPROMISED_DATA: EfiStatus = EFI_ERROR_BIT | 33;
 
