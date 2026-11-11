@@ -21,7 +21,7 @@ pub use surface::FramebufferSurface;
 pub use raster::{
     fill_ellipse, fill_polygon, fill_triangle,
     stroke_cubic_bezier, stroke_cubic_bezier_adaptive, stroke_cubic_bezier_aa,
-    stroke_ellipse, stroke_line_aa, stroke_polygon, stroke_polyline, stroke_polyline_aa,
+stroke_ellipse, stroke_ellipse_aa, stroke_line_aa, stroke_polygon, stroke_polyline, stroke_polyline_aa,
     stroke_quadratic_bezier, stroke_quadratic_bezier_adaptive, stroke_quadratic_bezier_aa,
     stroke_triangle, ScanlineIntersection,
 };
