@@ -4,6 +4,7 @@ use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::drivers::acpi::discover::AcpiTables;
+use crate::drivers::acpi::topology::MadtInterruptTopology;
 
 pub const BOOT_INFO_MAGIC: [u8; 8] = *b"SOVBOOT\0";
 pub const BOOT_INFO_VERSION: u32 = 1;
@@ -15,6 +16,9 @@ const MAX_MEMORY_DESCRIPTORS: u64 = 1_000_000;
 
 static ACPI_TABLES_READY: AtomicBool = AtomicBool::new(false);
 static mut ACPI_TABLES: Option<AcpiTables> = None;
+static MADT_TOPOLOGY_READY: AtomicBool = AtomicBool::new(false);
+static mut MADT_TOPOLOGY: core::mem::MaybeUninit<MadtInterruptTopology> =
+    core::mem::MaybeUninit::uninit();
 
 /// Publish validated ACPI table addresses for later kernel subsystems.
 ///
@@ -29,6 +33,36 @@ pub unsafe fn install_acpi_tables(tables: AcpiTables) -> bool {
     unsafe { ptr::addr_of_mut!(ACPI_TABLES).write(Some(tables)) };
     ACPI_TABLES_READY.store(true, Ordering::Release);
     true
+}
+
+
+/// Publish the validated MADT interrupt topology for the interrupt subsystem.
+///
+/// # Safety
+/// Call exactly once during single-CPU bootstrap with interrupts disabled.
+/// The topology is immutable after publication and remains valid forever.
+pub unsafe fn install_madt_topology(topology: MadtInterruptTopology) -> bool {
+    if MADT_TOPOLOGY_READY.load(Ordering::Acquire) {
+        return false;
+    }
+    // SAFETY: The documented bootstrap contract guarantees exclusive access.
+    unsafe {
+        ptr::addr_of_mut!(MADT_TOPOLOGY).write(core::mem::MaybeUninit::new(topology));
+    }
+    MADT_TOPOLOGY_READY.store(true, Ordering::Release);
+    true
+}
+
+/// Borrow the immutable MADT topology discovered during UEFI boot.
+pub fn madt_topology() -> Option<&'static MadtInterruptTopology> {
+    if !MADT_TOPOLOGY_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    // SAFETY: The Acquire load observes the fully initialized immutable value.
+    let topology = unsafe {
+        &*ptr::addr_of!(MADT_TOPOLOGY).cast::<MadtInterruptTopology>()
+    };
+    Some(topology)
 }
 
 /// Return the validated ACPI table address set, if firmware discovery succeeded.
