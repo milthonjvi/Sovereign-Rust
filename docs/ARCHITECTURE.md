@@ -27,6 +27,13 @@ The loader lives in `loader/` as an independent workspace package and targets
    and validating each `PT_LOAD` file range, memory size, alignment, canonical virtual
    address range, and executable entry-point coverage.
 
+The loader also defines the initial versioned handoff ABI in
+`loader/src/boot_info.rs`. Version 1 carries physical-address fields for the
+firmware memory map, loaded kernel image, entry point, and optional ACPI and
+framebuffer metadata. The contract is currently a definition only: the loader
+does not yet populate or pass this structure, and the kernel does not yet
+consume it. The kernel must validate all ranges before dereferencing addresses.
+
 This remains a validation stage, not a complete kernel loader. It does not yet
 allocate physical pages, copy segment contents, zero BSS, construct final page
 tables, acquire the final memory map, or call ExitBootServices.
