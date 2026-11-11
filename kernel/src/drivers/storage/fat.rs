@@ -22,7 +22,8 @@ pub struct FatBpb {
     pub root_directory_sectors: u32, pub first_data_sector: u32,
     pub data_sectors: u32, pub cluster_count: u32,
     pub root_cluster: Option<u32>, pub fs_info_sector: Option<u16>,
-    pub backup_boot_sector: Option<u16>, pub volume_id: u32,\n    pub fat_mirroring_enabled: bool, pub active_fat: u8,
+    pub backup_boot_sector: Option<u16>, pub volume_id: u32,
+    pub fat_mirroring_enabled: bool, pub active_fat: u8,
 }
 fn le16(b: &[u8], o: usize) -> u16 { u16::from_le_bytes([b[o], b[o + 1]]) }
 fn le32(b: &[u8], o: usize) -> u32 { u32::from_le_bytes([b[o], b[o+1], b[o+2], b[o+3]]) }
