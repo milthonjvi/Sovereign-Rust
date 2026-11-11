@@ -23,6 +23,7 @@ pub enum IoApicError {
     GsiOutOfRange,
     InvalidPolarity,
     InvalidTriggerMode,
+    InvalidFlags,
     UnsupportedBus,
 }
 
@@ -36,16 +37,21 @@ pub struct InterruptMode {
 impl InterruptMode {
     /// Decode ACPI MADT MPS INTI flags. Conforms to the defined ISA encodings.
     pub fn from_acpi_flags(flags: u16) -> Result<Self, IoApicError> {
+        if flags & !0x0F != 0 {
+            return Err(IoApicError::InvalidFlags);
+        }
         let polarity = flags & 0b11;
         let trigger = (flags >> 2) & 0b11;
+        // ACPI encodings: 0 = bus conforms, 1 = high/edge, 3 = low/level.
+        // Encoding 2 is reserved and must never be silently accepted.
         let active_low = match polarity {
             0 | 1 => false,
-            2 => true,
+            3 => true,
             _ => return Err(IoApicError::InvalidPolarity),
         };
         let level_triggered = match trigger {
             0 | 1 => false,
-            2 => true,
+            3 => true,
             _ => return Err(IoApicError::InvalidTriggerMode),
         };
         Ok(Self { active_low, level_triggered })
@@ -149,8 +155,8 @@ impl IoApicController {
     pub fn read_redirection(&mut self, gsi: u32) -> Result<(u32, u32), IoApicError> {
         let index = self.redirection_index(gsi)?;
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
-        let low = self.read_register(low_reg);
         let high = self.read_register(low_reg + 1);
+        let low = self.read_register(low_reg);
         Ok((low, high))
     }
 
@@ -166,8 +172,12 @@ impl IoApicController {
         }
         let index = self.redirection_index(gsi)?;
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
-        self.write_register(low_reg, entry.low() | REDIRECTION_MASK);
+        // First mask the existing route, then change destination, then publish
+        // the new delivery attributes while it is still masked.
+        let previous_low = self.read_register(low_reg);
+        self.write_register(low_reg, previous_low | REDIRECTION_MASK);
         self.write_register(low_reg + 1, entry.high());
+        self.write_register(low_reg, entry.low() | REDIRECTION_MASK);
         Ok(())
     }
 
@@ -197,8 +207,9 @@ pub fn resolve_isa_irq(
     irq: u8,
     overrides: &[InterruptSourceOverride],
 ) -> Result<(u32, InterruptMode), IoApicError> {
-    let override_entry = overrides.iter().find(|entry| entry.bus == 0 && entry.source == irq);
+    let override_entry = overrides.iter().find(|entry| entry.source == irq);
     match override_entry {
+        Some(entry) if entry.bus != 0 => Err(IoApicError::UnsupportedBus),
         Some(entry) => Ok((
             entry.global_system_interrupt,
             InterruptMode::from_acpi_flags(entry.flags)?,
@@ -218,11 +229,18 @@ mod tests {
             InterruptMode { active_low: false, level_triggered: false }
         );
         assert_eq!(
-            InterruptMode::from_acpi_flags(0b1010).unwrap(),
+            InterruptMode::from_acpi_flags(0b1111).unwrap(),
             InterruptMode { active_low: true, level_triggered: true }
         );
-        assert_eq!(InterruptMode::from_acpi_flags(0b0011), Err(IoApicError::InvalidPolarity));
-        assert_eq!(InterruptMode::from_acpi_flags(0b1100), Err(IoApicError::InvalidTriggerMode));
+        assert_eq!(InterruptMode::from_acpi_flags(0b0010), Err(IoApicError::InvalidPolarity));
+        assert_eq!(InterruptMode::from_acpi_flags(0b1000), Err(IoApicError::InvalidTriggerMode));
+    }
+
+    #[test]
+    fn acpi_conforming_and_reserved_encodings_are_handled_correctly() {
+        assert_eq!(InterruptMode::from_acpi_flags(0b0101).unwrap(),
+            InterruptMode { active_low: false, level_triggered: false });
+        assert_eq!(InterruptMode::from_acpi_flags(0x10), Err(IoApicError::InvalidFlags));
     }
 
     #[test]
@@ -231,12 +249,16 @@ mod tests {
             bus: 0,
             source: 0,
             global_system_interrupt: 2,
-            flags: 0b1010,
+            flags: 0b1111,
         }];
         let (gsi, mode) = resolve_isa_irq(0, &overrides).unwrap();
         assert_eq!(gsi, 2);
         assert!(mode.active_low && mode.level_triggered);
         assert_eq!(resolve_isa_irq(4, &overrides).unwrap().0, 4);
+        let unsupported = [InterruptSourceOverride {
+            bus: 1, source: 4, global_system_interrupt: 9, flags: 0,
+        }];
+        assert_eq!(resolve_isa_irq(4, &unsupported), Err(IoApicError::UnsupportedBus));
     }
 
     #[test]
