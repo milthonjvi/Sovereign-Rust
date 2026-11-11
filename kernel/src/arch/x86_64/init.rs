@@ -15,6 +15,7 @@ const EFER_NXE: u64 = 1 << 11;
 
 const CR4_OSFXSR: u64 = 1 << 9;
 const CR4_OSXMMEXCPT: u64 = 1 << 10;
+const CR4_OSXSAVE: u64 = 1 << 18;
 
 /// Enable the architectural baseline required for normal x86_64 kernel code.
 ///
@@ -50,6 +51,9 @@ pub unsafe fn initialize_baseline() -> CpuInfo {
     // SAFETY: Caller guarantees ring 0 and early single-CPU initialization.
     let mut cr4 = unsafe { read_cr4() };
     cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT;
+    // Interrupt entry currently preserves the legacy FXSAVE area. Keep
+    // XSAVE/AVX disabled until task and interrupt paths save the full xstate.
+    cr4 &= !CR4_OSXSAVE;
     // SAFETY: SSE2 is reported by CPUID before these bits are enabled.
     unsafe { write_cr4(cr4) };
 
