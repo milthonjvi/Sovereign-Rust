@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel"]
+members = ["kernel", "loader"]
 resolver = "2"
 
 [workspace.package]
