@@ -175,8 +175,15 @@ impl ParsedConfiguration{
    let n=iface.descriptor.number as usize;
    if !unique_interfaces[n]{unique_interfaces[n]=true;unique_count=unique_count.saturating_add(1);}
   }
-  // bNumInterfaces counts distinct interface numbers, not alternate settings.
+  // Interface numbers are contiguous from zero, and every interface has alt 0.
   if unique_count!=descriptor.interface_count{return Err(UsbError::MalformedDescriptor)}
+  for number in 0..256{
+   let expected=number<descriptor.interface_count as usize;
+   if unique_interfaces[number]!=expected{return Err(UsbError::MalformedDescriptor)}
+   if expected&&!out.interfaces[..out.interface_len as usize].iter().flatten().any(|v|v.descriptor.number as usize==number&&v.descriptor.alternate_setting==0){
+    return Err(UsbError::MalformedDescriptor)
+   }
+  }
   // Alternate-setting numbers and endpoint addresses must be unique within
   // each interface alternate setting.
   for i in 0..out.interface_len as usize{
