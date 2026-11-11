@@ -68,7 +68,7 @@ impl E1000MulticastFilter {
         true
     }
 
-    pub const fn accepts(&self, address: MacAddress) -> bool {
+    pub fn accepts(&self, address: MacAddress) -> bool {
         if !address.is_multicast() || address.is_broadcast() {
             return false;
         }
