@@ -380,4 +380,39 @@ mod tests {
     }
 
 
+    struct BatchDisk { table: [u8; 1024], calls: usize }
+    impl BlockDevice for BatchDisk {
+        fn geometry(&self) -> BlockGeometry { BlockGeometry { block_count: 64, block_size: 512 } }
+        fn read_blocks(&mut self, range: BlockRange, buffer: &mut [u8]) -> Result<(), BlockError> {
+            self.calls += 1;
+            if range.start_block != 2 || range.block_count != 2 || buffer.len() != 1024 {
+                return Err(BlockError::OutOfBounds);
+            }
+            buffer.copy_from_slice(&self.table);
+            Ok(())
+        }
+        fn write_blocks(&mut self, _: BlockRange, _: &[u8]) -> Result<(), BlockError> { Err(BlockError::UnsupportedOperation) }
+        fn flush(&mut self) -> Result<(), BlockError> { Ok(()) }
+    }
+    #[test]
+    fn batches_contiguous_gpt_table_blocks() {
+        let table = [0u8; 1024];
+        let crc = !crc32_update(!0, &table);
+        let mut disk = BatchDisk { table, calls: 0 };
+        let header = GptHeader {
+            revision: 0x0001_0000, header_size: 92, current_lba: 1, backup_lba: 63,
+            first_usable_lba: 4, last_usable_lba: 60, disk_guid: [3; 16],
+            entries_lba: 2, entry_count: 8, entry_size: 128, entries_crc32: crc,
+        };
+        let mut block = [0u8; 1024];
+        let mut entry = [0u8; 128];
+        let mut output = [None; 8];
+        assert_eq!(
+            enumerate_gpt_partitions(&mut disk, header, &mut block, &mut entry, &mut output),
+            Ok(0),
+        );
+        assert_eq!(disk.calls, 1, "two contiguous table blocks must use one I/O request");
+    }
+
+
 }
