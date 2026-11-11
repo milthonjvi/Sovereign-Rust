@@ -224,15 +224,10 @@ impl<'a> MsixPendingBitArray<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::sync::atomic::{AtomicUsize, Ordering};
-
     #[repr(align(8))]
     struct TableMemory([u32; 4]);
 
-    static LAST_VECTOR: AtomicUsize = AtomicUsize::new(usize::MAX);
-    extern "C" fn table_test_handler(vector: u8) {
-        LAST_VECTOR.store(vector as usize, Ordering::Relaxed);
-    }
+    extern "C" fn table_test_handler(_vector: u8) {}
 
     fn capability() -> MsixCapability {
         MsixCapability {
