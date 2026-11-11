@@ -104,7 +104,17 @@ impl E1000Interrupt {
         if !self.take_pending() {
             return Ok(None);
         }
-        registers.read32(REG_ICR).map(Some).map_err(E1000InterruptError::Register)
+        match registers.read32(REG_ICR) {
+            Ok(causes) => Ok(Some(causes)),
+            Err(error) => {
+                // Preserve the deferred notification so a transient MMIO
+                // failure does not silently consume the only wakeup.
+                let word = self.vector as usize / 64;
+                let bit = 1u64 << (self.vector as usize % 64);
+                PENDING_VECTORS[word].fetch_or(bit, Ordering::Release);
+                Err(E1000InterruptError::Register(error))
+            }
+        }
     }
 
     /// Remove the callback after the device is masked and in-flight IRQs drained.
