@@ -14,11 +14,10 @@ use crate::{
 };
 
 use super::{
-    apic_deadline::{TimerCancelReport, TimerProcessReport},
+    service::{TimerCancelReport, TimerProcessReport},
     clock::ClockSource,
     deadline::Deadline,
     interrupt::TimerInterruptError,
-    service::{TimerService, TimerServiceError},
     timer_queue::{TimerEvent, TimerId},
 };
 
