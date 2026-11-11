@@ -43,7 +43,6 @@ pub enum UartIrqError {
 }
 
 struct PortBinding {
-    base: u16,
     irq: u8,
     bit: u8,
     shared_line_mask: u8,
@@ -54,19 +53,19 @@ struct PortBinding {
 fn binding(base: u16) -> Option<PortBinding> {
     match base {
         0x3F8 => Some(PortBinding {
-            base, irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
+            irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM1_RX,
         }),
         0x2F8 => Some(PortBinding {
-            base, irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
+            irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM2_RX,
         }),
         0x3E8 => Some(PortBinding {
-            base, irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
+            irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM3_RX,
         }),
         0x2E8 => Some(PortBinding {
-            base, irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
+            irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM4_RX,
         }),
         _ => None,
