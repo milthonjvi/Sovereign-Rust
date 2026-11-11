@@ -7,6 +7,123 @@ use super::color::Color;
 use super::info::FramebufferError;
 use super::surface::FramebufferSurface;
 
+
+/// One exact scanline intersection. The private representation keeps the
+/// integer floor and fractional remainder paired during sorting.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScanlineIntersection {
+    x_floor: i128,
+    fractional: bool,
+}
+
+impl ScanlineIntersection {
+    #[inline]
+    fn is_left_of(self, other: Self) -> bool {
+        self.x_floor < other.x_floor
+            || (self.x_floor == other.x_floor && !self.fractional && other.fractional)
+    }
+}
+
+/// Fill a polygon using the even-odd rule.
+///
+/// Vertices must contain at least three points. Scratch is caller-owned storage
+/// and must hold at least vertices.len() intersections; no heap allocation is
+/// performed. Horizontal edges are ignored and other edges use half-open
+/// vertical coverage. The scratch requirement is checked before framebuffer
+/// writes occur.
+pub fn fill_polygon(
+    target: &mut FramebufferSurface<'_>,
+    vertices: &[(i64, i64)],
+    color: Color,
+    scratch: &mut [ScanlineIntersection],
+) -> Result<(), FramebufferError> {
+    if vertices.len() < 3 {
+        return Ok(());
+    }
+    if scratch.len() < vertices.len() {
+        return Err(FramebufferError::BufferTooSmall);
+    }
+
+    let info = *target.info();
+    if info.width == 0 || info.height == 0 {
+        return Ok(());
+    }
+    let mut min_y = i64::MAX;
+    let mut max_y = i64::MIN;
+    let mut min_x = i64::MAX;
+    let mut max_x = i64::MIN;
+    for &(x, y) in vertices {
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    let first_y = min_y.max(0);
+    let last_y = max_y.min(info.height.saturating_sub(1) as i64);
+    let clip_left = min_x.max(0) as i128;
+    let clip_right = max_x.min(info.width.saturating_sub(1) as i64) as i128;
+    if first_y > last_y || clip_left > clip_right {
+        return Ok(());
+    }
+
+    for y in first_y..=last_y {
+        let mut count = 0usize;
+        for index in 0..vertices.len() {
+            let start = vertices[index];
+            let end = vertices[(index + 1) % vertices.len()];
+            if start.1 == end.1 {
+                continue;
+            }
+            let (lower, upper) = if start.1 < end.1 { (start, end) } else { (end, start) };
+            if y < lower.1 || y >= upper.1 {
+                continue;
+            }
+
+            let dx = (upper.0 as i128).checked_sub(lower.0 as i128)
+                .ok_or(FramebufferError::SizeOverflow)?;
+            let dy = (upper.1 as i128).checked_sub(lower.1 as i128)
+                .ok_or(FramebufferError::SizeOverflow)?;
+            let offset = (y as i128).checked_sub(lower.1 as i128)
+                .ok_or(FramebufferError::SizeOverflow)?;
+            let numerator = offset.checked_mul(dx)
+                .ok_or(FramebufferError::SizeOverflow)?;
+            scratch[count] = ScanlineIntersection {
+                x_floor: (lower.0 as i128).checked_add(numerator.div_euclid(dy))
+                    .ok_or(FramebufferError::SizeOverflow)?,
+                fractional: numerator.rem_euclid(dy) != 0,
+            };
+            count += 1;
+        }
+
+        // Insertion sort suits small UI polygons and requires no allocator.
+        for i in 1..count {
+            let value = scratch[i];
+            let mut j = i;
+            while j > 0 && value.is_left_of(scratch[j - 1]) {
+                scratch[j] = scratch[j - 1];
+                j -= 1;
+            }
+            scratch[j] = value;
+        }
+
+        let mut pair = 0usize;
+        while pair + 1 < count {
+            let left_intersection = scratch[pair];
+            let right_intersection = scratch[pair + 1];
+            let left = (left_intersection.x_floor
+                + if left_intersection.fractional { 1 } else { 0 }).max(clip_left);
+            let right = right_intersection.x_floor.min(clip_right);
+            if left <= right {
+                let x = usize::try_from(left).map_err(|_| FramebufferError::SizeOverflow)?;
+                let end = usize::try_from(right).map_err(|_| FramebufferError::SizeOverflow)?;
+                target.fill_rect(x, y as usize, end - x + 1, 1, color);
+            }
+            pair += 2;
+        }
+    }
+    Ok(())
+}
+
 /// Fill a triangle using integer scanline intersections.
 ///
 /// Horizontal edges are excluded from edge intersection generation, and each
