@@ -13,8 +13,8 @@ use super::e1000::{
     supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL,
 };
 use super::e1000_hw::{
-    read_link_state, E1000QueueError, E1000Registers, E1000RxQueue, E1000TxQueue,
-    REG_IMC, REG_RCTL, REG_TCTL,
+    read_link_state, reset, E1000QueueError, E1000Registers, E1000ResetError,
+    E1000RxQueue, E1000TxQueue,
 };
 use super::ethernet::MacAddress;
 use super::e1000_irq::{E1000Interrupt, E1000_ICR_LSC, E1000_ICR_TXDW};
@@ -41,6 +41,8 @@ pub struct E1000Device<'a, 'dma, R: E1000Registers> {
     tx_queue: E1000TxQueue,
     interface: NetworkInterfaceInfo,
     ready: bool,
+    stopped: bool,
+    faulted: bool,
     dropping_rx_frame: bool,
 }
 
@@ -56,7 +58,10 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// this NIC. Every DmaBuffer must reference a valid device-visible mapping,
     /// with RX buffers writable by the device and TX buffers retained until DD.
     /// The MMIO accessor must target the same device and no other owner may
-    /// mutate these rings or buffers for the lifetime of this adapter.
+    /// mutate these rings or buffers for the lifetime of this adapter. The
+    /// caller must successfully shut down the adapter before releasing any DMA
+    /// mapping or dropping it; if shutdown fails, mappings must remain pinned
+    /// until the platform independently proves that the NIC is quiescent.
     pub unsafe fn new(
         registers: &'a mut R,
         rx_descriptors: &'a mut [RxDescriptor],
@@ -108,12 +113,17 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             tx_queue,
             interface,
             ready: false,
+            stopped: false,
+            faulted: false,
             dropping_rx_frame: false,
         })
     }
 
     /// Refresh link status from hardware. This is bounded to one MMIO read.
     pub fn refresh_link_state(&mut self) -> Result<LinkState, DriverError> {
+        if self.stopped || self.faulted {
+            return Err(DriverError::NotReady);
+        }
         let link = read_link_state(self.registers).map_err(|_| DriverError::HardwareFault)?;
         self.interface.link = link;
         Ok(link)
@@ -325,6 +335,12 @@ impl<R: E1000Registers> Driver for E1000Device<'_, '_, R> {
     /// before this binding step. This method validates identity and activates
     /// the software datapath; it does not alter PCI configuration or reset NIC.
     fn initialize(&mut self, device: &DeviceInfo) -> Result<(), DriverError> {
+        if self.faulted {
+            return Err(DriverError::HardwareFault);
+        }
+        if self.stopped {
+            return Err(DriverError::NotReady);
+        }
         if !self.supports(device) {
             return Err(DriverError::UnsupportedDevice);
         }
@@ -333,16 +349,27 @@ impl<R: E1000Registers> Driver for E1000Device<'_, '_, R> {
         Ok(())
     }
 
+    /// Stop the MAC and its DMA engines with the global reset sequence.
+    ///
+    /// A successful return is the point at which the caller may release the
+    /// DMA mappings. On error, hardware quiescence is unknown and mappings must
+    /// remain pinned until a platform-level reset or equivalent proof completes.
     fn shutdown(&mut self) -> Result<(), DriverError> {
-        self.registers.write32(REG_IMC, u32::MAX)
-            .map_err(|_| DriverError::HardwareFault)?;
-        self.registers.write32(REG_RCTL, 0)
-            .map_err(|_| DriverError::HardwareFault)?;
-        self.registers.write32(REG_TCTL, 0)
-            .map_err(|_| DriverError::HardwareFault)?;
+        if self.stopped {
+            return Ok(());
+        }
         self.ready = false;
-        self.interface.link = LinkState::Down;
-        Ok(())
+        match reset(self.registers) {
+            Ok(()) => {
+                self.stopped = true;
+                self.interface.link = LinkState::Down;
+                Ok(())
+            }
+            Err(E1000ResetError::Register(_)) | Err(E1000ResetError::Timeout) => {
+                self.faulted = true;
+                Err(DriverError::HardwareFault)
+            }
+        }
     }
 }
 
