@@ -663,6 +663,43 @@ mod raster_tests {
     }
 
     #[test]
+    fn span_writer_preserves_channel_order_and_reserved_byte() {
+        use super::super::color::{Color, PixelFormat};
+        use super::super::info::FramebufferInfo;
+        use super::FramebufferSurface;
+
+        #[repr(align(8))]
+        struct Aligned([u8; 3 * 4]);
+        let mut memory = Aligned([0; 3 * 4]);
+        let info = FramebufferInfo {
+            address: 1,
+            width: 3,
+            height: 1,
+            pitch: 3 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Bgr,
+        };
+        // SAFETY: the aligned backing array exactly covers the declared mapping.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(
+                memory.0.as_mut_ptr(), memory.0.len(), info,
+            ).unwrap()
+        };
+        let colors = [
+            Color::with_alpha(10, 20, 30, 255),
+            Color::with_alpha(40, 50, 60, 128),
+            Color::with_alpha(70, 80, 90, 0),
+        ];
+        // SAFETY: the 12-byte span is the complete visible row.
+        unsafe { target.write_pixels_unchecked(0, &colors); }
+        drop(target);
+
+        assert_eq!(&memory.0[0..4], &[30, 20, 10, 0]);
+        assert_eq!(&memory.0[4..8], &[60, 50, 40, 0]);
+        assert_eq!(&memory.0[8..12], &[90, 80, 70, 0]);
+    }
+
+    #[test]
     fn line_clipping_handles_extreme_signed_endpoints() {
         use super::super::color::{Color, PixelFormat};
         use super::super::info::FramebufferInfo;
