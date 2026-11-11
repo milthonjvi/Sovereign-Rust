@@ -3,7 +3,7 @@
 use crate::time::{Deadline, TimerEvent, TimerId};
 
 use super::{
-    extract_task_wakeups, TaskId, TaskWakeupReport, TASK_SLEEP_EVENT,
+    extract_task_wakeups, TaskCancelReport, TaskId, TaskWakeupReport, TASK_SLEEP_EVENT,
 };
 
 /// Legacy-PIT task timeout fallback for systems where the legacy PIC IRQ0
@@ -53,8 +53,11 @@ impl<const N: usize> PitTaskTimeouts<N> {
     }
 
     /// Cancel a task sleep. The next PIT tick continues to drive other events.
-    pub fn cancel_sleep(&self, task: TaskId) -> bool {
-        self.timers.cancel(TimerId(task.0)).is_some()
+    pub fn cancel_sleep(&self, task: TaskId) -> TaskCancelReport {
+        TaskCancelReport {
+            cancelled: self.timers.cancel(TimerId(task.0)).is_some(),
+            timer_reprogram_error: None,
+        }
     }
 
     /// Collect expired task IDs after a PIT tick requested deferred work.
