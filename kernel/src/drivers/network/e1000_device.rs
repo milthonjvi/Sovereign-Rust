@@ -548,9 +548,7 @@ mod tests {
     }
 
     fn mock_dma_buffer<'a>(address: u64, bytes: &'a mut [u8]) -> DmaBuffer<'a> {
-        // SAFETY: these tests use a mock register backend that never performs DMA;
-        // the synthetic addresses model unique, pinned mappings for ownership tests.
-        unsafe { DmaBuffer::new(address, bytes) }.unwrap()
+        DmaBuffer::new_for_test(address, bytes).unwrap()
     }
 
     fn supported_device() -> DeviceInfo {
