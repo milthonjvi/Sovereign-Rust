@@ -7,6 +7,7 @@ use core::panic::PanicInfo;
 use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt};
 use sovereign_kernel::arch::x86_64::init::initialize_baseline;
 use sovereign_kernel::boot::limine::LimineBootInfo;
+use sovereign_kernel::drivers::framebuffer::{Color, FramebufferSurface};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -26,6 +27,23 @@ pub extern "C" fn _start() -> ! {
         LimineBootInfo::from_responses()
             .unwrap_or_else(|| fatal_halt())
     };
+
+    // Initialize the boot-provided display when Limine exposes a supported
+    // 32-bit RGB/BGR framebuffer. Unsupported formats remain non-fatal.
+    // SAFETY: LimineBootInfo was collected after handoff and its response
+    // structures and framebuffer mapping remain valid during this boot stage.
+    if let Some((address, framebuffer_info)) = unsafe { _boot_info.framebuffer_info() } {
+        if let Ok(mapped_len) = framebuffer_info.validate() {
+            // SAFETY: Limine supplies a writable framebuffer mapping; the
+            // surface is used only here and does not escape this scope.
+            if let Ok(mut display) = unsafe {
+                FramebufferSurface::from_mapped(address, mapped_len, framebuffer_info)
+            } {
+                display.clear(Color::BLACK);
+                display.fill_rect(0, 0, framebuffer_info.width, 4, Color::with_alpha(32, 160, 255, 0));
+            }
+        }
+    }
 
     // The next stage will initialize diagnostics, memory, and the IDT.
     // Until then, do not enable interrupts or touch uninitialized devices.
