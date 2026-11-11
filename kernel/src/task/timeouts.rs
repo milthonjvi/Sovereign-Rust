@@ -109,15 +109,8 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         let capacity = core::cmp::min(events.len(), wakeups.len());
         // SAFETY: Same-CPU and deferred-context requirements are part of the
         // caller contract for this method.
-        let count = unsafe { self.timers.process_expired(&mut events[..capacity])? };
-        for index in 0..count {
-            if let Some(event) = events[index].take() {
-                if event.kind == TASK_SLEEP_EVENT {
-                    wakeups[index] = Some(TaskId(event.id.0));
-                }
-            }
-        }
-        Ok(count)
+        let drained = unsafe { self.timers.process_expired(&mut events[..capacity])? };
+        Ok(extract_task_wakeups(&mut events[..drained], wakeups))
     }
 
 
@@ -150,5 +143,51 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
     /// Number of pending task sleeps.
     pub fn pending(&self) -> usize {
         self.timers.pending()
+    }
+}
+
+/// Compact task-sleep events into the caller's wakeup buffer.
+///
+/// Non-task timer events are consumed but never exposed as task IDs. The
+/// returned count is the number of actual task wakeups, not all events drained.
+fn extract_task_wakeups(
+    events: &mut [Option<TimerEvent>],
+    wakeups: &mut [Option<TaskId>],
+) -> usize {
+    wakeups.fill(None);
+    let mut written = 0;
+    for slot in events.iter_mut() {
+        let Some(event) = slot.take() else { continue };
+        if event.kind == TASK_SLEEP_EVENT && written < wakeups.len() {
+            wakeups[written] = Some(TaskId(event.id.0));
+            written += 1;
+        }
+    }
+    written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(id: u64, kind: u32) -> Option<TimerEvent> {
+        Some(TimerEvent { id: TimerId(id), deadline: Deadline::at_ns(10), kind, context: 0 })
+    }
+
+    #[test]
+    fn wakeups_are_compacted_and_non_task_events_are_filtered() {
+        let mut events = [event(1, TASK_SLEEP_EVENT), event(2, 7), event(3, TASK_SLEEP_EVENT)];
+        let mut wakeups = [Some(TaskId(99)); 3];
+        assert_eq!(extract_task_wakeups(&mut events, &mut wakeups), 2);
+        assert_eq!(wakeups, [Some(TaskId(1)), Some(TaskId(3)), None]);
+        assert!(events.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn wakeup_output_is_cleared_when_no_task_events_exist() {
+        let mut events = [event(2, 7)];
+        let mut wakeups = [Some(TaskId(99)); 2];
+        assert_eq!(extract_task_wakeups(&mut events, &mut wakeups), 0);
+        assert_eq!(wakeups, [None, None]);
     }
 }
