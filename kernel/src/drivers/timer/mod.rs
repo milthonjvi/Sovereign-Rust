@@ -9,7 +9,7 @@ pub mod hpet;
 pub mod pit;
 
 pub use apic::{
-    ApicDivide, ApicTimerMode, LocalApicTimer, calibrated_periodic_initial_count,
+    ApicDivide, ApicTimerMode, LocalApicTimer, TscDeadlineTimer, IA32_TSC_DEADLINE, IA32_X2APIC_LVT_TIMER, calibrated_periodic_initial_count,
     calibrate_bus_clock_hz, periodic_initial_count,
 };
 pub use hpet::{counter_delta, route_is_supported, Hpet, HpetCapabilities};
