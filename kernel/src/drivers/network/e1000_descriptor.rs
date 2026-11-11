@@ -116,8 +116,8 @@ mod tests {
         assert_eq!(descriptor.length, 64);
         assert_eq!(descriptor.command, TXD_CMD_EOP | TXD_CMD_IFCS | TXD_CMD_RS);
         assert!(!descriptor.is_complete());
-        assert_eq!(TxDescriptor::for_frame(0x3000, 0), Err(E1000Error::InvalidDescriptorLength));
-        assert_eq!(TxDescriptor::for_frame(0x3000, u16::MAX as usize + 1), Err(E1000Error::InvalidDescriptorLength));
+        assert!(matches!(TxDescriptor::for_frame(0x3000, 0), Err(E1000Error::InvalidDescriptorLength)));
+        assert!(matches!(TxDescriptor::for_frame(0x3000, u16::MAX as usize + 1), Err(E1000Error::InvalidDescriptorLength)));
     }
 
     #[test]
