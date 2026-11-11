@@ -223,6 +223,54 @@ impl<'a> FramebufferSurface<'a> {
         }
     }
 
+    /// Draw the outline of a circle using integer scan conversion.
+    /// Work is bounded by the visible framebuffer height.
+    pub fn stroke_circle(&mut self, center_x: i64, center_y: i64, radius: usize, color: Color) {
+        let radius = radius as u128;
+        let radius_squared = radius * radius;
+        let center_y = center_y as i128;
+        let first_y = (center_y - radius as i128).max(0);
+        let last_y = (center_y + radius as i128).min(self.info.height.saturating_sub(1) as i128);
+        if first_y > last_y { return; }
+
+        for y in first_y..=last_y {
+            let delta_y = (y - center_y).unsigned_abs();
+            if delta_y > radius { continue; }
+            let horizontal = integer_sqrt(radius_squared - delta_y * delta_y) as i128;
+            let left = center_x as i128 - horizontal;
+            let right = center_x as i128 + horizontal;
+            if left >= 0 && left < self.info.width as i128 {
+                let _ = self.put_pixel(left as usize, y as usize, color);
+            }
+            if right != left && right >= 0 && right < self.info.width as i128 {
+                let _ = self.put_pixel(right as usize, y as usize, color);
+            }
+        }
+    }
+
+    /// Fill a circle using clipped horizontal spans and integer arithmetic.
+    /// Work is bounded by the visible framebuffer height.
+    pub fn fill_circle(&mut self, center_x: i64, center_y: i64, radius: usize, color: Color) {
+        let radius = radius as u128;
+        let radius_squared = radius * radius;
+        let center_x = center_x as i128;
+        let center_y = center_y as i128;
+        let first_y = (center_y - radius as i128).max(0);
+        let last_y = (center_y + radius as i128).min(self.info.height.saturating_sub(1) as i128);
+        if first_y > last_y { return; }
+
+        for y in first_y..=last_y {
+            let delta_y = (y - center_y).unsigned_abs();
+            if delta_y > radius { continue; }
+            let horizontal = integer_sqrt(radius_squared - delta_y * delta_y) as i128;
+            let left = (center_x - horizontal).max(0);
+            let right = (center_x + horizontal).min(self.info.width.saturating_sub(1) as i128);
+            if left <= right {
+                self.fill_rect(left as usize, y as usize, (right - left + 1) as usize, 1, color);
+            }
+        }
+    }
+
     /// Draw the four edges of a rectangle, clipped to the display.
     pub fn stroke_rect(
         &mut self,
@@ -380,4 +428,23 @@ impl<'a> FramebufferSurface<'a> {
             let _ = row_bytes;
         }
     }
+}
+
+/// Integer square root using the restoring binary algorithm.
+#[inline]
+fn integer_sqrt(value: u128) -> u128 {
+    let mut remainder = value;
+    let mut result = 0u128;
+    let mut bit = 1u128 << 126;
+    while bit > remainder { bit >>= 2; }
+    while bit != 0 {
+        if remainder >= result + bit {
+            remainder -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+    result
 }
