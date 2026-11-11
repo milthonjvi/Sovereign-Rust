@@ -243,11 +243,13 @@ mod tests {
 
     #[test]
     fn partition_device_translates_relative_lbas() {
-        let mut disk = MemDisk { bytes: [0; 4096], reads: 0, writes: 0, flushes: 0 };
+        let mut bytes = [0; 4096];
+        bytes[3 * 512] = 0x7B;
+        let mut disk = MemDisk { bytes, reads: 0, writes: 0, flushes: 0 };
         let mut view = PartitionDevice::new(&mut disk, descriptor()).unwrap();
         let mut block = [0u8; 512];
         view.read_blocks(BlockRange::new(1, 1), &mut block).unwrap();
-        assert_eq!(view.parent.reads, 1);
+        assert_eq!(block[0], 0x7B, "relative LBA 1 must map to parent LBA 3");
         assert_eq!(view.parent.reads, 1);
     }
 
@@ -270,6 +272,56 @@ mod tests {
         view.flush().unwrap();
         assert_eq!(view.parent.writes, 1);
         assert_eq!(view.parent.flushes, 1);
+    }
+
+    #[test]
+    fn converts_gpt_and_mbr_descriptors() {
+        let geo = BlockGeometry { block_count: 128, block_size: 512 };
+        let gpt = [Some(super::super::gpt::GptPartition {
+            type_guid: [1; 16], unique_guid: [2; 16], first_lba: 10, last_lba: 19,
+            attributes: 5, name: [0; 36],
+        })];
+        let mut out = [None; 2];
+        assert_eq!(from_gpt(&gpt, geo, &mut out), Ok(1));
+        assert_eq!(out[0].unwrap().block_count, 10);
+        assert_eq!(out[0].unwrap().scheme, PartitionScheme::Gpt);
+
+        let table = super::super::mbr::MbrTable {
+            disk_signature: 0,
+            partitions: [
+                Some(super::super::mbr::MbrPartition {
+                    bootable: true, partition_type: 0x83, start_lba: 20, sector_count: 8,
+                }),
+                None, None, None,
+            ],
+        };
+        assert_eq!(from_mbr_primary(&table, geo, &mut out), Ok(1));
+        assert_eq!(out[0].unwrap().first_lba, 20);
+        assert_eq!(out[0].unwrap().scheme, PartitionScheme::MbrPrimary);
+
+        let logical = [Some(super::super::mbr::LogicalPartition {
+            bootable: false, partition_type: 0x07, start_lba: 40, sector_count: 12,
+        })];
+        assert_eq!(from_mbr_logical(&logical, geo, &mut out), Ok(1));
+        assert_eq!(out[0].unwrap().scheme, PartitionScheme::MbrLogical);
+    }
+
+    #[test]
+    fn conversion_failure_clears_partial_output() {
+        let geo = BlockGeometry { block_count: 128, block_size: 512 };
+        let entries = [
+            Some(super::super::gpt::GptPartition {
+                type_guid: [1; 16], unique_guid: [2; 16], first_lba: 10, last_lba: 19,
+                attributes: 0, name: [0; 36],
+            }),
+            Some(super::super::gpt::GptPartition {
+                type_guid: [1; 16], unique_guid: [3; 16], first_lba: 200, last_lba: 210,
+                attributes: 0, name: [0; 36],
+            }),
+        ];
+        let mut out = [None; 2];
+        assert!(from_gpt(&entries, geo, &mut out).is_err());
+        assert!(out.iter().all(Option::is_none));
     }
 
     #[test]
