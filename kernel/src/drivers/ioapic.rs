@@ -21,6 +21,7 @@ const REDIRECTION_LEVEL: u32 = 1 << 15;
 pub enum IoApicError {
     InvalidMapping,
     InvalidVector,
+    RouteNotConfigured,
     GsiOutOfRange,
     InvalidPolarity,
     InvalidTriggerMode,
@@ -98,6 +99,8 @@ pub struct IoApicController {
     gsi_base: u32,
     redirection_count: u32,
     id: u8,
+    // Two words cover all 120 architectural redirection entries without allocation.
+    configured_entries: [u64; 2],
 }
 
 impl IoApicController {
@@ -139,6 +142,7 @@ impl IoApicController {
             gsi_base: descriptor.global_system_interrupt_base,
             redirection_count: 0,
             id: 0,
+            configured_entries: [0; 2],
         };
         let id_version = controller.read_register(REG_ID);
         let version = controller.read_register(REG_VERSION);
@@ -196,8 +200,9 @@ impl IoApicController {
     pub fn read_redirection(&mut self, gsi: u32) -> Result<(u32, u32), IoApicError> {
         let index = self.redirection_index(gsi)?;
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
-        let high = self.read_register(low_reg + 1);
+        // The low dword contains the asynchronously changing Remote-IRR bit.
         let low = self.read_register(low_reg);
+        let high = self.read_register(low_reg + 1);
         Ok((low, high))
     }
 
@@ -219,17 +224,39 @@ impl IoApicController {
         self.write_register(low_reg, previous_low | REDIRECTION_MASK);
         self.write_register(low_reg + 1, entry.high());
         self.write_register(low_reg, entry.low() | REDIRECTION_MASK);
+        self.mark_route_configured(index);
         Ok(())
     }
 
     /// Change only the mask bit, preserving vector, destination and trigger mode.
     pub fn set_masked(&mut self, gsi: u32, masked: bool) -> Result<(), IoApicError> {
         let index = self.redirection_index(gsi)?;
+        // Never enable a firmware-leftover or otherwise unvalidated route.
+        // Masking remains permitted during early initialization.
+        if !masked && !self.route_is_configured(index) {
+            return Err(IoApicError::RouteNotConfigured);
+        }
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
         let mut low = self.read_register(low_reg);
         if masked { low |= REDIRECTION_MASK; } else { low &= !REDIRECTION_MASK; }
         self.write_register(low_reg, low);
         Ok(())
+    }
+
+    #[inline]
+    fn route_is_configured(&self, index: u32) -> bool {
+        let word = (index / 64) as usize;
+        let bit = 1u64 << (index % 64);
+        self.configured_entries.get(word).is_some_and(|value| value & bit != 0)
+    }
+
+    #[inline]
+    fn mark_route_configured(&mut self, index: u32) {
+        let word = (index / 64) as usize;
+        let bit = 1u64 << (index % 64);
+        if let Some(value) = self.configured_entries.get_mut(word) {
+            *value |= bit;
+        }
     }
 
     /// Mask every redirection entry before handing the controller to routing code.
@@ -292,6 +319,19 @@ mod tests {
             unsafe { IoApicController::new(aligned, unaligned_physical) },
             Err(IoApicError::InvalidMapping)
         ));
+    }
+
+    #[test]
+    fn configured_route_bitmap_covers_all_supported_redirection_entries() {
+        let mut configured = [0u64; 2];
+        for index in [0u32, 63, 64, 119] {
+            let word = (index / 64) as usize;
+            let bit = 1u64 << (index % 64);
+            configured[word] |= bit;
+            assert_ne!(configured[word] & bit, 0);
+        }
+        assert_eq!(configured[0], (1u64 << 0) | (1u64 << 63));
+        assert_eq!(configured[1], (1u64 << 0) | (1u64 << 55));
     }
 
     #[test]
