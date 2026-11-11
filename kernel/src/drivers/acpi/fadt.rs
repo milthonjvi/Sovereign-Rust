@@ -119,6 +119,16 @@ impl Fadt {
         self.register_block_lengths.validate()
     }
 
+    /// Validate the complete PM register metadata without accessing hardware.
+    /// Extended GAS widths must describe the byte lengths declared by the FADT.
+    pub fn validate_pm_registers(&self) -> Result<(), AcpiError> {
+        self.register_block_lengths.validate()?;
+        if let Some(registers) = self.extended_pm_registers {
+            registers.validate_against_lengths(self.register_block_lengths)?;
+        }
+        Ok(())
+    }
+
     /// Whether firmware advertises a usable ACPI reset register.
     pub const fn reset_supported(&self) -> bool {
         self.flags & FADT_RESET_REG_SUP != 0
@@ -191,6 +201,33 @@ pub struct ExtendedPmRegisters {
 }
 
 impl ExtendedPmRegisters {
+    /// Validate populated GAS descriptors and their FADT-declared block sizes.
+    pub fn validate_against_lengths(
+        &self,
+        lengths: PmRegisterBlockLengths,
+    ) -> Result<(), AcpiError> {
+        self.validate()?;
+        let checks = [
+            (self.pm1a_event, lengths.pm1_event),
+            (self.pm1b_event, lengths.pm1_event),
+            (self.pm1a_control, lengths.pm1_control),
+            (self.pm1b_control, lengths.pm1_control),
+            (self.pm2_control, lengths.pm2_control),
+            (self.pm_timer, lengths.pm_timer),
+            (self.gpe0, lengths.gpe0),
+            (self.gpe1, lengths.gpe1),
+        ];
+        for (gas, length) in checks {
+            if !gas.is_present() {
+                continue;
+            }
+            if length == 0 || gas.bit_width as u16 != (length as u16) * 8 {
+                return Err(AcpiError::InvalidGas);
+            }
+        }
+        Ok(())
+    }
+
     /// Validate each populated GAS descriptor without performing register I/O.
     pub fn validate(&self) -> Result<(), AcpiError> {
         for gas in [
@@ -415,6 +452,36 @@ mod tests {
         bytes[9] = checksum;
         let fadt = Fadt::parse(&bytes).unwrap();
         assert_eq!(fadt.validate_register_block_lengths(), Err(AcpiError::InvalidLength));
+    }
+
+    #[test]
+    fn checks_extended_gas_width_against_fadt_block_length() {
+        let empty = GenericAddress {
+            address_space: GenericAddress::ADDRESS_SPACE_SYSTEM_IO,
+            bit_width: 0, bit_offset: 0,
+            access_size: GenericAddress::ACCESS_UNDEFINED, address: 0,
+        };
+        let control = GenericAddress {
+            address_space: GenericAddress::ADDRESS_SPACE_SYSTEM_IO,
+            bit_width: 16, bit_offset: 0,
+            access_size: GenericAddress::ACCESS_WORD, address: 0x404,
+        };
+        let registers = ExtendedPmRegisters {
+            pm1a_event: empty, pm1b_event: empty,
+            pm1a_control: control, pm1b_control: empty,
+            pm2_control: empty, pm_timer: empty, gpe0: empty, gpe1: empty,
+        };
+        let lengths = PmRegisterBlockLengths {
+            pm1_event: 4, pm1_control: 2, pm2_control: 0,
+            pm_timer: 0, gpe0: 0, gpe1: 0,
+        };
+        assert_eq!(registers.validate_against_lengths(lengths), Ok(()));
+        assert_eq!(registers.validate_against_lengths(
+            PmRegisterBlockLengths { pm1_control: 4, ..lengths }
+        ), Err(AcpiError::InvalidGas));
+        assert_eq!(registers.validate_against_lengths(
+            PmRegisterBlockLengths { pm1_control: 0, ..lengths }
+        ), Err(AcpiError::InvalidGas));
     }
 
     #[test]
