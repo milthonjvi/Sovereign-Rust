@@ -25,6 +25,13 @@ pub enum TscDeadlineQueueError {
     Hardware(DriverError),
 }
 
+/// Errors while bringing the BSP timer interrupt and deadline queue online.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootstrapTimerInitError {
+    Interrupt(super::interrupt::TimerInterruptError),
+    Queue(TscDeadlineQueueError),
+}
+
 /// Per-CPU timer queue driven by the local APIC TSC-deadline facility.
 pub struct TscDeadlineQueue<S: ClockSource, const N: usize> {
     service: TimerService<S, N>,
@@ -35,6 +42,46 @@ pub struct TscDeadlineQueue<S: ClockSource, const N: usize> {
 }
 
 impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
+    /// Bring up the BSP TSC-deadline path in a safe, ordered sequence.
+    ///
+    /// Configures the local APIC LVT masked, registers the hard-IRQ signal
+    /// handler, constructs the software queue and MSR controller, then unmasks
+    /// the LVT. On any failure after registration, the interrupt is torn down.
+    ///
+    /// # Safety
+    /// Must run on the bootstrap CPU at CPL 0 with IF clear, after
+    /// initialize_bootstrap() selected x2APIC. The supplied clocksource and
+    /// TSC frequency must be valid and stable for this CPU.
+    pub unsafe fn initialize_bootstrap(
+        vector: u8,
+        source: S,
+        initial_time_ns: u64,
+        tsc_frequency_hz: u64,
+    ) -> Result<Self, BootstrapTimerInitError> {
+        // SAFETY: Forwarded from this function's BSP/CPL0/IF-clear contract.
+        unsafe { super::interrupt::register_timer_interrupt(vector) }
+            .map_err(BootstrapTimerInitError::Interrupt)?;
+
+        // SAFETY: Registration has configured the LVT masked and published the
+        // handler, satisfying TscDeadlineQueue::new's hardware preconditions.
+        let queue = match unsafe { Self::new(source, initial_time_ns, tsc_frequency_hz) } {
+            Ok(queue) => queue,
+            Err(error) => {
+                // SAFETY: Same serialized bootstrap initialization context.
+                let _ = unsafe { super::interrupt::unregister_timer_interrupt() };
+                return Err(BootstrapTimerInitError::Queue(error));
+            }
+        };
+
+        // SAFETY: The queue and deadline MSR controller are now ready.
+        if let Err(error) = unsafe { super::interrupt::unmask_timer_interrupt() } {
+            // SAFETY: No timer interrupt can be in flight while IF is clear.
+            let _ = unsafe { super::interrupt::unregister_timer_interrupt() };
+            return Err(BootstrapTimerInitError::Interrupt(error));
+        }
+        Ok(queue)
+    }
+
     /// Create the service and configure the local APIC deadline MSR controller.
     ///
     /// # Safety
