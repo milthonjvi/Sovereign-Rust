@@ -93,14 +93,14 @@ const _: [(); DESCRIPTOR_SIZE] = [(); size_of::<RxDescriptor>()];
 const _: [(); DESCRIPTOR_SIZE] = [(); size_of::<TxDescriptor>()];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RingConfig { pub dma_base: u64, pub byte_length: u32, pub descriptor_count: u16 }
+pub struct RingConfig { pub dma_base: u64, pub byte_length: u32, pub descriptor_count: u32 }
 
 impl RingConfig {
     /// Validate a legacy descriptor ring before programming RDBA/TDBA registers.
     /// The DMA allocator must guarantee that the returned device-visible range remains
     /// pinned and device-accessible for the entire lifetime of the ring.
     pub fn new(dma_base: u64, descriptor_count: usize) -> Result<Self, E1000Error> {
-        if descriptor_count < 8 || descriptor_count > u16::MAX as usize || !descriptor_count.is_power_of_two() {
+        if descriptor_count < 8 || descriptor_count > (u16::MAX as usize + 1) || !descriptor_count.is_power_of_two() {
             return Err(E1000Error::InvalidRingSize);
         }
         if dma_base == 0 {
@@ -116,7 +116,7 @@ impl RingConfig {
         if byte_length % DESCRIPTOR_SIZE as u32 != 0 {
             return Err(E1000Error::InvalidRingSize);
         }
-        Ok(Self { dma_base, byte_length, descriptor_count: descriptor_count as u16 })
+        Ok(Self { dma_base, byte_length, descriptor_count: descriptor_count as u32 })
     }
 
     /// E1000 legacy ring registers accept a 64-bit base split across two registers.
@@ -130,11 +130,11 @@ impl RingConfig {
 pub struct RingCursor { index: u16, mask: u16 }
 
 impl RingCursor {
-    pub fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
-        if descriptor_count < 8 || !descriptor_count.is_power_of_two() {
+    pub fn new(descriptor_count: usize) -> Result<Self, E1000Error> {
+        if descriptor_count < 8 || descriptor_count > (u16::MAX as usize + 1) || !descriptor_count.is_power_of_two() {
             return Err(E1000Error::InvalidRingSize);
         }
-        Ok(Self { index: 0, mask: descriptor_count - 1 })
+        Ok(Self { index: 0, mask: (descriptor_count - 1) as u16 })
     }
     pub const fn index(self) -> u16 { self.index }
     pub const fn mask(self) -> u16 { self.mask }
