@@ -58,8 +58,8 @@ impl<const N: usize> Ps2IrqService<N> {
         wheel_enabled: bool,
         drain_budget: usize,
     ) -> Result<(Self, SpscConsumer<'static, InputEvent, N>), Ps2IrqError> {
-        if drain_budget == 0 {
-            return Err(Ps2IrqError::ZeroDrainBudget);
+        if drain_budget == 0 || drain_budget > MAX_IRQ_DRAIN_BUDGET {
+            return Err(Ps2IrqError::InvalidDrainBudget);
         }
         let (pipeline, consumer) = Ps2InputPipeline::new(queue, wheel_enabled);
         Ok((
@@ -81,8 +81,10 @@ impl<const N: usize> Ps2IrqService<N> {
     ///
     /// # Safety
     /// The service must have a stable static address. Both IRQs must be routed
-    /// to the BSP and serialized there. The controller must have exclusive
-    /// ownership, and the dispatcher/IDT/central EOI path must already be live.
+    /// to the BSP and serialized there. Keep both PIC lines masked and both
+    /// i8042 IRQ-enable bits clear until registration has completed. The
+    /// controller must have exclusive ownership, and the dispatcher/IDT/
+    /// central EOI path must already be live.
     pub unsafe fn register_legacy_irqs(&'static self) -> Result<(), Ps2IrqError> {
         self.header.context.store(self as *const Self as *mut (), Ordering::Relaxed);
         let header_ptr = &self.header as *const IrqContextHeader as *mut IrqContextHeader;
