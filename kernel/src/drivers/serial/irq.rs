@@ -49,6 +49,24 @@ static COM1_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
 static COM2_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
 static COM3_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
 static COM4_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
+static COM1_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
+static COM2_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
+static COM3_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
+static COM4_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
+
+/// Transmission counters for one UART port.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UartTxStatistics {
+    pub queued_bytes: usize,
+    pub transmitted_bytes: usize,
+    pub queue_full_events: usize,
+}
+
+struct AtomicTxStatistics { queued: AtomicUsize, transmitted: AtomicUsize, full: AtomicUsize }
+impl AtomicTxStatistics {
+    const fn new() -> Self { Self { queued: AtomicUsize::new(0), transmitted: AtomicUsize::new(0), full: AtomicUsize::new(0) } }
+    fn snapshot(&self) -> UartTxStatistics { UartTxStatistics { queued_bytes: self.queued.load(Ordering::Relaxed), transmitted_bytes: self.transmitted.load(Ordering::Relaxed), queue_full_events: self.full.load(Ordering::Relaxed) } }
+}
 
 /// Hardware receive errors observed by the UART interrupt handler.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -124,6 +142,7 @@ struct PortBinding {
     stats: &'static AtomicRxStatistics,
     tx_queue: &'static UartTxBuffer,
     tx_depth: &'static AtomicUsize,
+    tx_stats: &'static AtomicTxStatistics,
 }
 
 fn binding(base: u16) -> Option<PortBinding> {
@@ -131,22 +150,22 @@ fn binding(base: u16) -> Option<PortBinding> {
         0x3F8 => Some(PortBinding {
             irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM1_RX,
-            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH,
+            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH, tx_stats: &COM1_TX_STATS,
         }),
         0x2F8 => Some(PortBinding {
             irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM2_RX,
-            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH,
+            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH, tx_stats: &COM2_TX_STATS,
         }),
         0x3E8 => Some(PortBinding {
             irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM3_RX,
-            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH,
+            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH, tx_stats: &COM3_TX_STATS,
         }),
         0x2E8 => Some(PortBinding {
             irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM4_RX,
-            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH,
+            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH, tx_stats: &COM4_TX_STATS,
         }),
         _ => None,
     }
@@ -267,7 +286,14 @@ pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, Ua
         // SAFETY: Exclusive UART ownership is held by the caller.
         unsafe { io::out8(uart.base_port() + IER, RX_INTERRUPT_ENABLE | THRE_INTERRUPT_ENABLE); }
     }
+    port.tx_stats.queued.fetch_add(accepted, Ordering::Relaxed);
+    if accepted < bytes.len() { port.tx_stats.full.fetch_add(1, Ordering::Relaxed); }
     Ok(accepted)
+}
+
+/// Returns a snapshot of transmit counters for a legacy UART.
+pub fn transmit_statistics(base: u16) -> Option<UartTxStatistics> {
+    binding(base).map(|port| port.tx_stats.snapshot())
 }
 
 /// Returns the number of bytes waiting in a legacy UART's TX queue.
@@ -306,7 +332,7 @@ fn drain_port(
     }
 }
 
-fn service_transmit(base: u16, queue: &'static UartTxBuffer, depth: &'static AtomicUsize) {
+fn service_transmit(base: u16, queue: &'static UartTxBuffer, depth: &'static AtomicUsize, stats: &'static AtomicTxStatistics) {
     for _ in 0..MAX_TX_PER_IRQ {
         // SAFETY: This shared handler owns the attached UART's registers.
         let iir = unsafe { io::in8(base + IIR) };
@@ -322,6 +348,7 @@ fn service_transmit(base: u16, queue: &'static UartTxBuffer, depth: &'static Ato
             unsafe { io::out8(base + DATA, byte); }
             sent += 1;
         }
+        stats.transmitted.fetch_add(sent, Ordering::Relaxed);
         if queue.is_empty() {
             // Disable THRE only; RX remains enabled on the shared UART.
             // SAFETY: IER bit zero remains set for RX.
@@ -334,14 +361,14 @@ fn service_transmit(base: u16, queue: &'static UartTxBuffer, depth: &'static Ato
 
 extern "C" fn irq3_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM2_BIT != 0 { service_transmit(0x2F8, &COM2_TX, &COM2_TX_DEPTH); drain_port(0x2F8, &COM2_RX, &COM2_STATS); }
-    if attached & COM4_BIT != 0 { service_transmit(0x2E8, &COM4_TX, &COM4_TX_DEPTH); drain_port(0x2E8, &COM4_RX, &COM4_STATS); }
+    if attached & COM2_BIT != 0 { service_transmit(0x2F8, &COM2_TX, &COM2_TX_DEPTH, &COM2_TX_STATS); drain_port(0x2F8, &COM2_RX, &COM2_STATS); }
+    if attached & COM4_BIT != 0 { service_transmit(0x2E8, &COM4_TX, &COM4_TX_DEPTH, &COM4_TX_STATS); drain_port(0x2E8, &COM4_RX, &COM4_STATS); }
 }
 
 extern "C" fn irq4_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM1_BIT != 0 { service_transmit(0x3F8, &COM1_TX, &COM1_TX_DEPTH); drain_port(0x3F8, &COM1_RX, &COM1_STATS); }
-    if attached & COM3_BIT != 0 { service_transmit(0x3E8, &COM3_TX, &COM3_TX_DEPTH); drain_port(0x3E8, &COM3_RX, &COM3_STATS); }
+    if attached & COM1_BIT != 0 { service_transmit(0x3F8, &COM1_TX, &COM1_TX_DEPTH, &COM1_TX_STATS); drain_port(0x3F8, &COM1_RX, &COM1_STATS); }
+    if attached & COM3_BIT != 0 { service_transmit(0x3E8, &COM3_TX, &COM3_TX_DEPTH, &COM3_TX_STATS); drain_port(0x3E8, &COM3_RX, &COM3_STATS); }
 }
 
 /// Reports whether a UART port is currently connected to its shared IRQ line.
