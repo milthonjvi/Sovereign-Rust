@@ -58,13 +58,58 @@ impl<'a> ImageView<'a> {
         destination_x: i64,
         destination_y: i64,
     ) -> Result<(), FramebufferError> {
-        self.draw_scaled(
-            target,
-            destination_x,
-            destination_y,
-            self.width,
-            self.height,
-        )
+        let target_info = *target.info();
+        let left = (destination_x as i128).max(0);
+        let top = (destination_y as i128).max(0);
+        let right = (destination_x as i128 + self.width as i128)
+            .min(target_info.width as i128);
+        let bottom = (destination_y as i128 + self.height as i128)
+            .min(target_info.height as i128);
+        if left >= right || top >= bottom {
+            return Ok(());
+        }
+
+        let visible_left = usize::try_from(left).map_err(|_| FramebufferError::SizeOverflow)?;
+        let visible_top = usize::try_from(top).map_err(|_| FramebufferError::SizeOverflow)?;
+        let visible_right = usize::try_from(right).map_err(|_| FramebufferError::SizeOverflow)?;
+        let visible_bottom = usize::try_from(bottom).map_err(|_| FramebufferError::SizeOverflow)?;
+        let source_left = usize::try_from(left - destination_x as i128)
+            .map_err(|_| FramebufferError::SizeOverflow)?;
+        let row_width = visible_right - visible_left;
+        let row_bytes = row_width.checked_mul(4).ok_or(FramebufferError::SizeOverflow)?;
+        let column_offset = visible_left.checked_mul(4).ok_or(FramebufferError::SizeOverflow)?;
+
+        for target_y in visible_top..visible_bottom {
+            let source_y = usize::try_from(target_y as i128 - destination_y as i128)
+                .map_err(|_| FramebufferError::SizeOverflow)?;
+            let source_start = source_y.checked_mul(self.stride)
+                .and_then(|row| row.checked_add(source_left))
+                .ok_or(FramebufferError::SizeOverflow)?;
+            let source_end = source_start.checked_add(row_width)
+                .ok_or(FramebufferError::SizeOverflow)?;
+            if source_end > self.pixels.len() {
+                return Err(FramebufferError::BufferTooSmall);
+            }
+
+            let target_offset = target_y.checked_mul(target_info.pitch)
+                .and_then(|row| row.checked_add(column_offset))
+                .ok_or(FramebufferError::SizeOverflow)?;
+            let target_end = target_offset.checked_add(row_bytes)
+                .ok_or(FramebufferError::SizeOverflow)?;
+            if target_end > target.mapped_len() {
+                return Err(FramebufferError::BufferTooSmall);
+            }
+
+            // SAFETY: both source and destination spans were checked for this
+            // complete clipped row; the surface writer handles RGB/BGR packing.
+            unsafe {
+                target.write_pixels_unchecked(
+                    target_offset,
+                    &self.pixels[source_start..source_end],
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Alpha-composite this image at native resolution.
