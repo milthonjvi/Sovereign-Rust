@@ -468,13 +468,12 @@ impl AhciPortSnapshot {
     pub const fn task_file_ready(self) -> bool {
         !self.task_file_error() && !self.task_file_busy() && !self.task_file_data_request()
     }
-    pub const fn interface_fatal(self) -> bool { self.interrupt_status & (1 <<  fatal_interrupt_bit()) != 0 }
+    pub const fn interface_fatal(self) -> bool { self.interrupt_status & (1 << 27) != 0 }
     pub const fn has_command_error(self) -> bool {
         self.interrupt_status & ((1 << 30) | (1 << 29) | (1 << 28) | (1 << 27) | (1 << 26)) != 0
             || self.task_file_error() || self.task_file_device_fault()
     }
 }
-const fn fatal_interrupt_bit() -> u32 { 29 }
 
 /// Read a diagnostic snapshot without acknowledging write-one-to-clear
 /// registers. Callers can retain the snapshot before performing recovery.
