@@ -1,5 +1,5 @@
 //! USB 2.0 and SuperSpeed hub descriptor parsing.
-use super::UsbError;
+use super::{UsbError,transfer::SetupPacket};
 pub const HUB_DESCRIPTOR:u8=0x29;
 pub const HUB_DESCRIPTOR_SS:u8=0x2a;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
