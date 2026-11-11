@@ -234,3 +234,56 @@ pub fn read_fs_info<D: BlockDevice>(
         next_free_cluster: if next == u32::MAX { None } else { Some(next) },
     })
 }
+
+
+/// Read an arbitrary byte range of a regular file without allocating a full-file
+/// buffer. Traversal is bounded by the volume cluster count and all arithmetic
+/// is checked before any disk access.
+pub fn read_file_range<D: BlockDevice>(
+    device: &mut D,
+    volume: &FatVolume,
+    entry: FatDirEntry,
+    offset: u64,
+    output: &mut [u8],
+    cluster_buffer: &mut [u8],
+    fat_scratch: &mut [u8],
+) -> Result<(), FatError> {
+    if entry.is_directory() { return Err(FatError::FileSizeMismatch); }
+    let end = offset.checked_add(output.len() as u64).ok_or(FatError::FileSizeMismatch)?;
+    if end > entry.file_size as u64 { return Err(FatError::FileSizeMismatch); }
+    if output.is_empty() { return Ok(()); }
+    if entry.file_size == 0 || entry.first_cluster < 2 { return Err(FatError::ChainCorrupt); }
+    if cluster_buffer.len() != volume.cluster_size_bytes() { return Err(FatError::ClusterBufferTooSmall); }
+    let cluster_size = cluster_buffer.len() as u64;
+    let mut cluster_index = offset / cluster_size;
+    let mut within = (offset % cluster_size) as usize;
+    let mut cluster = entry.first_cluster;
+    let mut traversed = 0u32;
+    while cluster_index != 0 {
+        if traversed >= volume.bpb.cluster_count { return Err(FatError::ChainTooLong); }
+        cluster = match read_fat_entry(device, volume, cluster, fat_scratch)? {
+            FatChainValue::Next(next) => next,
+            FatChainValue::End => return Err(FatError::FileSizeMismatch),
+        };
+        cluster_index -= 1;
+        traversed += 1;
+    }
+    let mut written = 0usize;
+    while written < output.len() {
+        if traversed >= volume.bpb.cluster_count { return Err(FatError::ChainTooLong); }
+        read_cluster(device, volume, cluster, cluster_buffer)?;
+        let available = cluster_buffer.len() - within;
+        let take = core::cmp::min(available, output.len() - written);
+        output[written..written + take].copy_from_slice(&cluster_buffer[within..within + take]);
+        written += take;
+        traversed += 1;
+        within = 0;
+        if written < output.len() {
+            cluster = match read_fat_entry(device, volume, cluster, fat_scratch)? {
+                FatChainValue::Next(next) => next,
+                FatChainValue::End => return Err(FatError::FileSizeMismatch),
+            };
+        }
+    }
+    Ok(())
+}
