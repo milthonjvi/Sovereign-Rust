@@ -1,9 +1,10 @@
-//! Block-device subsystem.
+//! Block-device subsystem and partition metadata parsers.
 //!
-//! Transport-independent block I/O contracts live here. AHCI, NVMe, and
-//! VirtIO Block transports remain separate and require PCI, DMA, MMIO, and
-//! interrupt services before hardware access is enabled.
+//! Hardware transports (AHCI, NVMe, VirtIO Block) remain separate and require
+//! PCI, DMA, MMIO, and interrupt services before hardware access is enabled.
 
 pub mod block;
+pub mod gpt;
 
 pub use block::{BlockDevice, BlockError, BlockGeometry, BlockRange, validate_buffer};
+pub use gpt::{GptError, GptHeader};
