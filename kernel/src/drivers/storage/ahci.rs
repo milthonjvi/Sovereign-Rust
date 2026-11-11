@@ -297,12 +297,17 @@ pub fn start_port_with_spinup<R:AhciRegisterIo>(io:&mut R,base:u32,staggered_spi
 }
 
 /// Submit a prepared command-table slot. For NCQ, SACT is set before CI.
+///
+/// The caller must serialize concurrent submissions to the same port. The
+/// read-modify-write sequences for PxSACT and PxCI are not atomic across CPUs.
 pub fn issue_command<R:AhciRegisterIo>(
     io:&mut R,base:u32,slot:u8,ncq:bool,polls:u32,
 )->Result<(),AhciError>{
     if slot>=32{return Err(AhciError::InvalidPort);}
     let cmd=port_register(base,0x18)?;
-    if io.read32(cmd)?&1==0{return Err(AhciError::PortNotRunning);}
+    const ST:u32=1;
+    const CR:u32=1<<15;
+    if io.read32(cmd)?&(ST|CR)!=(ST|CR){return Err(AhciError::PortNotRunning);}
     let tfd=port_register(base,0x20)?;
     let mut ready=false;
     for _ in 0..polls{
@@ -314,14 +319,14 @@ pub fn issue_command<R:AhciRegisterIo>(
     if !ready{return Err(AhciError::Timeout);}
     let bit=1u32<<slot;
     let ci=port_register(base,0x38)?;
-    if io.read32(ci)?&bit!=0{return Err(AhciError::SlotBusy);}
+    let issued=io.read32(ci)?;
+    if issued&bit!=0{return Err(AhciError::SlotBusy);}
     if ncq{
         let sact=port_register(base,0x34)?;
-        if io.read32(sact)?&bit!=0{return Err(AhciError::SlotBusy);}
         let active=io.read32(sact)?;
+        if active&bit!=0{return Err(AhciError::SlotBusy);}
         io.write32(sact,active|bit)?;
     }
-    let issued=io.read32(ci)?;
     io.write32(ci,issued|bit)
 }
 
@@ -379,6 +384,14 @@ mod port_tests {
         regs.0[0x10/4]=1<<27;
         assert_eq!(command_complete(&mut regs,0,3,true),Err(AhciError::DeviceFault));
     }
+    #[test]
+    fn refuses_submission_until_command_engine_is_running() {
+        let mut regs=Registers([0;64]);
+        regs.0[0x18/4]=1; // ST set, CR not yet asserted by hardware.
+        assert_eq!(issue_command(&mut regs,0,0,false,1),Err(AhciError::PortNotRunning));
+        assert_eq!(regs.0[0x38/4],0);
+    }
+
     #[test]
     fn rejects_unaligned_port_dma_memory() {
         let mut regs=Registers([0;64]);
