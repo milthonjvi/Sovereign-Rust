@@ -62,7 +62,7 @@ impl<T: Copy, const N: usize> SpscQueue<T, N> {
     }
 
     /// Splits the queue into its unique producer and consumer endpoints.
-    pub fn split(&self) -> (SpscProducer<'_, T, N>, SpscConsumer<'_, T, N>) {
+    pub fn split(&mut self) -> (SpscProducer<'_, T, N>, SpscConsumer<'_, T, N>) {
         (
             SpscProducer { queue: self },
             SpscConsumer { queue: self },
