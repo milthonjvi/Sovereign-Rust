@@ -8,15 +8,18 @@ use super::{
         EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
     },
     EfiHandle, EfiStatus, EfiSystemTable, EFI_COMPROMISED_DATA,
-    EFI_INVALID_PARAMETER, EFI_NOT_FOUND, EFI_SUCCESS, EFI_UNSUPPORTED,
+    EFI_INVALID_PARAMETER, EFI_SUCCESS, EFI_UNSUPPORTED,
 };
 
 const ELF_HEADER_SIZE: usize = 64;
 const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
-const EV_CURRENT: u8 = 1;
+const EV_CURRENT: u32 = 1;
 const EM_X86_64: u16 = 62;
+const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
+const ELF64_PROGRAM_HEADER_SIZE: u16 = 56;
 
 /// Standard fallback location on the EFI System Partition.
 const KERNEL_PATH: [u16; 31] = [
@@ -108,7 +111,7 @@ pub fn inspect_kernel_file(
     };
     if status != EFI_SUCCESS {
         close_file(root);
-        return if status == EFI_NOT_FOUND { EFI_NOT_FOUND } else { status };
+        return status;
     }
     if kernel.is_null() {
         close_file(root);
@@ -138,12 +141,27 @@ fn read_and_validate_header(file: *mut EfiFileProtocol) -> EfiStatus {
         return EFI_COMPROMISED_DATA;
     }
 
+    let file_type = u16::from_le_bytes([header[16], header[17]]);
+    let machine = u16::from_le_bytes([header[18], header[19]]);
+    let version = u32::from_le_bytes([header[20], header[21], header[22], header[23]]);
+    let program_header_offset = u64::from_le_bytes([
+        header[32], header[33], header[34], header[35],
+        header[36], header[37], header[38], header[39],
+    ]);
+    let program_header_size = u16::from_le_bytes([header[54], header[55]]);
+    let program_header_count = u16::from_le_bytes([header[56], header[57]]);
+
     if header[0..4] != ELF_MAGIC
         || header[4] != ELFCLASS64
         || header[5] != ELFDATA2LSB
-        || header[6] != EV_CURRENT
-        || u16::from_le_bytes([header[18], header[19]]) != EM_X86_64
+        || header[6] != 1
+        || !matches!(file_type, ET_EXEC | ET_DYN)
+        || machine != EM_X86_64
+        || version != EV_CURRENT
         || u16::from_le_bytes([header[52], header[53]]) != ELF_HEADER_SIZE as u16
+        || program_header_offset < ELF_HEADER_SIZE as u64
+        || program_header_size != ELF64_PROGRAM_HEADER_SIZE
+        || program_header_count == 0
     {
         return EFI_COMPROMISED_DATA;
     }
