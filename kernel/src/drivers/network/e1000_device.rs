@@ -670,11 +670,13 @@ mod tests {
         let mut rx_storage = [[0u8; 2048]; 8];
         let mut tx_storage = [[0u8; 2048]; 8];
         rx_storage[2][..64].fill(0x53);
-        for index in 0..3 {
-            rx_descriptors[index].buffer_address = 0x10000 + index as u64 * 2048;
-            rx_descriptors[index].length = if index == 0 { 2048 } else { 64 };
-            rx_descriptors[index].status = RXD_STATUS_DD
-                | if index == 0 { 0 } else { RXD_STATUS_EOP };
+        for (index, descriptor) in rx_descriptors.iter_mut().enumerate() {
+            descriptor.buffer_address = 0x10000 + index as u64 * 2048;
+            if index < 3 {
+                descriptor.length = if index == 0 { 2048 } else { 64 };
+                descriptor.status = RXD_STATUS_DD
+                    | if index == 0 { 0 } else { RXD_STATUS_EOP };
+            }
         }
         let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
             .map(|(i, bytes)| mock_dma_buffer(0x10000 + i as u64 * 2048, bytes))
@@ -708,10 +710,12 @@ mod tests {
         let mut tx_storage = [[0u8; 2048]; 8];
         rx_storage[0][..64].fill(0x31);
         rx_storage[1][..96].fill(0x42);
-        for (index, descriptor) in rx_descriptors.iter_mut().enumerate().take(2) {
+        for (index, descriptor) in rx_descriptors.iter_mut().enumerate() {
             descriptor.buffer_address = 0x10000 + index as u64 * 2048;
-            descriptor.length = if index == 0 { 64 } else { 96 };
-            descriptor.status = RXD_STATUS_DD | RXD_STATUS_EOP;
+            if index < 2 {
+                descriptor.length = if index == 0 { 64 } else { 96 };
+                descriptor.status = RXD_STATUS_DD | RXD_STATUS_EOP;
+            }
         }
         let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
             .map(|(i, bytes)| mock_dma_buffer(0x10000 + i as u64 * 2048, bytes))
