@@ -264,6 +264,9 @@ pub extern "efiapi" fn efi_main(
         None => None,
     };
     for index in 0..descriptor_count {
+        if acpi_rsdp.is_none() {
+            break;
+        }
         let descriptor = match memory_map_buffer.descriptor(initial_map, index) {
             Ok(descriptor) => descriptor,
             Err(status) => return status,
