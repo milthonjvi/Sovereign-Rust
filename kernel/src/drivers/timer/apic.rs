@@ -349,18 +349,7 @@ impl X2ApicTimer {
     /// # Safety
     /// Must execute on the owning CPU at CPL 0 after unmasking the timer.
     pub unsafe fn arm_after_ns(&mut self, delay_ns: u64) -> Result<u32, DriverError> {
-        let numerator = (delay_ns as u128)
-            .checked_mul(self.frequency_hz as u128)
-            .ok_or(DriverError::InvalidConfiguration)?;
-        let ticks = if delay_ns == 0 {
-            1
-        } else {
-            numerator
-                .checked_add(999_999_999)
-                .ok_or(DriverError::InvalidConfiguration)?
-                / 1_000_000_000
-        };
-        let count = core::cmp::min(core::cmp::max(1, ticks), u32::MAX as u128) as u32;
+        let count = countdown_count_for_delay_ns(delay_ns, self.frequency_hz)?;
         // SAFETY: Caller guarantees this CPU's x2APIC timer is configured and unmasked.
         let mut apic = unsafe { X2Apic::new() };
         // SAFETY: Caller guarantees the one-shot LVT is configured and unmasked.
@@ -415,6 +404,28 @@ impl X2ApicTimer {
 }
 
 #[inline]
+/// Convert a relative delay into a bounded one-shot APIC countdown.
+fn countdown_count_for_delay_ns(
+    delay_ns: u64,
+    frequency_hz: u64,
+) -> Result<u32, DriverError> {
+    if frequency_hz == 0 {
+        return Err(DriverError::InvalidConfiguration);
+    }
+    let numerator = (delay_ns as u128)
+        .checked_mul(frequency_hz as u128)
+        .ok_or(DriverError::InvalidConfiguration)?;
+    let ticks = if delay_ns == 0 {
+        1
+    } else {
+        numerator
+            .checked_add(999_999_999)
+            .ok_or(DriverError::InvalidConfiguration)?
+            / 1_000_000_000
+    };
+    Ok(core::cmp::min(core::cmp::max(1, ticks), u32::MAX as u128) as u32)
+}
+
 fn midpoint_masked(a: u64, b: u64, mask: u64) -> u64 {
     a.wrapping_add((b.wrapping_sub(a) & mask) / 2) & mask
 }
@@ -523,6 +534,15 @@ mod tests {
         // configuration validation is covered by the API's explicit preconditions.
         assert_eq!(periodic_initial_count(100_000_000, 1_000_000_000, ApicDivide::By1),
             Err(DriverError::InvalidConfiguration));
+    }
+
+    #[test]
+    fn countdown_delay_conversion_rounds_up_and_saturates() {
+        assert_eq!(countdown_count_for_delay_ns(0, 10_000_000), Ok(1));
+        assert_eq!(countdown_count_for_delay_ns(101, 10_000_000), Ok(2));
+        assert_eq!(countdown_count_for_delay_ns(1_000_000_000, 100_000_000), Ok(100_000_000));
+        assert_eq!(countdown_count_for_delay_ns(u64::MAX, 1_000_000_000), Ok(u32::MAX));
+        assert_eq!(countdown_count_for_delay_ns(1, 0), Err(DriverError::InvalidConfiguration));
     }
 
     #[test]
