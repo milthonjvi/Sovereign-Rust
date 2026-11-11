@@ -67,11 +67,25 @@ impl<const N: usize> Ps2IrqService<N> {
         mouse_protocol: Ps2MouseProtocol,
         drain_budget: usize,
     ) -> Result<(Self, SpscConsumer<'static, InputEvent, N>), Ps2IrqError> {
-        let wheel_enabled = matches!(
-            mouse_protocol,
-            Ps2MouseProtocol::Wheel | Ps2MouseProtocol::FiveButton
-        );
-        Self::new(controller, queue, wheel_enabled, drain_budget)
+        if N < 2 {
+            return Err(Ps2IrqError::InvalidQueueCapacity);
+        }
+        if drain_budget == 0 || drain_budget > MAX_IRQ_DRAIN_BUDGET {
+            return Err(Ps2IrqError::InvalidDrainBudget);
+        }
+        let (pipeline, consumer) = Ps2InputPipeline::new_with_protocol(queue, mouse_protocol);
+        Ok((
+            Self {
+                header: IrqContextHeader {
+                    context: AtomicPtr::new(ptr::null_mut()),
+                    invoke: invoke_service::<N>,
+                    drain_budget,
+                },
+                controller,
+                pipeline: UnsafeCell::new(pipeline),
+            },
+            consumer,
+        ))
     }
 
     /// Creates the IRQ service and its unique task-side event consumer.
