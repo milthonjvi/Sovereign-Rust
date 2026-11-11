@@ -241,8 +241,9 @@ mod change_bitmap_tests{
 
 /// Non-blocking downstream-port lifecycle policy. Timing and status polling are
 /// supplied by the caller; no polling loop or MMIO is performed here.
+pub const HUB_PORT_RESET_TIMEOUT_MS:u32=500;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub const HUB_PORT_RESET_TIMEOUT_MS:u32=500;\n#[derive(Clone,Copy,Debug,Eq,PartialEq)]\npub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent,OverCurrentLatched}
+pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent,OverCurrentLatched}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool,clear_connection_change:bool,reset_elapsed_ms:u32}
 impl HubPortMachine{
