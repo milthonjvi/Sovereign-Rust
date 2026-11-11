@@ -100,10 +100,6 @@ impl<'a> Rtl8139RxRing<'a> {
         if raw_length < RTL8139_MIN_FRAME_WITH_FCS || raw_length > RTL8139_MAX_FRAME_WITH_FCS {
             return Err(Rtl8139Error::InvalidPacketLength);
         }
-        if status & RX_STATUS_ROK == 0 || status & RX_STATUS_ERROR_MASK != 0 {
-            return Err(Rtl8139Error::ReceiveError(status));
-        }
-
         let consumed = 4usize.checked_add(raw_length)
             .ok_or(Rtl8139Error::InvalidPacketLength)?;
         let aligned = consumed.checked_add(3)
@@ -123,7 +119,10 @@ impl<'a> Rtl8139RxRing<'a> {
         packet: Rtl8139RxPacket,
         output: &mut [u8],
     ) -> Result<usize, Rtl8139Error> {
-        if packet.status & RX_STATUS_ROK == 0 || packet.status & RX_STATUS_ERROR_MASK != 0 {\n            return Err(Rtl8139Error::ReceiveError(packet.status));\n        }\n        if output.len() < packet.frame_length {
+        if packet.status & RX_STATUS_ROK == 0 || packet.status & RX_STATUS_ERROR_MASK != 0 {
+            return Err(Rtl8139Error::ReceiveError(packet.status));
+        }
+        if output.len() < packet.frame_length {
             return Err(Rtl8139Error::OutputTooSmall { required: packet.frame_length });
         }
         let mut offset = (self.cursor + 4) & (self.ring_size - 1);
