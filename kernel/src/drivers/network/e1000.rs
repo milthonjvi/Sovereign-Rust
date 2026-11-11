@@ -32,6 +32,8 @@ pub const REG_TDH: u32 = 0x3810;
 pub const REG_TDT: u32 = 0x3818;
 pub const REG_RAL0: u32 = 0x5400;
 pub const REG_RAH0: u32 = 0x5404;
+pub const REG_MTA_BASE: u32 = 0x5200;
+pub const E1000_MTA_REGISTER_COUNT: usize = 128;
 
 pub const CTRL_RST: u32 = 1 << 26;
 pub const CTRL_ASDE: u32 = 1 << 5;
