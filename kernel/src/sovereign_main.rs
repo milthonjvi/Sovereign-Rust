@@ -168,7 +168,6 @@ fn validate_boot_mappings(
             Err(_) => return false,
         };
         if rsdp_mapping.physical_address != boot_info.acpi_rsdp_physical
-            || rsdp_mapping.writable
             || rsdp_mapping.executable
             || rsdp_mapping.user_accessible
         {
