@@ -8,6 +8,7 @@ use super::usb_hid_adapter::HidPublishStats;
 
 pub const MAX_HID_INPUT_FIELDS: usize = 64;
 pub const MAX_HID_VALUES: usize = 128;
+pub const MAX_HID_COLLECTIONS: usize = 64;
 const MAX_COLLECTION_DEPTH: usize = 8;
 const MAX_GLOBAL_DEPTH: usize = 8;
 
@@ -19,6 +20,7 @@ pub enum HidReportError {
     TooManyFields,
     TooManyValues,
     TooManyUsages,
+    TooManyCollections,
     ArithmeticOverflow,
     MissingReport,
     ReportIdMismatch,
@@ -44,6 +46,10 @@ pub struct HidInputField {
     pub flags: u8,
     pub application_page: u16,
     pub application_usage: u16,
+    pub collection_id: u8,
+    pub collection_page: u16,
+    pub collection_usage: u16,
+    pub collection_type: u8,
 }
 impl HidInputField {
     const EMPTY: Self = Self {
@@ -52,6 +58,7 @@ impl HidInputField {
         usage_list: [0; 16], usage_count: 0,
         logical_min: 0, logical_max: 0, flags: 0,
         application_page: 0, application_usage: 0,
+        collection_id: 0, collection_page: 0, collection_usage: 0, collection_type: 0,
     };
     pub const fn is_constant(self) -> bool { self.flags & 1 != 0 }
     pub const fn is_variable(self) -> bool { self.flags & 2 != 0 }
@@ -89,10 +96,12 @@ impl LocalState {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Collection {
+    id: u8,
     page: u16,
     usage: u16,
+    kind: u8,
 }
-impl Collection { const EMPTY: Self = Self { page: 0, usage: 0 }; }
+impl Collection { const EMPTY: Self = Self { id: 0, page: 0, usage: 0, kind: 0 }; }
 
 /// Fixed-storage descriptor model. Each field represents one HID Main Input
 /// item; its report_count values occupy consecutive bits and state slots.
@@ -102,6 +111,7 @@ pub struct HidReportMap {
     field_count: u8,
     value_count: u16,
     report_bits: [u32; 256],
+    collection_count: u8,
 }
 impl HidReportMap {
     pub const fn empty() -> Self {
@@ -110,6 +120,7 @@ impl HidReportMap {
             field_count: 0,
             value_count: 0,
             report_bits: [0; 256],
+            collection_count: 0,
         }
     }
 
@@ -120,7 +131,9 @@ impl HidReportMap {
         let mut global_depth = 0usize;
         let mut local = LocalState::EMPTY;
         let mut collections = [Collection::EMPTY; MAX_COLLECTION_DEPTH];
+        let mut applications = [Collection::EMPTY; MAX_COLLECTION_DEPTH];
         let mut collection_depth = 0usize;
+        let mut current_collection = Collection::EMPTY;
         let mut application = Collection::EMPTY;
         let mut offset = 0usize;
 
@@ -238,6 +251,10 @@ impl HidReportMap {
                                 flags: raw as u8,
                                 application_page: application.page,
                                 application_usage: application.usage,
+                                collection_id: current_collection.id,
+                                collection_page: current_collection.page,
+                                collection_usage: current_collection.usage,
+                                collection_type: current_collection.kind,
                             });
                             map.field_count += 1;
                             map.value_count = slots_end as u16;
@@ -247,19 +264,28 @@ impl HidReportMap {
                             if collection_depth == MAX_COLLECTION_DEPTH {
                                 return Err(HidReportError::CollectionOverflow);
                             }
-                            let usage = local.first_usage.or(local.usage_min).unwrap_or(0);
-                            collections[collection_depth] = application;
-                            collection_depth += 1;
-                            if raw as u8 == 1 {
-                                application = Collection {
-                                    page: local.usage_page.unwrap_or(global.usage_page), usage,
-                                };
+                            if map.collection_count as usize == MAX_HID_COLLECTIONS {
+                                return Err(HidReportError::TooManyCollections);
                             }
+                            let usage = local.first_usage.or(local.usage_min).unwrap_or(0);
+                            collections[collection_depth] = current_collection;
+                            applications[collection_depth] = application;
+                            collection_depth += 1;
+                            let next_collection = Collection {
+                                id: map.collection_count + 1,
+                                page: local.usage_page.unwrap_or(global.usage_page),
+                                usage,
+                                kind: raw as u8,
+                            };
+                            map.collection_count += 1;
+                            current_collection = next_collection;
+                            if raw as u8 == 1 { application = next_collection; }
                         }
                         12 => {
                             if collection_depth == 0 { return Err(HidReportError::MalformedDescriptor); }
                             collection_depth -= 1;
-                            application = collections[collection_depth];
+                            current_collection = collections[collection_depth];
+                            application = applications[collection_depth];
                         }
                         _ => {}
                     }
@@ -276,6 +302,7 @@ impl HidReportMap {
 
     pub const fn field_count(&self) -> usize { self.field_count as usize }
     pub const fn value_count(&self) -> usize { self.value_count as usize }
+    pub const fn collection_count(&self) -> usize { self.collection_count as usize }
     pub fn field(&self, index: usize) -> Option<HidInputField> {
         if index >= self.field_count as usize { None } else { self.fields[index] }
     }
