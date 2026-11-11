@@ -24,7 +24,7 @@ pub const TD_TOGGLE_FROM_ED:u32=2<<24;
 pub const TD_CC_NOT_ACCESSED:u32=0xf<<28;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum OhciDirection{FromTd,Out,In,Setup}
+pub enum OhciDirection{FromTd,Out,In,Setup}\n#[derive(Clone,Copy,Debug,Eq,PartialEq)]\npub enum OhciDataToggle{Data0,Data1,FromEndpoint}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(C,align(16))]
 pub struct OhciEndpointDescriptor{pub control:u32,pub tail_pointer:u32,pub head_pointer:u32,pub next_ed:u32}
@@ -49,11 +49,11 @@ impl OhciEndpointDescriptor{
 #[repr(C,align(16))]
 pub struct OhciTransferDescriptor{pub control:u32,pub current_buffer:u32,pub next_td:u32,pub buffer_end:u32}
 impl OhciTransferDescriptor{
- pub fn new(direction:OhciDirection,data_toggle:u8,buffer_start:u64,buffer_end:u64,next_td:u64,interrupt_delay:u8,rounding:bool)->Result<Self,UsbError>{
-  if data_toggle>2||interrupt_delay>7||buffer_start>u32::MAX as u64||buffer_end>u32::MAX as u64||next_td>u32::MAX as u64{return Err(UsbError::InvalidAddress)}
-  if next_td&0xf!=0||buffer_end<buffer_start{return Err(UsbError::InvalidAddress)}
+ pub fn new(direction:OhciDirection,data_toggle:OhciDataToggle,buffer_start:u64,buffer_end:u64,next_td:u64,interrupt_delay:u8,rounding:bool)->Result<Self,UsbError>{
+  if interrupt_delay>7||buffer_start>u32::MAX as u64||buffer_end>u32::MAX as u64||next_td>u32::MAX as u64{return Err(UsbError::InvalidAddress)}
+  if next_td&0xf!=0{return Err(UsbError::InvalidAddress)}
   let dir=match direction{OhciDirection::Setup=>TD_DIRECTION_SETUP,OhciDirection::Out=>TD_DIRECTION_OUT,OhciDirection::In=>TD_DIRECTION_IN,OhciDirection::FromTd=>TD_DIRECTION_FROM_ED};
-  let toggle=match data_toggle{0=>TD_TOGGLE_DATA0,1=>TD_TOGGLE_DATA1,_=>TD_TOGGLE_FROM_ED};
+  let toggle=match data_toggle{OhciDataToggle::Data0=>TD_TOGGLE_DATA0,OhciDataToggle::Data1=>TD_TOGGLE_DATA1,OhciDataToggle::FromEndpoint=>TD_TOGGLE_FROM_ED};
   let control=TD_CC_NOT_ACCESSED|dir|((interrupt_delay as u32)<<21)|toggle|if rounding{TD_ROUNDING}else{0};
   Ok(Self{control,current_buffer:buffer_start as u32,next_td:next_td as u32,buffer_end:buffer_end as u32})
  }
@@ -76,12 +76,12 @@ mod descriptor_tests{
  #[test]fn builds_ohci_endpoint_and_transfer_descriptors(){
   let ed=OhciEndpointDescriptor::new(5,2,OhciDirection::In,true,64).unwrap();
   assert_eq!(ed.control&0x7f,5);assert_ne!(ed.control&ED_SKIP,0);
-  let td=OhciTransferDescriptor::new(OhciDirection::In,2,0x1000,0x103f,0x2000,7,true).unwrap();
+  let td=OhciTransferDescriptor::new(OhciDirection::In,OhciDataToggle::FromEndpoint,0x1000,0x103f,0x2000,7,true).unwrap();
   assert_ne!(td.control&TD_ROUNDING,0);assert_eq!(td.current_buffer,0x1000);
  }
  #[test]fn validates_ohci_dma_alignment(){
   assert_eq!(OhciEndpointDescriptor::new(128,0,OhciDirection::Out,false,64),Err(UsbError::MalformedDescriptor));
-  assert_eq!(OhciTransferDescriptor::new(OhciDirection::Out,2,0x1001,0x103f,0x2000,0,false),Err(UsbError::InvalidAddress));
+  assert_eq!(OhciTransferDescriptor::new(OhciDirection::Out,OhciDataToggle::FromEndpoint,0x1001,0x103f,0x2000,0,false),Err(UsbError::InvalidAddress));
  }
  #[test]fn hcca_has_required_256_byte_alignment(){
   assert_eq!(core::mem::align_of::<OhciHcca>(),256);assert_eq!(core::mem::size_of::<OhciHcca>(),256);
