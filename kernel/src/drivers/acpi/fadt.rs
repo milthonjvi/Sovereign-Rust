@@ -336,8 +336,10 @@ impl Fadt {
         if self.iapc_boot_architecture & !0x003F != 0 {
             return Err(AcpiError::MalformedTable);
         }
-        if self.arm_boot_architecture.is_some_and(|flags| flags & !0x0003 != 0) {
-            return Err(AcpiError::MalformedTable);
+        if let Some(flags) = self.arm_boot_architecture {
+            if flags & !0x0003 != 0 {
+                return Err(AcpiError::MalformedTable);
+            }
         }
         Ok(())
     }
