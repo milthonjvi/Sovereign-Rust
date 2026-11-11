@@ -52,6 +52,20 @@ pub extern "C" fn _start() -> ! {
             } {
                 display.clear(Color::BLACK);
                 display.fill_rect(0, 0, framebuffer_info.width, 4, Color::with_alpha(32, 160, 255, 0));
+                let _ = display.draw_text(
+                    12,
+                    16,
+                    "SOVEREIGN CORE",
+                    Color::WHITE,
+                    None,
+                );
+                let _ = display.draw_text(
+                    12,
+                    34,
+                    "KERNEL INITIALIZED",
+                    Color::with_alpha(32, 160, 255, 0),
+                    None,
+                );
             }
         }
     }
