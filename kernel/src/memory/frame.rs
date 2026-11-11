@@ -92,7 +92,10 @@ impl<'map, 'buffer> FrameAllocator<'map, 'buffer> {
                 self.cursor = start;
             }
 
-            let region = self.current.expect("current region set above");
+            let region = match self.current {
+                Some(region) => region,
+                None => return Err(FrameAllocatorError::AddressOverflow),
+            };
             let region_end = region.end.min(MAX_PHYSICAL_ADDRESS);
             let candidate = match align_up(self.cursor, alignment) {
                 Some(candidate) => candidate,
