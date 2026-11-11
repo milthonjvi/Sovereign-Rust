@@ -9,9 +9,9 @@ to privileged CPU operations and transitions that require it.
 
 ## Repository structure
 
-- `kernel/` — `no_std` kernel library, freestanding entry point, CPU support,
-  boot handoff, and kernel subsystems.
-- `boot/` — Limine bootloader configuration and bootable image construction.
+- `kernel/` — `no_std` kernel, CPU support, boot handoff, and kernel subsystems.
+- `loader/` — native Rust `no_std` UEFI boot application (Sovereign Boot).
+- `boot/` — bootable image construction and firmware boot configuration.
 - `tools/` — host-side build and image utilities.
 - `docs/` — architecture decisions and parallel-work coordination.
 
@@ -20,26 +20,29 @@ to privileged CPU operations and transitions that require it.
 - x86_64 CPUID discovery and feature reporting.
 - Isolated privileged primitives for control registers, MSRs, and port I/O.
 - Early BSP baseline setup for CR0/CR4 and SSE2 OS support.
-- Limine protocol request structures for the memory map, HHDM, and framebuffer.
 - Higher-half ELF linker script and a freestanding kernel entry point.
+- Sovereign Boot UEFI application entry point and allocation-free firmware
+  console output.
 
-These are foundational components, not a claim of complete hardware support.
-The kernel currently halts after validating its mandatory boot responses;
-memory management, IDT/interrupt setup, diagnostics, and device drivers remain
-subsequent implementation stages.
+The UEFI loader is at its first implementation milestone: it enters through
+the firmware ABI and reports status through the firmware console. Kernel ELF
+loading, memory-map ownership, ExitBootServices, and the Sovereign Boot ABI
+handoff are not implemented yet. The kernel still consumes its existing
+Limine handoff during this transition; Limine has not been removed.
 
 ## Build
 
-Install the freestanding Rust target:
+Install the relevant freestanding Rust targets:
 
 ```sh
-rustup target add x86_64-unknown-none
+rustup target add x86_64-unknown-none x86_64-unknown-uefi
 cargo build --release -p sovereign-kernel --bin sovereign-kernel
+cargo build --release -p sovereign-boot-uefi --target x86_64-unknown-uefi
 ```
 
-The workspace config selects `x86_64-unknown-none` and links with
-`kernel/linker.ld`. Bootable image assembly requires the Limine files and
-configuration in `boot/`; it is a separate step from compiling the ELF.
+The kernel build uses `kernel/linker.ld`. The UEFI application is built as a
+separate firmware-targeted executable. Packaging it into a bootable EFI System
+Partition image is a subsequent image-pipeline step.
 
 ## Architecture and collaboration
 
