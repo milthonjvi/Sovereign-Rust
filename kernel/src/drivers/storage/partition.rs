@@ -257,6 +257,16 @@ mod tests {
     }
 
     #[test]
+    fn chunked_reads_respect_parent_transfer_limit_through_partition() {
+        let mut disk = MemDisk { bytes: [0x3C; 4096], reads: 0, writes: 0, flushes: 0 };
+        let mut view = PartitionDevice::new(&mut disk, descriptor()).unwrap();
+        let mut output = [0u8; 3 * 512];
+        super::super::block::read_blocks_chunked(&mut view, BlockRange::new(0, 3), &mut output).unwrap();
+        assert_eq!(view.parent.reads, 2);
+        assert!(output.iter().all(|byte| *byte == 0x3C));
+    }
+
+    #[test]
     fn partition_device_rejects_escape_and_overflow() {
         let mut disk = MemDisk { bytes: [0; 4096], reads: 0, writes: 0, flushes: 0 };
         let mut view = PartitionDevice::new(&mut disk, descriptor()).unwrap();
