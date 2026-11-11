@@ -219,13 +219,30 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             delivered += 1;
         }
 
-        self.rx_queue.recycle_batch(
+        if let Err(error) = self.rx_queue.recycle_batch(
             self.registers,
             self.rx_descriptors,
             &completions[..received],
             &mut recycle_backup[..received],
-        ).map_err(map_queue_error)?;
+        ) {
+            // Fail closed: the descriptors remain CPU-owned after a failed RDT
+            // write, and the caller must reinitialize the device before polling.
+            self.ready = false;
+            return Err(map_queue_error(error));
+        }
         Ok(delivered)
+    }
+
+    fn recycle_rx(&mut self, index: u16) -> Result<(), DriverError> {
+        match self.rx_queue.recycle(self.registers, self.rx_descriptors, index) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // A failed RDT write leaves software ownership unchanged. Stop
+                // the adapter so a later poll cannot skip the unrecycled slot.
+                self.ready = false;
+                Err(map_queue_error(error))
+            }
+        }
     }
 
     fn reclaim_tx(&mut self) -> Result<(), DriverError> {
@@ -310,15 +327,13 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
                 && completion.length as usize <= E1000_MAX_FRAME_SIZE;
 
             if !valid {
-                self.rx_queue.recycle(self.registers, self.rx_descriptors, index)
-                    .map_err(map_queue_error)?;
+                self.recycle_rx(index)?;
                 continue;
             }
 
             let length = completion.length as usize;
             if length > output.len() {
-                self.rx_queue.recycle(self.registers, self.rx_descriptors, index)
-                    .map_err(map_queue_error)?;
+                self.recycle_rx(index)?;
                 return Err(DriverError::InvalidConfiguration);
             }
 
