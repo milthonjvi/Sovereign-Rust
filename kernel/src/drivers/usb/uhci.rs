@@ -21,12 +21,15 @@ pub const TD_STATUS_BABBLE:u32=1<<20;
 pub const TD_STATUS_NAK:u32=1<<19;
 pub const TD_STATUS_CRC_TIMEOUT:u32=1<<18;
 pub const TD_STATUS_BITSTUFF:u32=1<<17;
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+#[repr(u8)]
+pub enum UhciPid{Out=0xe1,In=0x69,Setup=0x2d}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(C,align(16))]
 pub struct UhciTransferDescriptor{pub link_pointer:u32,pub status:u32,pub token:u32,pub buffer_pointer:u32}
 impl UhciTransferDescriptor{
- pub fn new(pid:u8,address:u8,endpoint:u8,data_toggle:bool,max_length:u16,buffer_physical:u64,interrupt_on_complete:bool)->Result<Self,UsbError>{
+ pub fn new(pid:UhciPid,address:u8,endpoint:u8,data_toggle:bool,max_length:u16,buffer_physical:u64,interrupt_on_complete:bool)->Result<Self,UsbError>{
   if address>127||endpoint>15||max_length>2048||buffer_physical>u32::MAX as u64{return Err(UsbError::InvalidAddress)}
   let encoded_length=if max_length==0{0x7ff}else{max_length as u32-1};
   let token=pid as u32|((address as u32)<<8)|((endpoint as u32)<<15)|
@@ -75,7 +78,7 @@ impl Default for UhciFrameList{fn default()->Self{Self::new()}}
 mod schedule_tests{
  use super::*;
  #[test]fn builds_uhci_td_token_and_status(){
-  let td=UhciTransferDescriptor::new(0x2d,5,3,true,64,0x1000,true).unwrap();
+  let td=UhciTransferDescriptor::new(UhciPid::Setup,5,3,true,64,0x1000,true).unwrap();
   assert_eq!(td.token&0xff,0x2d);assert_eq!((td.token>>8)&0x7f,5);
   assert_eq!((td.token>>15)&0xf,3);assert_ne!(td.status&TD_STATUS_ACTIVE,0);
   assert_ne!(td.status&TD_STATUS_IOC,0);
@@ -87,7 +90,7 @@ mod schedule_tests{
   assert_eq!(frames.set(0,0x2001,false),Err(UsbError::InvalidAddress));
  }
  #[test]fn zero_length_td_uses_uhci_length_encoding(){
-  let td=UhciTransferDescriptor::new(0x69,0,0,false,0,0,false).unwrap();
+  let td=UhciTransferDescriptor::new(UhciPid::In,0,0,false,0,0,false).unwrap();
   assert_eq!(td.token>>21,0x7ff);
  }
 }
