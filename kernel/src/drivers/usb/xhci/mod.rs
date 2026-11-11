@@ -311,8 +311,8 @@ impl XhciController{
   let interrupter=self.runtime_base+0x20;
   io.write32(interrupter+0x04,0)?;
   io.write32(interrupter+0x08,1)?;
-  // ERSTBA and ERDP are 64-bit registers: low dword first,
-  // followed by the high dword at +4.
+  // ERSTBA and ERDP are 64-bit registers; their upper dwords
+  // reside at +4 relative to each register's low dword.
   io.write32(interrupter+0x14,(erst_physical>>32)as u32)?;
   io.write32(interrupter+0x10,erst_physical as u32)?;
   io.write32(interrupter+0x1c,(event_ring_physical>>32)as u32)?;
