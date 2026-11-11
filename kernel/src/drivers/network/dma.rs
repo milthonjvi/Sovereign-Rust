@@ -89,6 +89,31 @@ impl<'a> DmaBuffer<'a> {
         self.bytes
     }
 
+    /// Ensure every buffer range is disjoint from a DMA descriptor-ring range.
+    pub fn validate_disjoint_from_range(
+        pool: &[Self],
+        range_start: u64,
+        range_length: usize,
+    ) -> Result<(), DmaBufferError> {
+        if range_start == 0 {
+            return Err(DmaBufferError::NullAddress);
+        }
+        if range_length == 0 {
+            return Err(DmaBufferError::Empty);
+        }
+        let range_end = range_start.checked_add(range_length as u64)
+            .ok_or(DmaBufferError::AddressRangeOverflow)?;
+        for buffer in pool {
+            let buffer_end = buffer.dma_address
+                .checked_add(buffer.len() as u64)
+                .ok_or(DmaBufferError::AddressRangeOverflow)?;
+            if buffer.dma_address < range_end && range_start < buffer_end {
+                return Err(DmaBufferError::OverlappingBuffers);
+            }
+        }
+        Ok(())
+    }
+
     /// Validate a receive pool before its addresses are installed in RX
     /// descriptors. Every buffer must meet the legacy E1000 2 KiB minimum and
     /// device-visible ranges must be disjoint.
