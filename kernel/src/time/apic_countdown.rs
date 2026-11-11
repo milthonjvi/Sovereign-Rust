@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    service::{TimerCancelReport, TimerProcessReport},
+    service::{TimerCancelReport, TimerProcessReport, TimerService, TimerServiceError},
     clock::ClockSource,
     deadline::Deadline,
     interrupt::TimerInterruptError,
