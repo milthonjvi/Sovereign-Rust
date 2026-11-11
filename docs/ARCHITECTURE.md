@@ -30,6 +30,20 @@
 - `security/`: privilege separation and capability enforcement.
 - `logging/`: early diagnostics and runtime log routing.
 
+## x86_64 bootstrap
+
+The kernel requests the Limine base revision 6 handoff and consumes its HHDM,
+memory-map, and optional framebuffer responses. The linker keeps protocol
+requests in a writable ELF load segment because the bootloader writes response
+pointers into those structures. The kernel entry disables interrupts, detects
+CPU capabilities with CPUID, and establishes the baseline CR0/CR4 state needed
+for SSE2. It deliberately leaves AVX/XSAVE, APIC routing, IDT installation,
+page-table replacement, and interrupt enablement to later stages.
+
+The kernel is linked as an ELF64 higher-half image for `x86_64-unknown-none`.
+The host-side boot/image pipeline is separate from the kernel-side protocol
+handoff and is responsible for packaging the Limine bootloader files.
+
 ## Driver strategy
 
 The driver framework starts with an allocation-free common contract in
