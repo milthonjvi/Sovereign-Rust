@@ -138,7 +138,7 @@ pub fn enumerate_gpt_partitions<D: super::block::BlockDevice>(
 ) -> Result<usize, GptError> {
     use super::block::{BlockRange, validate_buffer};
     let geo = device.geometry().validate().map_err(|_| GptError::InvalidBlockGeometry)?;
-    if block_buffer.len() != geo.block_size as usize || entry_buffer.len() != header.entry_size as usize
+    if block_buffer.len() < geo.block_size as usize || block_buffer.len() % geo.block_size as usize != 0 || entry_buffer.len() != header.entry_size as usize
         || header.entry_size < 128 || header.entry_size % 8 != 0 || header.entry_count == 0 {
         return Err(GptError::BufferTooSmall);
     }
@@ -159,36 +159,42 @@ pub fn enumerate_gpt_partitions<D: super::block::BlockDevice>(
         return Err(GptError::TableOutOfBounds);
     }
 
-    // One sequential pass performs CRC validation and entry decoding together.
-    // Results remain provisional until the complete array CRC has been verified.
+    // Batch contiguous sectors into one device request. A larger caller-owned
+    // buffer reduces transport command overhead without introducing heap use.
+    // CRC and decoding share this single sequential pass.
     output.fill(None);
     let mut crc = !0u32;
     let mut count = 0usize;
     let mut entry_fill = 0usize;
     let mut offset = 0u64;
+    let blocks_per_request = (block_buffer.len() / geo.block_size as usize) as u64;
     while offset < bytes {
+        let blocks_remaining = (bytes - offset)
+            .checked_add(block_size - 1).ok_or(GptError::AddressOverflow)? / block_size;
+        let request_blocks = core::cmp::min(blocks_remaining, blocks_per_request);
+        let request_bytes = (request_blocks as usize)
+            .checked_mul(geo.block_size as usize).ok_or(GptError::AddressOverflow)?;
+        let valid_bytes = core::cmp::min(request_bytes as u64, bytes - offset) as usize;
         let block_index = offset / block_size;
-        let within = (offset % block_size) as usize;
-        let n = core::cmp::min(block_buffer.len() - within, (bytes - offset) as usize);
         let lba = match header.entries_lba.checked_add(block_index) {
             Some(value) => value,
             None => { output.fill(None); return Err(GptError::AddressOverflow); }
         };
-        let range = BlockRange::new(lba, 1);
-        if validate_buffer(geo, range, block_buffer.len()).is_err() {
+        let range = BlockRange::new(lba, request_blocks);
+        if validate_buffer(geo, range, request_bytes).is_err() {
             output.fill(None);
             return Err(GptError::TableOutOfBounds);
         }
-        if device.read_blocks(range, block_buffer).is_err() {
+        if device.read_blocks(range, &mut block_buffer[..request_bytes]).is_err() {
             output.fill(None);
             return Err(GptError::DeviceReadFailed);
         }
 
-        let chunk = &block_buffer[within..within + n];
+        let chunk = &block_buffer[..valid_bytes];
         crc = crc32_update(crc, chunk);
         let mut consumed = 0usize;
-        while consumed < n {
-            let take = core::cmp::min(header.entry_size as usize - entry_fill, n - consumed);
+        while consumed < valid_bytes {
+            let take = core::cmp::min(header.entry_size as usize - entry_fill, valid_bytes - consumed);
             entry_buffer[entry_fill..entry_fill + take]
                 .copy_from_slice(&chunk[consumed..consumed + take]);
             entry_fill += take;
@@ -201,7 +207,7 @@ pub fn enumerate_gpt_partitions<D: super::block::BlockDevice>(
                 entry_fill = 0;
             }
         }
-        offset += n as u64;
+        offset += valid_bytes as u64;
     }
     if entry_fill != 0 {
         output.fill(None);
