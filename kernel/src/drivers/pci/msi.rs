@@ -50,7 +50,9 @@ impl MsiCapability {
         let masking = control & (1 << 8) != 0;
         let mmc = ((control >> 1) & 0x7) as u8;
         let mme = ((control >> 4) & 0x7) as u8;
-        if mme > mmc { return Err(ConfigError::OutOfRange); }
+        // PCI MSI defines MMC encodings 0..=5 (1..=32 messages); 6 and 7
+        // are reserved and cannot be represented by the 32-bit mask register.
+        if mmc > 5 || mme > mmc { return Err(ConfigError::OutOfRange); }
         let address_low = read_standard(io, address, offset + 4)?;
         let (message_address, data_register) = if is_64 {
             let address_high = read_standard(io, address, offset + 8)?;
@@ -84,6 +86,105 @@ impl MsiCapability {
             pending_bits,
         })
     }
+}
+
+/// Errors returned while configuring a conventional MSI capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MsiConfigError {
+    Access(ConfigError),
+    InvalidVectorCount,
+    InvalidVectorBlock,
+    HandlerNotRegistered,
+    UnsupportedAddress,
+    MisalignedAddress,
+}
+
+/// Program and enable MSI after the caller has registered every target vector.
+///
+/// The supplied message address is provided by the interrupt-controller layer;
+/// this routine does not guess APIC destination IDs or allocate vectors.
+///
+/// # Safety
+/// The device must be quiescent and exclusively owned by the caller. Its MSI-X
+/// capability must be disabled, its interrupt source must remain masked until
+/// this operation completes, and every vector in the requested contiguous
+/// block must already have a live APIC handler registered through the interrupt
+/// subsystem. A configuration-write failure may leave MSI disabled.
+pub unsafe fn configure_msi<A: ConfigAccess>(
+    io: &A,
+    address: PciAddress,
+    capability: Capability,
+    message_address: u64,
+    message_data: u16,
+    vectors: u8,
+) -> Result<(), MsiConfigError> {
+    let current = MsiCapability::read(io, address, capability)
+        .map_err(MsiConfigError::Access)?;
+    if vectors == 0 || !vectors.is_power_of_two() || vectors > current.maximum_vectors {
+        return Err(MsiConfigError::InvalidVectorCount);
+    }
+    if message_address & 0x3 != 0 {
+        return Err(MsiConfigError::MisalignedAddress);
+    }
+    if !current.supports_64_bit_address && message_address >> 32 != 0 {
+        return Err(MsiConfigError::UnsupportedAddress);
+    }
+    if message_data & 0xff00 != 0 || message_data & (vectors as u16 - 1) != 0 {
+        return Err(MsiConfigError::InvalidVectorBlock);
+    }
+
+    let first_vector = message_data as u8;
+    for offset in 0..vectors {
+        let vector = first_vector as u16 + offset as u16;
+        if vector > u8::MAX as u16
+            || !crate::interrupts::apic::is_apic_vector(vector as u8)
+            || !crate::interrupts::dispatch::is_registered(vector as u8)
+        {
+            return Err(MsiConfigError::HandlerNotRegistered);
+        }
+    }
+
+    let capability_offset = capability.offset as u16;
+    let header = read_standard(io, address, capability_offset)
+        .map_err(MsiConfigError::Access)?;
+    let control = (header >> 16) as u16;
+    let disabled_control = control & !1;
+    io.write_u32(
+        address,
+        capability_offset,
+        (header & 0xffff) | ((disabled_control as u32) << 16),
+    ).map_err(MsiConfigError::Access)?;
+
+    let address_register = capability_offset + 4;
+    io.write_u32(address, address_register, message_address as u32)
+        .map_err(MsiConfigError::Access)?;
+    let data_register = if current.supports_64_bit_address {
+        io.write_u32(address, capability_offset + 8, (message_address >> 32) as u32)
+            .map_err(MsiConfigError::Access)?;
+        capability_offset + 12
+    } else {
+        capability_offset + 8
+    };
+    io.write_u32(address, data_register, message_data as u32)
+        .map_err(MsiConfigError::Access)?;
+
+    // Clear only mask bits corresponding to the newly configured messages.
+    // Preserve unrelated mask state; the pending-bit register is read-only.
+    if current.per_vector_masking {
+        let existing = current.mask_bits.ok_or(MsiConfigError::Access(ConfigError::OutOfRange))?;
+        let requested = if vectors == 32 { u32::MAX } else { (1u32 << vectors) - 1 };
+        io.write_u32(address, data_register + 4, existing & !requested)
+            .map_err(MsiConfigError::Access)?;
+    }
+
+    let mme = vectors.trailing_zeros() as u16;
+    let enabled_control = (disabled_control & !(0x7 << 4)) | (mme << 4) | 1;
+    io.write_u32(
+        address,
+        capability_offset,
+        (header & 0xffff) | ((enabled_control as u32) << 16),
+    ).map_err(MsiConfigError::Access)?;
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
