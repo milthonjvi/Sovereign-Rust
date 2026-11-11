@@ -5,7 +5,7 @@
 //! allocates DMA memory, or installs interrupt handlers.
 
 use super::e1000::{
-    RingConfig, RxDescriptor, TxDescriptor, RingCursor, E1000Error, TXD_STATUS_DD, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
+    RingConfig, RxDescriptor, TxDescriptor, RingCursor, E1000Error, RXD_STATUS_DD, TXD_STATUS_DD, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
     REG_CTRL, REG_STATUS, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
     REG_MTA_BASE, E1000_MTA_REGISTER_COUNT,
     REG_RDBAH, REG_RDBAL, REG_RDH, REG_RDLEN, REG_RDT,
