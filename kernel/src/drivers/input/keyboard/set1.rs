@@ -9,14 +9,13 @@ impl Set1Decoder {
   if byte == 0xE1 { self.extended = false; return None; }
   let extended = core::mem::replace(&mut self.extended, false);
   let pressed = byte & 0x80 == 0; let scan = (byte & 0x7F) as u16;
-  let code = map_scancode(scan, extended); let index = key_index(code);
+  let code = map_scancode(scan, extended); let index = scan as usize + if extended { 128 } else { 0 };
   let mask = 1u64 << (index % 64); let slot = &mut self.keys_down[index / 64];
   let was_down = *slot & mask != 0;
   if pressed { *slot |= mask; } else { *slot &= !mask; }
   Some(InputEvent::Key { code, pressed, repeat: pressed && was_down })
  }
 }
-fn key_index(code: KeyCode) -> usize { match code { KeyCode::Unknown(v) => v as usize % 256, _ => code as usize } }
 fn map_scancode(s: u16, e: bool) -> KeyCode {
  if e { return match s {
   0x1C => KeyCode::Keypad0, 0x1D => KeyCode::RightCtrl, 0x35 => KeyCode::Slash, 0x38 => KeyCode::RightAlt,
