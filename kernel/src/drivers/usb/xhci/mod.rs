@@ -180,3 +180,29 @@ impl CommandCompletionEvent{
   Ok(Self{command_pointer:trb.parameter,completion_code:(trb.status>>24)as u8,slot_id:(trb.control>>24)as u8})
  }
 }
+
+#[cfg(test)]
+mod trb_builder_tests{
+ use super::*;
+ use crate::drivers::usb::transfer::SetupPacket;
+ #[test]fn builds_control_setup_and_data_trbs(){
+  let setup=SetupPacket::get_descriptor(1,0,18);
+  let setup_trb=Trb::setup_stage(setup);
+  assert_eq!(setup_trb.trb_type(),TrbType::SetupStage as u8);
+  assert_eq!(setup_trb.parameter,u64::from_le_bytes(setup.encode()));
+  assert_eq!((setup_trb.control>>16)&3,3);
+  let data=Trb::data_stage(0x2000,18,0,true,true);
+  assert_eq!(data.trb_type(),TrbType::DataStage as u8);
+  assert_ne!(data.control&(1<<16),0);
+  let status=Trb::status_stage(false,true);
+  assert_eq!(status.trb_type(),TrbType::StatusStage as u8);
+ }
+ #[test]fn decodes_transfer_and_command_completion_events(){
+  let transfer=Trb{parameter:0x1230,status:(1<<24)|7,control:((TrbType::TransferEvent as u32)<<10)|(3<<16)|(2<<24)};
+  let event=TransferEvent::parse(transfer).unwrap();
+  assert_eq!(event.pointer,0x1230);assert_eq!(event.residual_length,7);
+  assert_eq!(event.completion_code,1);assert_eq!(event.endpoint_id,3);assert_eq!(event.slot_id,2);
+  let command=Trb{parameter:0x8000,status:1<<24,control:((TrbType::CommandCompletion as u32)<<10)|(2<<24)};
+  assert_eq!(CommandCompletionEvent::parse(command).unwrap().command_pointer,0x8000);
+ }
+}
