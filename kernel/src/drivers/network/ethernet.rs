@@ -15,7 +15,7 @@ pub struct MacAddress(pub [u8; ETHERNET_ADDRESS_LEN]);
 impl MacAddress {
     pub const BROADCAST: Self = Self([0xff; ETHERNET_ADDRESS_LEN]);
     pub const ZERO: Self = Self([0; ETHERNET_ADDRESS_LEN]);
-    pub const fn is_broadcast(self) -> bool { self.0 == [0xff; ETHERNET_ADDRESS_LEN] }
+    pub fn is_broadcast(self) -> bool { self.0 == [0xff; ETHERNET_ADDRESS_LEN] }
     pub const fn is_multicast(self) -> bool { self.0[0] & 1 != 0 }
     pub fn is_unicast(self) -> bool { !self.is_multicast() && self != Self::ZERO }
 }
