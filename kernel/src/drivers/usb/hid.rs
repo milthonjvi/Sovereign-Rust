@@ -132,6 +132,21 @@ mod tests{
   let d=HidDescriptor::parse(&[9,0x21,0x11,0x01,0,1,0x22,63,0]).unwrap();
   assert_eq!(d.hid_release,0x0111);assert_eq!(d.report_length,63);
  }
+ #[test]fn locates_hid_class_descriptor_in_configuration_by_interface_and_alternate(){
+  let configuration=[
+   9,2,27,0,1,1,0,0x80,50,
+   9,4,3,1,1,HID_CLASS,0,0,0,
+   9,HID_DESCRIPTOR_TYPE,0x11,0x01,0,1,HID_REPORT_DESCRIPTOR_TYPE,63,0,
+  ];
+  let descriptor=HidDescriptor::find_in_configuration(&configuration,3,1).unwrap();
+  assert_eq!(descriptor.report_length,63);
+  assert_eq!(descriptor.hid_release,0x0111);
+  assert_eq!(HidDescriptor::find_in_configuration(&configuration,3,0),Err(UsbError::Unsupported));
+ }
+ #[test]fn rejects_truncated_raw_configuration_hid_descriptor(){
+  let configuration=[9,2,27,0,1,1,0,0x80,50,9,4,3,1,1,HID_CLASS,0,0,0,9,HID_DESCRIPTOR_TYPE];
+  assert_eq!(HidDescriptor::find_in_configuration(&configuration,3,1),Err(UsbError::BufferTooShort));
+ }
  #[test]fn builds_boot_protocol_request(){
   let p=set_protocol(2,HID_PROTOCOL_BOOT);
   assert_eq!(p.request_type,0x21);assert_eq!(p.request,HID_SET_PROTOCOL);
