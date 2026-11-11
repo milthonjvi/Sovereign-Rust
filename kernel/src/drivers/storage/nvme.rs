@@ -64,11 +64,14 @@ impl<'a> NvmeSubmissionQueue<'a> {
     pub fn update_head(&mut self,head:u32)->Result<(),NvmeError>{
         if head>=self.depth{return Err(NvmeError::InvalidQueueDepth);} self.head=head; Ok(())
     }
-    /// Returns the new tail for the submission doorbell. Caller must issue the\n    /// platform DMA write barrier before ringing the MMIO doorbell.
+    /// Returns the new tail for the submission doorbell. Caller must issue the
+    /// platform DMA write barrier before ringing the MMIO doorbell.
     pub fn submit(&mut self,cmd:NvmeCommand)->Result<u32,NvmeError>{
         let next=(self.tail+1)%self.depth;
         if next==self.head{return Err(NvmeError::QueueFull);}
-        // SAFETY: tail is bounded by depth, and the caller owns the DMA queue mapping.\n        unsafe { core::ptr::write_volatile(self.entries.as_mut_ptr().add(self.tail as usize), cmd); }\n        self.tail=next; Ok(next)
+        // SAFETY: tail is bounded by depth, and the caller owns the DMA queue mapping.
+        unsafe { core::ptr::write_volatile(self.entries.as_mut_ptr().add(self.tail as usize), cmd); }
+        self.tail=next; Ok(next)
     }
 }
 
@@ -79,8 +82,11 @@ impl<'a> NvmeCompletionQueue<'a>{
         Ok(Self{entries,depth,head:0,phase:true})
     }
     pub const fn head(&self)->u32{self.head}
-    /// Caller must issue the platform DMA read barrier before polling.\n    pub fn poll(&mut self)->Option<NvmeCompletion>{
-        // SAFETY: head is bounded by depth; caller must perform its DMA read barrier before polling.\n        let c=unsafe { core::ptr::read_volatile(self.entries.as_ptr().add(self.head as usize)) };\n        if c.phase()!=self.phase{return None;}
+    /// Caller must issue the platform DMA read barrier before polling.
+    pub fn poll(&mut self)->Option<NvmeCompletion>{
+        // SAFETY: head is bounded by depth; caller must perform its DMA read barrier before polling.
+        let c=unsafe { core::ptr::read_volatile(self.entries.as_ptr().add(self.head as usize)) };
+        if c.phase()!=self.phase{return None;}
         self.head+=1; if self.head==self.depth{self.head=0;self.phase=!self.phase;} Some(c)
     }
 }
