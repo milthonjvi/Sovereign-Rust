@@ -47,11 +47,12 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         if tsc_frequency_hz == 0 {
             return Err(TscDeadlineQueueError::Service(TimerServiceError::InvalidClockSource));
         }
+        let service = TimerService::new(source, initial_time_ns)
+            .map_err(TscDeadlineQueueError::Service)?;
         // SAFETY: The constructor's caller contract guarantees CPL 0 and
         // TSC-deadline feature support on this local CPU.
         let timer = unsafe { TscDeadline::new() }
             .map_err(TscDeadlineQueueError::Hardware)?;
-        let service = TimerService::new(source, initial_time_ns).map_err(TscDeadlineQueueError::Service)?;
         // SAFETY: Constructor is bound to this CPU and the timer handle was
         // created after validating TSC-deadline support.
         unsafe { timer.stop() };
