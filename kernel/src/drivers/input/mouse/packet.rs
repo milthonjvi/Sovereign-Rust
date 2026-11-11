@@ -41,9 +41,9 @@ mod tests {
  #[test] fn signed_axes_and_wheel() {
   let mut d=Ps2MouseDecoder::new(true); let mut out=[None;3];
   d.feed(0x18,&mut out); d.feed(0xFF,&mut out);
-  assert_eq!(d.feed(0xFF,&mut out),2);
-  assert_eq!(out[0],Some(InputEvent::MouseMotion{dx:-1,dy:1}));
+  assert_eq!(d.feed(0xFF,&mut out),0);
   assert_eq!(d.feed(0x0F,&mut out),3);
+  assert_eq!(out[0],Some(InputEvent::MouseMotion{dx:-1,dy:1}));
   assert_eq!(out[2],Some(InputEvent::MouseWheel{delta:-1}));
  }
 }
