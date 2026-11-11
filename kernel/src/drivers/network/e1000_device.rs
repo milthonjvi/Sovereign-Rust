@@ -633,6 +633,43 @@ mod tests {
     }
 
     #[test]
+    fn receive_drains_fragmented_frame_before_delivering_next_packet() {
+        let mut registers = MockRegisters::default();
+        let mut rx_descriptors = [RxDescriptor::for_buffer(0x10000); 8];
+        let mut tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut rx_storage = [[0u8; 2048]; 8];
+        let mut tx_storage = [[0u8; 2048]; 8];
+        rx_storage[2][..64].fill(0x53);
+        for index in 0..3 {
+            rx_descriptors[index].buffer_address = 0x10000 + index as u64 * 2048;
+            rx_descriptors[index].length = if index == 0 { 2048 } else { 64 };
+            rx_descriptors[index].status = RXD_STATUS_DD
+                | if index == 0 { 0 } else { RXD_STATUS_EOP };
+        }
+        let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| mock_dma_buffer(0x10000 + i as u64 * 2048, bytes))
+            .collect::<Vec<_>>().try_into().ok().unwrap();
+        let mut tx_buffers: [DmaBuffer<'_>; 8] = tx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| mock_dma_buffer(0x20000 + i as u64 * 2048, bytes))
+            .collect::<Vec<_>>().try_into().ok().unwrap();
+        // SAFETY: the mock backend performs no DMA; arrays model pinned mappings.
+        let mut device = unsafe { E1000Device::new(
+            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+        ) }.unwrap();
+        device.initialize(&supported_device()).unwrap();
+
+        let mut output = [0u8; 128];
+        assert_eq!(device.receive(&mut output), Ok(Some(64)));
+        assert_eq!(&output[..64], &[0x53; 64]);
+        assert_eq!(
+            device.registers.writes.iter().filter(|(reg, _)| *reg == REG_RDT).count(),
+            3,
+        );
+        assert!(!device.dropping_rx_frame);
+    }
+
+    #[test]
     fn batch_receive_copies_frames_and_recycles_with_one_tail_write() {
         let mut registers = MockRegisters::default();
         let mut rx_descriptors = [RxDescriptor::for_buffer(0x10000); 8];
