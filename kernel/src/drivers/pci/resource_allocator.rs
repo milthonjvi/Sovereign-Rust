@@ -95,6 +95,7 @@ impl<'a> ResourcePool<'a> {
             if windows[index].base >= windows[index].end
                 || windows[index].cursor < windows[index].base
                 || windows[index].cursor > windows[index].end
+                || (windows[index].space == ResourceSpace::Io && windows[index].prefetchable)
             {
                 return Err(AllocationError::InvalidWindow);
             }
@@ -112,7 +113,10 @@ impl<'a> ResourcePool<'a> {
     /// Allocate the best-fitting suitable aperture, preserving larger windows
     /// where possible. Alignment is always the BAR size, as required by PCI.
     pub fn allocate(&mut self, request: ResourceRequest) -> Result<ResourceAllocation, AllocationError> {
-        if request.size == 0 || !request.size.is_power_of_two() {
+        if request.size == 0
+            || !request.size.is_power_of_two()
+            || (request.kind == BarKind::Io && request.prefetchable)
+        {
             return Err(AllocationError::InvalidRequest);
         }
         let space = if request.kind == BarKind::Io { ResourceSpace::Io } else { ResourceSpace::Memory };
