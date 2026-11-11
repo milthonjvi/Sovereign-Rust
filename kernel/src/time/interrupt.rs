@@ -29,7 +29,7 @@ pub enum TimerInterruptError {
 /// the device source masked until this call succeeds. The APIC entry path
 /// sends EOI after this callback returns.
 pub fn register_timer_interrupt(vector: u8) -> Result<(), TimerInterruptError> {
-    if vector < 32 || vector == 0x80 || vector == 0xFF {
+    if !crate::interrupts::apic::is_apic_vector(vector) {
         return Err(TimerInterruptError::InvalidVector);
     }
     dispatch::register(vector, timer_interrupt_handler)
