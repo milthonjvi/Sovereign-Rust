@@ -59,11 +59,19 @@ sovereign_irq_common:
 
     # Keep the original frame pointer across ABI stack alignment and the call.
     mov r12, rsp
+    # Rust's x86_64 code may use x87/SSE2. Preserve the complete legacy
+    # floating-point/SIMD context across the interrupt handler.
+    # Baseline CPU setup enables CR4.OSFXSR and does not enable AVX/XSAVE.
+    sub rsp, 528
+    and rsp, -16
+    fxsave64 [rsp]
+
     # The x86-64 C ABI requires DF=0; iretq restores the interrupted RFLAGS.
     cld
-    mov rdi, rsp
-    and rsp, -16
+    mov rdi, r12
     call sovereign_irq_dispatch
+
+    fxrstor64 [rsp]
     mov rsp, r12
 
     pop r15
