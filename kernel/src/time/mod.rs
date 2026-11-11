@@ -17,7 +17,7 @@ pub use deadline::{earlier, Deadline};
 pub use timer_queue::{TimerEvent, TimerId, TimerQueue, TimerQueueError};
 pub use periodic::{PeriodicExpiration, PeriodicMode, PeriodicTimer};
 pub use hpet_clock::{hpet_frequency_hz, HpetClockSource};
-pub use tsc_clock::TscClockSource;
+pub use tsc_clock::{monotonic_deadline_to_tsc, TscClockSource};
 pub use service::{TimerService, TimerServiceError};
 
 pub use interrupt::{register_timer_interrupt, take_timer_work_pending, timer_work_pending, TimerInterruptError};
