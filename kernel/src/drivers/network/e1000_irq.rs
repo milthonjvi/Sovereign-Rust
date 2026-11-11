@@ -26,11 +26,12 @@ static PENDING_VECTORS: [AtomicU64; 4] = [
 
 /// One registered E1000 interrupt vector. The vector is shared globally with
 /// the dispatcher, so use a unique APIC vector for each independently handled NIC.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct E1000Interrupt {
     vector: u8,
     mask: u32,
     enabled: bool,
+    registered: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,7 +61,7 @@ impl E1000Interrupt {
         unsafe {
             crate::interrupts::apic::register_vector(vector, e1000_interrupt_handler)
         }.map_err(|_| E1000InterruptError::VectorRegistration)?;
-        Ok(Self { vector, mask, enabled: false })
+        Ok(Self { vector, mask, enabled: false, registered: true })
     }
 
     /// Enable selected E1000 causes after the platform has completed MSI routing.
@@ -107,20 +108,29 @@ impl E1000Interrupt {
     /// # Safety
     /// No CPU may still be executing the registered callback, and the device
     /// interrupt source must already be masked.
-    pub unsafe fn uninstall(self)
+    pub unsafe fn uninstall(&mut self)
         -> Result<(), E1000InterruptError<core::convert::Infallible>>
     {
         if self.enabled {
             return Err(E1000InterruptError::StillEnabled);
         }
+        if !self.registered {
+            return Err(E1000InterruptError::VectorRemoval);
+        }
         // SAFETY: caller guarantees source masking and drained in-flight delivery.
         unsafe {
             crate::interrupts::apic::unregister_vector(self.vector, e1000_interrupt_handler)
-        }.map_err(|_| E1000InterruptError::VectorRemoval)
+        }.map_err(|_| E1000InterruptError::VectorRemoval)?;
+        let word = self.vector as usize / 64;
+        let bit = 1u64 << (self.vector as usize % 64);
+        PENDING_VECTORS[word].fetch_and(!bit, Ordering::AcqRel);
+        self.registered = false;
+        Ok(())
     }
 
     pub const fn vector(&self) -> u8 { self.vector }
     pub const fn is_enabled(&self) -> bool { self.enabled }
+    pub const fn is_registered(&self) -> bool { self.registered }
 }
 
 extern "C" fn e1000_interrupt_handler(vector: u8) {
