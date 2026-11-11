@@ -414,6 +414,10 @@ mod controller_state_tests{
   assert_eq!(io.words[0x40/4+OP_CONFIG/4],8);
   unsafe{h.configure_event_ring(&mut io,0x4000,0x5000,256)}.unwrap();
   assert_eq!(io.words[(0x100+0x20+0x08)/4],1);
+  assert_eq!(io.words[(0x100+0x20+0x10)/4],0x4000);
+  assert_eq!(io.words[(0x100+0x20+0x14)/4],0);
+  assert_eq!(io.words[(0x100+0x20+0x18)/4],0x5000);
+  assert_eq!(io.words[(0x100+0x20+0x1c)/4],0);
   h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());
   assert_eq!(h.state,ControllerState::Running);
  }
