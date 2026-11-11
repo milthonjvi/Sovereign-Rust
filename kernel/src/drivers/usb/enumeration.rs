@@ -175,3 +175,52 @@ mod tests{
   assert!(!pool.is_allocated(a));
  }
 }
+
+
+#[cfg(test)]
+mod controller_step_tests{
+ use super::*;
+ use super::super::controller::{ControllerKind,HostController,PortStatus,TransferResult,TransferStatus};
+ use super::super::transfer::{Endpoint,UsbSpeed};
+ struct MockHost{last_address:DeviceAddress}
+ impl HostController for MockHost{
+  fn kind(&self)->ControllerKind{ControllerKind::Xhci}
+  fn port_count(&self)->u8{1}
+  fn port_status(&self,_:u8)->Result<PortStatus,UsbError>{Ok(PortStatus{connected:true,enabled:true,suspended:false,over_current:false,speed:Some(UsbSpeed::High)})}
+  fn control_transfer(&mut self,address:DeviceAddress,setup:SetupPacket,data:&mut[u8])->Result<TransferResult,UsbError>{
+   self.last_address=address;
+   let (response,count):(&[u8],usize)=match setup.request{
+    GET_DESCRIPTOR=>match (setup.value>>8)as u8{
+     DESC_DEVICE if setup.length==8=>(&[18,1,0,2,0,0,0,64],8),
+     DESC_DEVICE=>(&[18,1,0,2,0,0,0,64,0x34,0x12,0x78,0x56,0,1,0,0,0,1],18),
+     DESC_CONFIGURATION if setup.length==9=>(&[9,2,18,0,1,1,0,0x80,50],9),
+     DESC_CONFIGURATION=>(&[9,2,18,0,1,1,0,0x80,50,9,4,0,0,0,0,0,0,0],18),
+     _=>return Err(UsbError::Unsupported),
+    },
+    SET_ADDRESS|SET_CONFIGURATION=>(&[],0),
+    _=>return Err(UsbError::Unsupported),
+   };
+   if count>data.len(){return Err(UsbError::BufferTooShort)}
+   data[..count].copy_from_slice(response);
+   Ok(TransferResult{status:TransferStatus::Success,bytes_transferred:count})
+  }
+  fn bulk_transfer(&mut self,_:DeviceAddress,_:Endpoint,_:&mut[u8])->Result<TransferResult,UsbError>{Err(UsbError::Unsupported)}
+  fn interrupt_transfer(&mut self,_:DeviceAddress,_:Endpoint,_:&mut[u8])->Result<TransferResult,UsbError>{Err(UsbError::Unsupported)}
+  fn reset_port(&mut self,_:u8)->Result<(),UsbError>{Ok(())}
+ }
+ #[test]fn drives_complete_enumeration_over_host_controller(){
+  let mut host=MockHost{last_address:DeviceAddress::DEFAULT};
+  let mut pool=DeviceAddressPool::new();let mut session=EnumerationSession::new();let mut buffer=[0u8;18];
+  assert_eq!(session.step(&mut host,&mut pool,0,&mut buffer),Ok(EnumerationStage::SetAddress));
+  assert_eq!(host.last_address,DeviceAddress::DEFAULT);
+  assert_eq!(session.step(&mut host,&mut pool,0,&mut buffer),Ok(EnumerationStage::AddressSettle));
+  assert_eq!(session.step(&mut host,&mut pool,1,&mut buffer),Ok(EnumerationStage::AddressSettle));
+  assert_eq!(session.step(&mut host,&mut pool,1,&mut buffer),Ok(EnumerationStage::ReadDeviceDescriptor));
+  assert_eq!(session.step(&mut host,&mut pool,0,&mut buffer),Ok(EnumerationStage::ReadConfigurationHeader));
+  assert_eq!(host.last_address,session.address().unwrap());
+  assert_eq!(session.step(&mut host,&mut pool,0,&mut buffer),Ok(EnumerationStage::ReadConfiguration));
+  assert_eq!(session.step(&mut host,&mut pool,0,&mut buffer),Ok(EnumerationStage::SetConfiguration));
+  assert_eq!(session.step(&mut host,&mut pool,0,&mut buffer),Ok(EnumerationStage::Complete));
+  assert_eq!(session.configuration().unwrap().interface_len,1);
+ }
+}
