@@ -1,4 +1,11 @@
-//! Monotonic time, clocksource selection, deadlines, and timer queues.
+//! Monotonic time and deadline primitives.
 //!
 //! Hardware timer drivers provide counters; this subsystem converts them into
-//! kernel time and scheduler deadlines.
+//! kernel time. Hardware selection and interrupt programming remain explicit
+//! platform-initialization responsibilities.
+
+pub mod clock;
+pub mod deadline;
+
+pub use clock::{ns_to_ticks_ceil, ticks_to_ns, ClockSource, MonotonicClock};
+pub use deadline::{earlier, Deadline};
