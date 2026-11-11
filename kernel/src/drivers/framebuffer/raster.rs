@@ -287,6 +287,43 @@ pub fn stroke_ellipse(
     }
     Ok(())
 }
+/// Stroke a quadratic Bézier curve with bounded, allocation-free subdivision.
+/// Depth is clamped to 10, limiting work to at most 1024 line segments.
+pub fn stroke_quadratic_bezier(target: &mut FramebufferSurface<'_>, start: (i64, i64), control: (i64, i64), end: (i64, i64), subdivision_depth: u8, color: Color) {
+    quadratic_subdivide(target, start, control, end, subdivision_depth.min(10), color);
+}
+
+#[inline]
+fn midpoint(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    (((a.0 as i128 + b.0 as i128) / 2) as i64, ((a.1 as i128 + b.1 as i128) / 2) as i64)
+}
+
+fn quadratic_subdivide(target: &mut FramebufferSurface<'_>, start: (i64, i64), control: (i64, i64), end: (i64, i64), depth: u8, color: Color) {
+    if depth == 0 { target.draw_line(start.0, start.1, end.0, end.1, color); return; }
+    let a = midpoint(start, control);
+    let b = midpoint(control, end);
+    let center = midpoint(a, b);
+    quadratic_subdivide(target, start, a, center, depth - 1, color);
+    quadratic_subdivide(target, center, b, end, depth - 1, color);
+}
+
+/// Stroke a cubic Bézier curve using de Casteljau subdivision.
+/// Depth is clamped to 10, limiting work to at most 1024 line segments.
+pub fn stroke_cubic_bezier(target: &mut FramebufferSurface<'_>, start: (i64, i64), control1: (i64, i64), control2: (i64, i64), end: (i64, i64), subdivision_depth: u8, color: Color) {
+    cubic_subdivide(target, start, control1, control2, end, subdivision_depth.min(10), color);
+}
+
+fn cubic_subdivide(target: &mut FramebufferSurface<'_>, start: (i64, i64), control1: (i64, i64), control2: (i64, i64), end: (i64, i64), depth: u8, color: Color) {
+    if depth == 0 { target.draw_line(start.0, start.1, end.0, end.1, color); return; }
+    let a = midpoint(start, control1);
+    let b = midpoint(control1, control2);
+    let c = midpoint(control2, end);
+    let d = midpoint(a, b);
+    let e = midpoint(b, c);
+    let center = midpoint(d, e);
+    cubic_subdivide(target, start, a, d, center, depth - 1, color);
+    cubic_subdivide(target, center, e, c, end, depth - 1, color);
+}
 /// Fill a triangle using integer scanline intersections.
 ///
 /// Horizontal edges are excluded from edge intersection generation, and each
@@ -420,6 +457,29 @@ mod tests {
         unsafe { FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap() }
     }
 
+    #[test]
+    fn quadratic_bezier_includes_endpoints() {
+        use super::stroke_quadratic_bezier;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        stroke_quadratic_bezier(&mut target, (1, 6), (4, 0), (6, 6), 3, Color::GREEN);
+        drop(target);
+        let pixel = |x: usize, y: usize| memory[(y * 8 + x) * 4 + 1] == 255;
+        assert!(pixel(1, 6));
+        assert!(pixel(6, 6));
+        assert!(pixel(3, 3) || pixel(4, 3));
+    }
+
+    #[test]
+    fn cubic_bezier_handles_extreme_control_points_without_overflow() {
+        use super::stroke_cubic_bezier;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        stroke_cubic_bezier(&mut target, (1, 1), (i64::MIN, i64::MAX), (i64::MAX, i64::MIN), (6, 6), 255, Color::RED);
+        drop(target);
+        assert_eq!(memory[(1 * 8 + 1) * 4], 255);
+        assert_eq!(memory[(6 * 8 + 6) * 4], 255);
+    }
     #[test]
     fn strokes_ellipse_without_filling_its_interior() {
         use super::stroke_ellipse;
