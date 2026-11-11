@@ -12,6 +12,7 @@ pub const DMA_BUFFER_ALIGNMENT: u64 = 16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DmaBufferError {
     Empty,
+    NullAddress,
     MisalignedAddress,
     AddressRangeOverflow,
     OverlappingBuffers,
@@ -48,7 +49,10 @@ impl<'a> DmaBuffer<'a> {
         if bytes.is_empty() {
             return Err(DmaBufferError::Empty);
         }
-        if dma_address == 0 || dma_address % DMA_BUFFER_ALIGNMENT != 0 {
+        if dma_address == 0 {
+            return Err(DmaBufferError::NullAddress);
+        }
+        if dma_address % DMA_BUFFER_ALIGNMENT != 0 {
             return Err(DmaBufferError::MisalignedAddress);
         }
         dma_address.checked_add(bytes.len() as u64)
@@ -148,6 +152,19 @@ mod tests {
         assert_eq!(DmaBuffer::new_for_test(0x4000, &mut empty).err(), Some(DmaBufferError::Empty));
         let mut bytes = [0u8; 32];
         assert_eq!(DmaBuffer::new_for_test(0x4001, &mut bytes).err(), Some(DmaBufferError::MisalignedAddress));
+    }
+
+    #[test]
+    fn rejects_null_and_overflowing_dma_address_ranges() {
+        let mut bytes = [0u8; 32];
+        assert_eq!(
+            DmaBuffer::new_for_test(0, &mut bytes).err(),
+            Some(DmaBufferError::NullAddress),
+        );
+        assert_eq!(
+            DmaBuffer::new_for_test(u64::MAX - 15, &mut bytes).err(),
+            Some(DmaBufferError::AddressRangeOverflow),
+        );
     }
 
     #[test]
