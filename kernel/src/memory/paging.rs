@@ -152,11 +152,15 @@ fn recursive_entry_address(
         return None;
     }
 
-    // The recursive alias uses [R, i0, ..., i(depth-1), 0, ...]
-    // as its table-page indices; the target entry is the byte offset.
+    // The recursive alias uses [R, i0, ..., i(depth-1), R, ...]
+    // to walk back through the self-reference until the target table page.
     let mut raw = recursive_slot as u64;
     for index in 0..levels as usize - 1 {
-        let value = if index < depth { indices[index] as u64 } else { 0 };
+        let value = if index < depth {
+            indices[index] as u64
+        } else {
+            recursive_slot as u64
+        };
         raw = (raw << 9) | value;
     }
     raw = (raw << 12) | ((indices[depth] as u64) * 8);
