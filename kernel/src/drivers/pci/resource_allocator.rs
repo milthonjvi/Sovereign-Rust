@@ -23,10 +23,10 @@ pub enum AllocationError {
 /// One available host-bridge or bridge aperture. `end` is exclusive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourceWindow {
-    pub space: ResourceSpace,
-    pub prefetchable: bool,
-    pub base: u64,
-    pub end: u64,
+    space: ResourceSpace,
+    prefetchable: bool,
+    base: u64,
+    end: u64,
     cursor: u64,
 }
 
@@ -46,6 +46,14 @@ impl ResourceWindow {
         };
         Ok(Self { space, prefetchable, base, end, cursor: base })
     }
+
+    pub const fn space(self) -> ResourceSpace { self.space }
+
+    pub const fn prefetchable(self) -> bool { self.prefetchable }
+
+    pub const fn base(self) -> u64 { self.base }
+
+    pub const fn end(self) -> u64 { self.end }
 
     pub const fn remaining(self) -> u64 {
         self.end - self.cursor
