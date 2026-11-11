@@ -272,4 +272,74 @@ mod tests {
         assert_eq!(restored[5], 0x1);
         assert_eq!(restored[1] as u16, 0x3);
     }
+
+    struct FaultInjectingConfig {
+        registers: RefCell<[u32; 64]>,
+        masks: [u32; MAX_BAR_REGISTERS],
+        accesses: core::cell::Cell<usize>,
+        fail_at: usize,
+    }
+
+    impl FaultInjectingConfig {
+        fn should_fail(&self) -> bool {
+            let next = self.accesses.get() + 1;
+            self.accesses.set(next);
+            next == self.fail_at
+        }
+    }
+
+    impl ConfigAccess for FaultInjectingConfig {
+        fn read_u32(&self, _address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+            if self.should_fail() {
+                return Err(ConfigError::OutOfRange);
+            }
+            let slot = (register / 4) as usize;
+            let value = self.registers.borrow()[slot];
+            if (BAR0..BAR0 + 24).contains(&register) && value == u32::MAX {
+                Ok(self.masks[((register - BAR0) / 4) as usize])
+            } else {
+                Ok(value)
+            }
+        }
+
+        fn write_u32(&self, _address: PciAddress, register: u16, value: u32) -> Result<(), ConfigError> {
+            if self.should_fail() {
+                return Err(ConfigError::OutOfRange);
+            }
+            let slot = (register / 4) as usize;
+            let mut registers = self.registers.borrow_mut();
+            if register == COMMAND_STATUS {
+                let old_status = registers[slot] >> 16;
+                let status = old_status & !(value >> 16);
+                registers[slot] = (status << 16) | (value & 0xffff);
+            } else {
+                registers[slot] = value;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn restores_bar_command_and_status_when_mask_read_fails() {
+        let mut registers = [0u32; 64];
+        registers[1] = (0xa55a << 16) | 0x0007;
+        registers[4] = 0x8000_0000;
+        let mock = FaultInjectingConfig {
+            registers: RefCell::new(registers),
+            masks: [0xffff_f000, 0, 0, 0, 0, 0],
+            accesses: core::cell::Cell::new(0),
+            // Six BAR reads, one Command/Status read, decode-disable write,
+            // BAR all-ones write, then the failing mask read.
+            fail_at: 10,
+        };
+        let mut sizes = [None; MAX_BAR_REGISTERS];
+        let result = unsafe { probe_bar_sizes(&mock, function(), &mut sizes) };
+        assert_eq!(result, Err(BarProbeError::Access(ConfigError::OutOfRange)));
+
+        let restored = mock.registers.borrow();
+        assert_eq!(restored[4], 0x8000_0000);
+        assert_eq!(restored[1] as u16, 0x0007);
+        assert_eq!(restored[1] >> 16, 0xa55a);
+    }
+
 }
