@@ -28,7 +28,7 @@ impl SuperSpeedHubDescriptor{
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(u16)]
-pub enum HubPortFeature{Connection=0,Enable=1,Suspend=2,OverCurrent=3,Reset=4,BHPortReset=28,Power=8,LowSpeed=9,ConnectionChange=16,EnableChange=17,SuspendChange=18,OverCurrentChange=19,ResetChange=20}
+pub enum HubPortFeature{Connection=0,Enable=1,Suspend=2,OverCurrent=3,Reset=4,PortLinkState=5,BHPortReset=28,Power=8,LowSpeed=9,ConnectionChange=16,EnableChange=17,SuspendChange=18,OverCurrentChange=19,ResetChange=20}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct HubPort{pub number:u8,pub connected:bool,pub enabled:bool,pub powered:bool,pub speed_bits:u8}
 
@@ -93,18 +93,18 @@ impl HubPortStatus{
  pub const fn superspeed_link_state(self)->u8{((self.status>>5)&0x0f)as u8}
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange}
+pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,WarmResume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange}
 impl HubPortAction{
  pub const fn feature(self)->u16{
   match self{
-   Self::PowerOn|Self::PowerOff=>8,Self::Reset=>4,Self::WarmReset=>28,Self::Enable=>1,Self::Suspend|Self::Resume=>2,
+   Self::PowerOn|Self::PowerOff=>8,Self::Reset=>4,Self::WarmReset=>28,Self::PortLinkState=>5,Self::Enable=>1,Self::Suspend|Self::Resume=>2,Self::WarmResume=>5,
    Self::ClearConnectionChange=>16,Self::ClearEnableChange=>17,Self::ClearSuspendChange=>18,
    Self::ClearOverCurrentChange=>19,Self::ClearResetChange=>20,
   }
  }
  pub const fn request(self)->u8{
   match self{
-   Self::PowerOn|Self::Reset|Self::WarmReset|Self::Enable|Self::Suspend=>HUB_SET_FEATURE,
+   Self::PowerOn|Self::Reset|Self::WarmReset|Self::WarmResume|Self::Enable|Self::Suspend=>HUB_SET_FEATURE,
    Self::PowerOff|Self::Resume|Self::ClearConnectionChange|Self::ClearEnableChange|
    Self::ClearSuspendChange|Self::ClearOverCurrentChange|Self::ClearResetChange=>HUB_CLEAR_FEATURE,
   }
