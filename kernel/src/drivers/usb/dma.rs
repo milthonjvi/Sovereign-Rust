@@ -26,7 +26,7 @@ impl DmaConstraints{
    ||(self.boundary!=0&&!self.boundary.is_power_of_two()){
    return Err(UsbError::MalformedDescriptor)
   }
-  if length==0||address as usize&(self.alignment-1)!=0{
+  if length==0||address&((self.alignment as u64)-1)!=0{
    return Err(UsbError::InvalidAddress)
   }
   if self.max_length!=0&&length>self.max_length{return Err(UsbError::NoResources)}
