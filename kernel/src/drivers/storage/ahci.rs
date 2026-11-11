@@ -483,8 +483,11 @@ impl AhciPortSnapshot {
     pub const fn task_file_busy(self) -> bool { self.task_file_data & (1 << 7) != 0 }
     pub const fn task_file_data_request(self) -> bool { self.task_file_data & (1 << 3) != 0 }
     pub const fn task_file_device_fault(self) -> bool { self.task_file_data & (1 << 5) != 0 }
+    /// True only when ATA task-file status permits a new command.
+    /// Device Fault (DF) is a fault state, not an idle/ready state.
     pub const fn task_file_ready(self) -> bool {
-        !self.task_file_error() && !self.task_file_busy() && !self.task_file_data_request()
+        !self.task_file_error() && !self.task_file_device_fault()
+            && !self.task_file_busy() && !self.task_file_data_request()
     }
     pub const fn interface_fatal(self) -> bool { self.interrupt_status & (1 << 27) != 0 }
     pub const fn has_command_error(self) -> bool {
