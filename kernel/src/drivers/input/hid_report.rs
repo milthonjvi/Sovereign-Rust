@@ -625,8 +625,27 @@ impl HidReportDecoder {
                                 }, producer, &mut stats);
                             }
                         }
-                        _ => {}
+                        _ => {
+                            if field.application_page != 0x0D && (!had_old || old != value) {
+                                self.emit(InputEvent::HidUsage {
+                                    device: self.device, usage_page: field.usage_page, usage, value,
+                                    logical_min: field.logical_min, logical_max: field.logical_max,
+                                    application_page: field.application_page,
+                                    application_usage: field.application_usage,
+                                    relative: field.is_relative(),
+                                }, producer, &mut stats);
+                            }
+                        }
                     }
+                } else if field.usage_page != 0x0D && (!had_old || old != value) {
+                    let usage = field_usage(field, element);
+                    self.emit(InputEvent::HidUsage {
+                        device: self.device, usage_page: field.usage_page, usage, value,
+                        logical_min: field.logical_min, logical_max: field.logical_max,
+                        application_page: field.application_page,
+                        application_usage: field.application_usage,
+                        relative: field.is_relative(),
+                    }, producer, &mut stats);
                 }
                 self.previous[slot] = value;
                 self.initialized[slot] = true;
