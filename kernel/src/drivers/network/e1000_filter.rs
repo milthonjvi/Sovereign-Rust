@@ -95,7 +95,9 @@ mod tests {
         let mut filter = E1000MulticastFilter::empty();
         assert_eq!(filter.insert(address), Ok(()));
         assert!(filter.accepts(address));
-        assert_eq!(filter.registers()[0x563 >> 5] & (1 << (0x563 & 0x1f)), 1 << (0x563 & 0x1f));
+        let register = 0x563usize >> 5;
+        let bit = 1u32 << (0x563usize & 0x1f);
+        assert_eq!(filter.registers()[register] & bit, bit);
     }
 
     #[test]
