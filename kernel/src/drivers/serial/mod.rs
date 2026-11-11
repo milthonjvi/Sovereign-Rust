@@ -5,7 +5,7 @@
 mod irq;
 mod rx;
 mod tx;
-pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, receive_statistics, transmit_async, transmit_pending, UartIrqError, UartRxStatistics};
+pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, receive_statistics, transmit_async, transmit_pending, transmit_statistics, UartIrqError, UartRxStatistics, UartTxStatistics};
 pub use rx::UartRxBuffer;
 pub use tx::UartTxBuffer;
 
