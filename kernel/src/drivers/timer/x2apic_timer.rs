@@ -436,9 +436,9 @@ mod tests {
 
     #[test]
     fn calibrates_apic_bus_clock_from_invariant_tsc() {
-        // 6,250 APIC ticks / 25,000,000 TSC ticks at 2.5 GHz, divided by 16.
+        // 62,500 APIC ticks / 25,000,000 TSC ticks at 2.5 GHz, divided by 16.
         assert_eq!(
-            calibrated_bus_clock_hz_from_tsc(6_250, 25_000_000, 2_500_000_000, ApicDivide::By16),
+            calibrated_bus_clock_hz_from_tsc(62_500, 25_000_000, 2_500_000_000, ApicDivide::By16),
             Ok(100_000_000)
         );
         assert_eq!(
