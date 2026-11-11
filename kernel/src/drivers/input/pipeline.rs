@@ -4,7 +4,7 @@
 //! from one serialized interrupt producer; consume through the paired endpoint.
 //! Hardware port reads and PIC EOI remain the IRQ adapter's responsibility.
 
-use super::event::InputEvent;
+use super::event::{InputDeviceId, InputEvent};
 use super::keyboard::set1::Set1Decoder;
 use super::mouse::packet::Ps2MouseDecoder;
 use super::queue::{SpscConsumer, SpscProducer, SpscQueue};
@@ -49,6 +49,7 @@ impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
                 keyboard: Set1Decoder::new(),
                 mouse: Ps2MouseDecoder::new_with_protocol(protocol),
                 stats: InputPipelineStats::default(),
+                resync_required: false,
             },
             consumer,
         )
@@ -91,7 +92,21 @@ impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
             self.stats.controller_errors = self.stats.controller_errors.saturating_add(1);
             self.keyboard.reset_stream();
             self.mouse.reset_stream();
+            self.resync_required = true;
             return;
+        }
+
+        // A lost transition can leave a key or button logically held forever.
+        // Publish a consumer reset before accepting more bytes; while the
+        // queue remains full, discard input rather than emit out-of-order state.
+        if self.resync_required {
+            if self.producer.push(InputEvent::DeviceStateReset { device: InputDeviceId(0) }).is_err() {
+                self.stats.dropped_events = self.stats.dropped_events.saturating_add(1);
+                return;
+            }
+            self.keyboard.reset_state();
+            self.mouse.reset_stream();
+            self.resync_required = false;
         }
 
         if status & STATUS_AUXILIARY != 0 {
@@ -111,8 +126,10 @@ impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
 
     #[inline]
     fn publish(&mut self, event: InputEvent) {
+        if self.resync_required { return; }
         if self.producer.push(event).is_err() {
             self.stats.dropped_events = self.stats.dropped_events.saturating_add(1);
+            self.resync_required = true;
         }
     }
 
@@ -158,6 +175,23 @@ mod tests {
         pipeline.feed(STATUS_AUXILIARY, 0x00);
         assert_eq!(consumer.pop(), Some(InputEvent::MouseMotion { dx: 2, dy: 0 }));
         assert_eq!(pipeline.stats().controller_errors, 1);
+    }
+
+    #[test]
+    fn queue_overflow_resets_consumer_before_accepting_more_input() {
+        let mut queue = SpscQueue::<InputEvent, 3>::new();
+        let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&mut queue, false);
+        pipeline.feed(0, 0x1E); // Key-down is dropped because queue is filled below.
+        // Drain the first key event, then fill the queue and force another drop.
+        assert!(matches!(consumer.pop(), Some(InputEvent::Key { code: KeyCode::A, pressed: true, .. })));
+        pipeline.feed(0, 0x1E); // Repeat event enters the queue.
+        pipeline.feed(0, 0x30); // B event enters the queue.
+        pipeline.feed(0, 0x2E); // C event is dropped and requires resync.
+        while consumer.pop().is_some() {}
+        pipeline.feed(0, 0x1E);
+        assert_eq!(consumer.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(0) }));
+        assert_eq!(consumer.pop(), Some(InputEvent::Key { code: KeyCode::A, pressed: true, repeat: false }));
+        assert_eq!(pipeline.stats().dropped_events, 1);
     }
 
     #[test]
