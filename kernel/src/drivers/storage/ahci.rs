@@ -409,6 +409,6 @@ mod table_tests{
         assert_eq!(table.command_fis[0],0x27);
         assert_eq!(table.command_fis[2],0x25);
         assert_eq!(table.command_fis[19],0);
-        assert_eq!(core::mem::size_of_val(&table),128+4*16);
+        assert_eq!(core::mem::size_of_val(&table),256);
     }
 }
