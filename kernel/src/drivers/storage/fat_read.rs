@@ -175,18 +175,21 @@ pub fn enumerate_directory<D: BlockDevice>(
 
 /// Read from the primary FAT copy (copy zero).
 pub fn read_fat_entry<D: BlockDevice>(device: &mut D, volume: &FatVolume, cluster: u32, scratch: &mut [u8]) -> Result<FatChainValue, FatError> {
-    read_fat_entry_from_copy(device, volume, 0, cluster, scratch)
+    read_fat_entry_from_copy(device, volume, volume.bpb.active_fat, cluster, scratch)
 }
 
 /// Compare a cluster-chain entry across all FAT copies and report divergence.
 pub fn verify_fat_mirrors<D: BlockDevice>(
     device: &mut D, volume: &FatVolume, cluster: u32, scratch: &mut [u8],
 ) -> Result<FatChainValue, FatError> {
-    let primary = read_fat_entry_from_copy(device, volume, 0, cluster, scratch)?;
-    let mut copy = 1u8;
+    let primary = read_fat_entry_from_copy(device, volume, volume.bpb.active_fat, cluster, scratch)?;
+    if !volume.bpb.fat_mirroring_enabled { return Ok(primary); }
+    let mut copy = 0u8;
     while copy < volume.bpb.fat_count {
-        let candidate = read_fat_entry_from_copy(device, volume, copy, cluster, scratch)?;
-        if candidate != primary { return Err(FatError::FatMirrorMismatch); }
+        if copy != volume.bpb.active_fat {
+            let candidate = read_fat_entry_from_copy(device, volume, copy, cluster, scratch)?;
+            if candidate != primary { return Err(FatError::FatMirrorMismatch); }
+        }
         copy += 1;
     }
     Ok(primary)
