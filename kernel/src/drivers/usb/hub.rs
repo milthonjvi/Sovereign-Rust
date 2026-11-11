@@ -216,6 +216,16 @@ impl HubPortMachine{
   HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;Some(if self.superspeed{HubPortAction::WarmReset}else{HubPortAction::Reset})},
   HubPortState::ClearResetChange=>{self.state=HubPortState::Ready;Some(HubPortAction::ClearResetChange)},
   HubPortState::OverCurrent=>{self.state=HubPortState::OverCurrentLatched;Some(HubPortAction::PowerOff)},_=>None}}
+ /// Call when the corresponding class request failed so the action can be retried.
+ pub fn action_failed(&mut self,action:HubPortAction){
+  match action{
+   HubPortAction::PowerOn if self.state==HubPortState::PowerGoodWait=>self.state=HubPortState::Unpowered,
+   HubPortAction::Reset|HubPortAction::WarmReset if self.state==HubPortState::Resetting=>self.state=HubPortState::ResetRequired,
+   HubPortAction::ClearResetChange if self.state==HubPortState::Ready=>self.state=HubPortState::ClearResetChange,
+   HubPortAction::PowerOff if self.state==HubPortState::OverCurrentLatched=>self.state=HubPortState::OverCurrent,
+   _=>{}
+  }
+ }
  pub const fn ready(&self)->bool{matches!(self.state,HubPortState::Ready)}
 }
 #[cfg(test)]mod port_machine_tests{
