@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::drivers::input::event::InputEvent;
 use crate::drivers::input::pipeline::Ps2InputPipeline;
-use crate::drivers::input::ps2::{Ps2Controller, Ps2MouseProtocol};
+use crate::drivers::input::ps2::{Ps2Controller, Ps2Error, Ps2MouseProtocol};
 use crate::drivers::input::queue::{SpscConsumer, SpscQueue};
 
 const KEYBOARD_VECTOR: u8 = 0x21;
@@ -38,6 +38,10 @@ pub enum Ps2IrqError {
     ControllerNotInitialized,
     InterruptsEnabled,
     InterruptInfrastructureUnavailable,
+    ContextNotInstalled,
+    NoDevicesSelected,
+    DeviceUnavailable,
+    Controller(Ps2Error),
 }
 
 /// Owns a permanent IRQ-side pipeline. Once registered, the service remains
@@ -170,6 +174,140 @@ impl<const N: usize> Ps2IrqService<N> {
             });
         }
 
+        Ok(())
+    }
+
+    /// Enables selected PS/2 IRQ sources after both callbacks are registered
+    /// and the device protocols have been configured.
+    ///
+    /// i8042 IRQ bits are enabled while PIC lines remain masked; PIC lines are
+    /// unmasked only after controller configuration succeeds.
+    ///
+    /// # Safety
+    /// Call on the BSP with IF clear. Device ports/protocols must be configured,
+    /// and no other context may access i8042 ports.
+    pub unsafe fn activate(
+        &'static self,
+        keyboard: bool,
+        mouse: bool,
+    ) -> Result<(), Ps2IrqError> {
+        if !keyboard && !mouse {
+            return Err(Ps2IrqError::NoDevicesSelected);
+        }
+        let expected = &self.header as *const IrqContextHeader as *mut IrqContextHeader;
+        if ACTIVE_PS2_CONTEXT.load(Ordering::Acquire) != expected {
+            return Err(Ps2IrqError::ContextNotInstalled);
+        }
+
+        let flags: u64;
+        // SAFETY: The caller guarantees CPL 0; this only inspects RFLAGS.
+        unsafe {
+            core::arch::asm!(
+                "pushfq",
+                "pop {flags}",
+                flags = out(reg) flags,
+                options(nomem, preserves_flags)
+            );
+        }
+        if flags & (1 << 9) != 0 {
+            return Err(Ps2IrqError::InterruptsEnabled);
+        }
+        if (keyboard && !self.controller.keyboard_available())
+            || (mouse && !self.controller.mouse_available())
+        {
+            return Err(Ps2IrqError::DeviceUnavailable);
+        }
+
+        if keyboard {
+            // SAFETY: IF is clear and this service owns i8042 access.
+            unsafe { self.controller.enable_keyboard_irq() }
+                .map_err(Ps2IrqError::Controller)?;
+        }
+        if mouse {
+            // SAFETY: Same serialized early-boot controller ownership.
+            if let Err(error) = unsafe { self.controller.enable_mouse_irq() } {
+                if keyboard {
+                    let _ = unsafe { self.controller.disable_keyboard_irq() };
+                }
+                return Err(Ps2IrqError::Controller(error));
+            }
+        }
+
+        if keyboard {
+            // SAFETY: IRQ1 callback is registered and the i8042 source is enabled.
+            if unsafe { crate::interrupts::init::unmask_legacy_irq(1) }.is_err() {
+                if mouse {
+                    let _ = unsafe { self.controller.disable_mouse_irq() };
+                }
+                let _ = unsafe { self.controller.disable_keyboard_irq() };
+                return Err(Ps2IrqError::InterruptInfrastructureUnavailable);
+            }
+        }
+        if mouse {
+            // SAFETY: IRQ12 callback is registered and the i8042 source is enabled.
+            if unsafe { crate::interrupts::init::unmask_legacy_irq(12) }.is_err() {
+                if keyboard {
+                    let _ = unsafe { crate::interrupts::init::mask_legacy_irq(1) };
+                    let _ = unsafe { self.controller.disable_keyboard_irq() };
+                }
+                let _ = unsafe { self.controller.disable_mouse_irq() };
+                return Err(Ps2IrqError::InterruptInfrastructureUnavailable);
+            }
+        }
+        Ok(())
+    }
+
+    /// Masks PIC lines before disabling the corresponding i8042 IRQ sources.
+    ///
+    /// # Safety
+    /// Call on the BSP with IF clear and without concurrent i8042 access.
+    pub unsafe fn deactivate(
+        &'static self,
+        keyboard: bool,
+        mouse: bool,
+    ) -> Result<(), Ps2IrqError> {
+        if !keyboard && !mouse {
+            return Err(Ps2IrqError::NoDevicesSelected);
+        }
+        let expected = &self.header as *const IrqContextHeader as *mut IrqContextHeader;
+        if ACTIVE_PS2_CONTEXT.load(Ordering::Acquire) != expected {
+            return Err(Ps2IrqError::ContextNotInstalled);
+        }
+
+        let flags: u64;
+        // SAFETY: The caller guarantees CPL 0; this only inspects RFLAGS.
+        unsafe {
+            core::arch::asm!(
+                "pushfq",
+                "pop {flags}",
+                flags = out(reg) flags,
+                options(nomem, preserves_flags)
+            );
+        }
+        if flags & (1 << 9) != 0 {
+            return Err(Ps2IrqError::InterruptsEnabled);
+        }
+
+        if keyboard {
+            // SAFETY: IF is clear and the PIC is exclusively managed by init.
+            unsafe { crate::interrupts::init::mask_legacy_irq(1) }
+                .map_err(|_| Ps2IrqError::InterruptInfrastructureUnavailable)?;
+        }
+        if mouse {
+            // SAFETY: Same serialized PIC ownership.
+            unsafe { crate::interrupts::init::mask_legacy_irq(12) }
+                .map_err(|_| Ps2IrqError::InterruptInfrastructureUnavailable)?;
+        }
+        if keyboard {
+            // SAFETY: PIC line is masked before disabling the device source.
+            unsafe { self.controller.disable_keyboard_irq() }
+                .map_err(Ps2IrqError::Controller)?;
+        }
+        if mouse {
+            // SAFETY: PIC line is masked before disabling the device source.
+            unsafe { self.controller.disable_mouse_irq() }
+                .map_err(Ps2IrqError::Controller)?;
+        }
         Ok(())
     }
 }
