@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use crate::arch::x86_64::{cpuid::CpuInfo, x2apic::{self, X2Apic}};
 
 use crate::arch::x86_64::tss;
-use super::{exceptions, idt::Idt, irq, pic::Pic8259};
+use super::{apic, exceptions, idt::Idt, irq, pic::Pic8259};
 
 static mut BOOTSTRAP_IDT: Idt = Idt::new();
 static mut LEGACY_PIC: Pic8259 = unsafe { Pic8259::new() };
@@ -48,6 +48,7 @@ pub enum InterruptInitError {
     IdtConfiguration,
     IncompleteIdt,
     IrqGateConfiguration,
+    ApicGateConfiguration,
     PicConfiguration,
     LocalApicConfiguration,
 }
@@ -91,6 +92,10 @@ unsafe fn initialize_inner() -> Result<(), InterruptInitError> {
     // SAFETY: PIC vectors 0x20..=0x2F replace their fatal fallback gates.
     unsafe { irq::install_irq_gates(idt, irq::IRQ_VECTOR_OFFSET) }
         .map_err(|_| InterruptInitError::IrqGateConfiguration)?;
+    // SAFETY: APIC vectors occupy 0x30..=0xFE except the reserved syscall
+    // vector; all sources remain masked until an owner registers a handler.
+    unsafe { apic::install_apic_gates(idt) }
+        .map_err(|_| InterruptInitError::ApicGateConfiguration)?;
     if idt.present_count() != 256 {
         return Err(InterruptInitError::IncompleteIdt);
     }
@@ -240,4 +245,25 @@ pub enum LegacyIrqError {
     HandlerAlreadyRegistered,
     HandlerNotRegistered,
     PicFailure,
+}
+
+/// Send EOI for a genuine local-APIC or I/O-APIC interrupt.
+///
+/// # Safety
+/// Must be called from the local APIC interrupt path on a CPU whose x2APIC
+/// mode was enabled and initialized during bootstrap.
+pub(super) unsafe fn end_local_apic_irq() -> Result<(), LocalApicEoiError> {
+    if local_apic_mode() != LocalApicMode::X2Apic {
+        return Err(LocalApicEoiError::LocalApicUnavailable);
+    }
+    // SAFETY: The caller is executing on the BSP and bootstrap enabled x2APIC.
+    let mut local_apic = unsafe { X2Apic::new() };
+    local_apic.end_of_interrupt();
+    Ok(())
+}
+
+/// Errors returned by local APIC EOI operations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalApicEoiError {
+    LocalApicUnavailable,
 }
