@@ -29,6 +29,9 @@ pub struct Fadt {
     pub extended_pm_registers: Option<ExtendedPmRegisters>,
     pub sleep_control_register: Option<GenericAddress>,
     pub sleep_status_register: Option<GenericAddress>,
+    /// Hypervisor vendor identity introduced in ACPI 6.2 (FADT offset 268).
+    /// Zero means firmware does not identify a hypervisor.
+    pub hypervisor_vendor_identity: Option<u64>,
 }
 
 /// Platform power-management model advertised by FADT flags.
@@ -71,6 +74,7 @@ impl Fadt {
             || (b.len() > 140 && b.len() < 148)
             || (b.len() > 148 && b.len() < 244)
             || (b.len() > 244 && b.len() < 268)
+            || (b.len() > 268 && b.len() < 276)
         {
             return Err(AcpiError::InvalidLength);
         }
@@ -105,6 +109,11 @@ impl Fadt {
             (Some(GenericAddress::parse(&b[244..256])?),
              Some(GenericAddress::parse(&b[256..268])?))
         } else { (None, None) };
+        let hypervisor_vendor_identity = if b.len() >= 276 {
+            Some(read_u64(b, 268)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             firmware_ctrl: read_u32(b, 36)?,
@@ -142,6 +151,7 @@ impl Fadt {
             extended_pm_registers,
             sleep_control_register,
             sleep_status_register,
+            hypervisor_vendor_identity,
         })
     }
 
@@ -244,6 +254,11 @@ impl Fadt {
     /// Validate the complete PM register metadata without accessing hardware.
     /// Extended GAS widths must describe the byte lengths declared by the FADT.
     pub fn validate_pm_registers(&self) -> Result<(), AcpiError> {
+        // ACPI requires OSPM to ignore the legacy fixed-register interface
+        // entirely when HW_REDUCED_ACPI is set.
+        if self.pm_hardware_mode() == PmHardwareMode::HardwareReduced {
+            return Ok(());
+        }
         self.register_block_lengths.validate()?;
         if let Some(registers) = self.extended_pm_registers {
             registers.validate_against_lengths(self.register_block_lengths)?;
@@ -309,8 +324,8 @@ pub struct PmRegisterBlockLengths {
 impl PmRegisterBlockLengths {
     /// Validate size constraints defined by the ACPI register model.
     pub fn validate(self) -> Result<(), AcpiError> {
-        if (self.pm1_event != 0 && (self.pm1_event < 4 || self.pm1_event % 2 != 0))
-            || (self.pm1_control != 0 && self.pm1_control < 2)
+        if (self.pm1_event != 0 && self.pm1_event != 4)
+            || (self.pm1_control != 0 && self.pm1_control != 2)
             || (self.pm2_control != 0 && self.pm2_control != 1)
             || (self.pm_timer != 0 && self.pm_timer != 4)
             || self.gpe0 % 2 != 0
@@ -360,6 +375,12 @@ impl ExtendedPmRegisters {
                 continue;
             }
             if length == 0 || gas.bit_width as u16 != (length as u16) * 8 {
+                return Err(AcpiError::InvalidGas);
+            }
+            if gas.address == self.pm2_control.address
+                && gas.address_space == self.pm2_control.address_space
+                && gas.bit_width != 8
+            {
                 return Err(AcpiError::InvalidGas);
             }
             let end = gas.address.checked_add(length as u64)
