@@ -49,7 +49,14 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// The descriptor slices must alias the exact pinned DMA ring memory that
     /// was programmed into RDBA/TDBA. Every DmaBuffer must refer to the same
     /// pinned mapping and cache-coherency domain as its device DMA address.
-    pub fn new(
+    ///
+    /// # Safety
+    /// The descriptor slices must be the live, pinned DMA rings programmed into
+    /// this NIC. Every DmaBuffer must reference a valid device-visible mapping,
+    /// with RX buffers writable by the device and TX buffers retained until DD.
+    /// The MMIO accessor must target the same device and no other owner may
+    /// mutate these rings or buffers for the lifetime of this adapter.
+    pub unsafe fn new(
         registers: &'a mut R,
         rx_descriptors: &'a mut [RxDescriptor],
         tx_descriptors: &'a mut [TxDescriptor],
@@ -477,10 +484,12 @@ mod tests {
         for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
             descriptor.buffer_address = buffer.dma_address();
         }
-        let mut device = E1000Device::new(
+        // SAFETY: the mock register backend does not perform DMA; backing arrays model
+        // the pinned rings and device-visible buffers required by the constructor.
+        let mut device = unsafe { E1000Device::new(
             &mut registers, &mut rx_descriptors, &mut tx_descriptors,
             &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
-        ).unwrap();
+        ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
         let first = [0x11u8; 64];
@@ -516,10 +525,12 @@ mod tests {
         let mut tx_buffers: [DmaBuffer<'_>; 8] = tx_storage.iter_mut().enumerate()
             .map(|(i, bytes)| DmaBuffer::new(0x20000 + i as u64 * 2048, bytes).unwrap())
             .collect::<Vec<_>>().try_into().ok().unwrap();
-        let mut device = E1000Device::new(
+        // SAFETY: the mock register backend does not perform DMA; backing arrays model
+        // the pinned rings and device-visible buffers required by the constructor.
+        let mut device = unsafe { E1000Device::new(
             &mut registers, &mut rx_descriptors, &mut tx_descriptors,
             &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
-        ).unwrap();
+        ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
         let mut first = [0u8; 128];
