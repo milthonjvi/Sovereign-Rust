@@ -183,16 +183,22 @@ pub struct FatDirEntry {
 }
 impl FatDirEntry {
     pub fn parse(raw: &[u8]) -> Result<Option<Self>, FatError> {
+        Self::parse_for_kind(raw, FatKind::Fat32)
+    }
+    pub fn parse_for_kind(raw: &[u8], kind: FatKind) -> Result<Option<Self>, FatError> {
         if raw.len() < 32 { return Err(FatError::InvalidDirectoryEntry); }
         if raw[0] == 0x00 || raw[0] == 0xE5 || raw[11] == 0x0F || raw[11] & 0x08 != 0 {
             return Ok(None);
         }
+        if raw[11] & 0xC0 != 0 { return Err(FatError::InvalidDirectoryEntry); }
+        let high = le16(raw, 20);
+        if kind != FatKind::Fat32 && high != 0 { return Err(FatError::InvalidDirectoryEntry); }
         let mut name = [0u8; 11];
         name.copy_from_slice(&raw[..11]);
         Ok(Some(Self {
             short_name: name,
             attributes: raw[11],
-            first_cluster: ((le16(raw, 20) as u32) << 16) | le16(raw, 26) as u32,
+            first_cluster: if kind == FatKind::Fat32 { ((high as u32 & 0x0FFF) << 16) | le16(raw, 26) as u32 } else { le16(raw, 26) as u32 },
             file_size: le32(raw, 28),
         }))
     }
