@@ -144,7 +144,10 @@ impl LocalApicTimer {
         initial_count: u32,
         masked: bool,
     ) -> Result<(), DriverError> {
-        if vector < 32 {
+        // Only vectors installed by the common APIC IDT/dispatcher are
+        // valid here. This excludes exceptions, the reserved syscall vector,
+        // and the APIC spurious vector.
+        if !crate::interrupts::apic::is_apic_vector(vector) {
             return Err(DriverError::InvalidConfiguration);
         }
         if mode == ApicTimerMode::TscDeadline && initial_count != 0 {
