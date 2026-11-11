@@ -102,14 +102,34 @@ impl EfiMemoryMapBuffer {
         &mut self,
         image_handle: EfiHandle,
     ) -> Result<CapturedMemoryMap, EfiStatus> {
+        // SAFETY: The empty callback performs no allocation or firmware call.
+        unsafe { self.exit_boot_services_with(image_handle, |_| {}) }
+    }
+
+    /// Variant that refreshes handoff metadata between GetMemoryMap and
+    /// ExitBootServices. The callback must only update already allocated
+    /// memory; it must not allocate or call any firmware service.
+    ///
+    /// # Safety
+    /// The image handle and Boot Services table must be valid. The callback
+    /// must not allocate, invoke firmware, or mutate the memory map.
+    pub unsafe fn exit_boot_services_with<F>(
+        &mut self,
+        image_handle: EfiHandle,
+        mut before_exit: F,
+    ) -> Result<CapturedMemoryMap, EfiStatus>
+    where
+        F: FnMut(CapturedMemoryMap),
+    {
         const MAX_ATTEMPTS: usize = 4;
         for _ in 0..MAX_ATTEMPTS {
             let captured = self.capture()?;
-            // SAFETY: This provider retains the live table until successful exit.
+            before_exit(captured);
+            // SAFETY: The provider retains the live table until successful exit.
             let boot = unsafe { self.boot_services.as_mut() }.ok_or(EFI_UNSUPPORTED)?;
             let exit = boot.exit_boot_services.ok_or(EFI_UNSUPPORTED)?;
-            // SAFETY: The map key was captured immediately above; no firmware
-            // call or allocation occurs between capture and this invocation.
+            // SAFETY: The map key was captured immediately above. The callback
+            // contract forbids firmware calls and allocations before this call.
             let status = unsafe { exit(image_handle, captured.map_key) };
             if status == EFI_SUCCESS {
                 return Ok(captured);
