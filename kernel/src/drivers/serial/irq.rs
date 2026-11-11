@@ -112,6 +112,7 @@ pub enum UartIrqError {
     Uart(UartError),
     InterruptSubsystem,
     HandlerAlreadyOwned,
+    TransmitPending,
 }
 
 struct PortBinding {
@@ -222,6 +223,10 @@ pub unsafe fn detach_interrupts(uart: &mut Uart16550) -> Result<(), UartIrqError
         return Err(UartIrqError::NotAttached);
     }
 
+    if !port.tx_queue.is_empty() {
+        return Err(UartIrqError::TransmitPending);
+    }
+
     let last_on_line = current & port.shared_line_mask == port.bit;
     if last_on_line {
         // SAFETY: IF is clear; this driver owns the registered shared-line handler.
@@ -259,6 +264,11 @@ pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, Ua
         unsafe { io::out8(uart.base_port() + IER, RX_INTERRUPT_ENABLE | THRE_INTERRUPT_ENABLE); }
     }
     Ok(accepted)
+}
+
+/// Returns the number of bytes waiting in a legacy UART's TX queue.
+pub fn transmit_pending(base: u16) -> Option<usize> {
+    binding(base).map(|port| port.tx_queue.len())
 }
 
 /// Returns the static RX queue associated with a legacy UART base port.
