@@ -12,6 +12,12 @@ use crate::drivers::acpi::{AcpiError, rsdp::Rsdp};
 const COMMON_MAGIC_0: u64 = 0xc7b1_dd30_df4c_8b88;
 const COMMON_MAGIC_1: u64 = 0x0a82_e883_a194_f07b;
 
+/// ACPI firmware tables must reside in memory retained for firmware data,
+/// not ordinary usable RAM, bad memory, or the framebuffer aperture.
+const fn is_acpi_memory_type(kind: u64) -> bool {
+    matches!(kind, 1 | 2 | 3) // RESERVED, ACPI_RECLAIMABLE, ACPI_NVS
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LimineRequest<T> {
@@ -205,7 +211,7 @@ impl LimineBootInfo {
                 continue;
             };
             let header_end = physical.checked_add(36)?;
-            if entry.kind != 4 && entry.kind != 7
+            if is_acpi_memory_type(entry.kind)
                 && physical >= entry.base && header_end <= end
             {
                 containing_end = Some(end);
@@ -267,8 +273,7 @@ impl LimineBootInfo {
             let Some(end) = entry.base.checked_add(entry.length) else {
                 continue;
             };
-            if entry.kind != 4
-                && entry.kind != 7
+            if is_acpi_memory_type(entry.kind)
                 && physical >= entry.base
                 && header_end <= end
             {
