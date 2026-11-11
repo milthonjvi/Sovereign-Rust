@@ -1,8 +1,8 @@
 //! Local APIC timer register operations and calibration helpers.
 //!
-//! The local APIC must already be enabled, its MMIO page mapped, and its
-//! interrupt vector installed before the timer is unmasked. TSC-deadline MSR
-//! programming remains the responsibility of the architecture/MSR layer.
+//! xAPIC countdown access requires a mapped MMIO page; x2APIC countdown and
+//! TSC-deadline access use the architectural MSR register bank. The local APIC
+//! and interrupt vector must be initialized before any timer source is unmasked.
 
 use core::{marker::PhantomData, ptr::{read_volatile, write_volatile, NonNull}};
 use crate::{
