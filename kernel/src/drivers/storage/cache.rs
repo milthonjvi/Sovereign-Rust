@@ -53,7 +53,7 @@ impl<'a, D: BlockDevice, const N: usize> BlockCache<'a, D, N> {
             return Some(index);
         }
         let index = self.lines.iter().enumerate().min_by_key(|(_, line)| line.last_used).map(|(i, _)| i)?;
-        self.lines[index] = CacheLine { lba, valid: true, last_used: 0 };
+        self.lines[index] = CacheLine { lba, valid: false, last_used: 0 };
         self.stats.evictions = self.stats.evictions.saturating_add(1);
         Some(index)
     }
