@@ -928,10 +928,11 @@ mod tests {
         let mut tx_storage = [[0u8; 2048]; 8];
         rx_storage[0][..64].fill(0x31);
         rx_storage[1][..96].fill(0x42);
+        rx_storage[2][..64].fill(0x53);
         for (index, descriptor) in rx_descriptors.iter_mut().enumerate() {
             descriptor.buffer_address = 0x10000 + index as u64 * 2048;
-            if index < 2 {
-                descriptor.length = if index == 0 { 64 } else { 96 };
+            if index < 3 {
+                descriptor.length = match index { 0 => 64, 1 => 96, _ => 64 };
                 descriptor.status = RXD_STATUS_DD | RXD_STATUS_EOP;
             }
         }
@@ -976,6 +977,18 @@ mod tests {
         assert_eq!(device.receive_batch(&mut outputs, &mut completions, &mut backup), Ok(2));
         assert_eq!(&first[..64], &[0x31; 64]);
         assert_eq!(&second[..96], &[0x42; 96]);
+
+        let mut observed = [0u8; 64];
+        let mut observed_length = 0usize;
+        assert_eq!(
+            device.receive_with(|frame| {
+                observed_length = frame.len();
+                observed[..frame.len()].copy_from_slice(frame);
+            }),
+            Ok(1),
+        );
+        assert_eq!(observed_length, 64);
+        assert_eq!(observed, [0x53; 64]);
         assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_RDT).count(), 1);
         assert!(device.registers.writes.contains(&(REG_RDT, 1)));
     }
