@@ -2,7 +2,7 @@
 use super::block::{BlockError, BlockGeometry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NvmeError { InvalidCapabilities, InvalidQueueDepth, QueueFull, InvalidNamespace, UnsupportedLbaFormat, InvalidTransfer, AddressOverflow, InvalidAlignment, PrpListTooSmall }
+pub enum NvmeError { InvalidCapabilities, InvalidQueueDepth, QueueFull, InvalidNamespace, UnsupportedLbaFormat, InvalidTransfer, AddressOverflow, InvalidAlignment, PrpListTooSmall, Timeout, ControllerFatal, UnsupportedPageSize }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NvmeCapabilities {
@@ -236,7 +236,9 @@ pub fn initialize_controller<R: NvmeRegisterIo>(
     if queues.depth<2 || queues.depth>4096
         || queues.depth as usize>queues.submission.len()
         || queues.depth as usize>queues.completion.len()
-        || queues.submission_phys&0xFFF!=0 || queues.completion_phys&0xFFF!=0 {
+        || queues.submission_phys&0xFFF!=0 || queues.completion_phys&0xFFF!=0
+        || queues.submission_phys.checked_add(queues.depth as u64*64).is_none()
+        || queues.completion_phys.checked_add(queues.depth as u64*16).is_none() {
         return Err(NvmeError::InvalidQueueDepth);
     }
     let mut cc=registers.read32(CC)?;
@@ -280,4 +282,17 @@ pub fn doorbell_offset(queue_id:u16,completion:bool,stride_bytes:u32)->Result<u3
         .ok_or(NvmeError::AddressOverflow)?;
     0x1000u32.checked_add(index.checked_mul(stride_bytes).ok_or(NvmeError::AddressOverflow)?)
         .ok_or(NvmeError::AddressOverflow)
+}
+
+/// Ring an I/O or admin submission-queue doorbell after the caller's DMA write barrier.
+pub fn ring_submission_doorbell<R: NvmeRegisterIo>(
+    registers:&mut R, queue_id:u16, tail:u32, stride:u32,
+)->Result<(),NvmeError>{
+    registers.write32(doorbell_offset(queue_id,false,stride)?,tail)
+}
+/// Ring a completion-queue doorbell after the caller has consumed its CQEs.
+pub fn ring_completion_doorbell<R: NvmeRegisterIo>(
+    registers:&mut R, queue_id:u16, head:u32, stride:u32,
+)->Result<(),NvmeError>{
+    registers.write32(doorbell_offset(queue_id,true,stride)?,head)
 }
