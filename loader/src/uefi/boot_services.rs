@@ -100,26 +100,5 @@ pub unsafe fn allocate_loader_pages(
     }
 }
 
-/// Release a page allocation previously returned by AllocatePages.
-///
-/// # Safety
-/// The table must be live, and address/pages must describe an outstanding
-/// allocation owned by this loader and not yet transferred to the kernel.
-pub unsafe fn free_loader_pages(
-    boot: &mut EfiBootServices,
-    address: u64,
-    pages: usize,
-) -> EfiStatus {
-    if address == 0 || pages == 0 {
-        return super::EFI_INVALID_PARAMETER;
-    }
-    let Some(free_pages) = boot.free_pages else {
-        return super::EFI_UNSUPPORTED;
-    };
-
-    // SAFETY: The caller guarantees the allocation is live and owned by loader.
-    unsafe { free_pages(address, pages) }
-}
-
 // UEFI descriptor prefix is 40 bytes; firmware may provide a larger stride.
 const _: [(); 40] = [(); core::mem::size_of::<EfiMemoryDescriptor>()];
