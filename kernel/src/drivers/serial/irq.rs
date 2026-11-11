@@ -537,6 +537,44 @@ mod tests {
     }
 
     #[test]
+    fn interrupt_statistics_snapshot_preserves_each_counter() {
+        let stats = AtomicIrqStatistics::new();
+        stats.interrupts.store(8, Ordering::Relaxed);
+        stats.line_status.store(1, Ordering::Relaxed);
+        stats.receive_data.store(2, Ordering::Relaxed);
+        stats.receive_timeout.store(3, Ordering::Relaxed);
+        stats.transmit_empty.store(4, Ordering::Relaxed);
+        stats.modem_status.store(5, Ordering::Relaxed);
+        stats.unknown_causes.store(6, Ordering::Relaxed);
+        stats.budget_exhaustions.store(7, Ordering::Relaxed);
+        assert_eq!(stats.snapshot(), UartIrqStatistics {
+            interrupts: 8,
+            line_status: 1,
+            receive_data: 2,
+            receive_timeout: 3,
+            transmit_empty: 4,
+            modem_status: 5,
+            unknown_causes: 6,
+            budget_exhaustions: 7,
+        });
+    }
+
+    #[test]
+    fn line_status_statistics_decode_each_hardware_error_bit() {
+        let stats = AtomicRxStatistics::new();
+        stats.record_lsr(
+            OVERRUN_ERROR | PARITY_ERROR | FRAMING_ERROR | BREAK_INTERRUPT | FIFO_ERROR
+        );
+        assert_eq!(stats.snapshot(), UartRxStatistics {
+            overrun_errors: 1,
+            parity_errors: 1,
+            framing_errors: 1,
+            break_interrupts: 1,
+            fifo_errors: 1,
+        });
+    }
+
+    #[test]
     fn iir_cause_ids_match_16550_priority_encoding() {
         assert_eq!(IIR_LINE_STATUS & 0x0E, 0x06);
         assert_eq!(IIR_RECEIVE_DATA & 0x0E, 0x04);
