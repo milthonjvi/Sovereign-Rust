@@ -21,14 +21,15 @@ to privileged CPU operations and transitions that require it.
 - Isolated privileged primitives for control registers, MSRs, and port I/O.
 - Early BSP baseline setup for CR0/CR4 and SSE2 OS support.
 - Higher-half ELF linker script and a freestanding kernel entry point.
-- Sovereign Boot UEFI application entry point and allocation-free firmware
-  console output.
+- Sovereign Boot UEFI entry point and allocation-free firmware console.
+- UEFI Loaded Image and Simple File System protocol access.
+- Kernel lookup at `\\EFI\\BOOT\\sovereign-kernel.elf` and initial ELF64
+  header validation for x86_64 executable/shared-object images.
 
-The UEFI loader is at its first implementation milestone: it enters through
-the firmware ABI and reports status through the firmware console. Kernel ELF
-loading, memory-map ownership, ExitBootServices, and the Sovereign Boot ABI
-handoff are not implemented yet. The kernel still consumes its existing
-Limine handoff during this transition; Limine has not been removed.
+The loader currently reads and validates only the fixed 64-byte ELF header.
+It does not yet load program segments, acquire the final memory map, call
+ExitBootServices, or transfer control to the kernel. The kernel still consumes
+its existing Limine handoff during this transition; Limine has not been removed.
 
 ## Build
 
