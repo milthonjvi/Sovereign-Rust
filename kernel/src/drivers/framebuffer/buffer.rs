@@ -273,6 +273,7 @@ impl<'a> DoubleBuffer<'a> {
 #[cfg(test)]
 mod tests {
     use super::{BufferError, DoubleBuffer, SoftwareBuffer};
+    use super::super::dirty::Rect;
     use crate::drivers::framebuffer::color::Color;
 
     #[test]
