@@ -386,6 +386,23 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_rejects_zero_pages_and_physical_overflow() {
+        let zero_pages = [EfiMemoryDescriptor::new(2, 0x1000, 0, 0, 0)];
+        let map = EfiMemoryMap::from_descriptors(&zero_pages);
+        assert_eq!(map.descriptor(0), Err(SovereignBootError::InvalidMemoryMap));
+
+        let overflow = [EfiMemoryDescriptor::new(
+            2,
+            MAX_PHYSICAL_ADDRESS - 4096,
+            0,
+            2,
+            0,
+        )];
+        let map = EfiMemoryMap::from_descriptors(&overflow);
+        assert_eq!(map.descriptor(0), Err(SovereignBootError::InvalidMemoryMap));
+    }
+
+    #[test]
     fn physical_range_rejects_overflow() {
         let descriptors = [EfiMemoryDescriptor::new(2, 0x1000, 0, 4, 0)];
         let map = EfiMemoryMap::from_descriptors(&descriptors);
