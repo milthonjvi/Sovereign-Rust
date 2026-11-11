@@ -27,12 +27,13 @@ The loader lives in `loader/` as an independent workspace package and targets
    and validating each `PT_LOAD` file range, memory size, alignment, canonical virtual
    address range, and executable entry-point coverage.
 
-The loader also defines the initial versioned handoff ABI in
+The loader defines the initial versioned handoff ABI in
 `loader/src/boot_info.rs`. Version 1 carries physical-address fields for the
 firmware memory map, loaded kernel image, entry point, and optional ACPI and
-framebuffer metadata. The contract is currently a definition only: the loader
-does not yet populate or pass this structure, and the kernel does not yet
-consume it. The kernel must validate all ranges before dereferencing addresses.
+framebuffer metadata. The UEFI entry point now populates the structure and
+validates its fields before retaining it; the kernel-side consumer and actual
+register handoff are still pending. The kernel must validate all ranges before
+dereferencing physical addresses.
 
 A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support
 and enables EFER.NXE only when the processor advertises NX. The UEFI entry
@@ -66,15 +67,19 @@ CR3, and the loader does not call ExitBootServices or transfer control. The
 kernel does not yet consume the Sovereign Boot ABI. The UEFI allocation
 provider and image loader currently access allocated pages through the
 firmware's active identity mapping. The current-stack mapping is a conservative
-window, not a firmware-provided authoritative stack bound. The loader image is
-mapped RX as a temporary policy; any mutable static data required after a CR3
-switch must receive an explicit writable, non-executable mapping.
+window, not a firmware-provided authoritative stack bound. The loader PE sections receive section-derived permissions. This parser must
+be validated against actual firmware-built EFI images before relying on those
+mappings for a CR3 transition.
+
+A bounded ExitBootServices helper now refreshes the memory map and retries
+stale map keys without allocating or making unrelated firmware calls between
+capture and each exit attempt. It is not invoked by the current entry point.
 
 The next stages are:
 
-1. Define the exact EFI image section permissions and authoritative stack bounds.
-2. Add the final memory-map refresh and ExitBootServices retry sequence without
-   intervening allocations or firmware calls.
+1. Validate exact EFI image section permissions and obtain authoritative stack bounds.
+2. Integrate the final memory-map refresh and ExitBootServices retry helper,
+   with no intervening allocations or firmware calls.
 3. Add the post-exit CR3 switch and x86_64 transition stub.
 4. Add the kernel-side SovereignBootInfo consumer and entry ABI.
 5. Validate the full path in QEMU and on physical UEFI hardware before retiring
