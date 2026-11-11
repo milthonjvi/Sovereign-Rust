@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn rejects_fadt_lengths_that_truncate_known_fields() {
-        for length in [117usize, 127, 133, 139, 141, 147, 149, 243] {
+        for length in [117usize, 127, 130, 133, 139, 141, 147, 149, 243, 269, 275] {
             let bytes = make_fadt(length, 0, None, None);
             assert_eq!(
                 Fadt::parse(&bytes),
@@ -682,7 +682,7 @@ mod tests {
             );
         }
 
-        for length in [116usize, 128, 129, 132, 140, 148, 244] {
+        for length in [116usize, 128, 129, 131, 132, 140, 148, 244, 268, 276] {
             let bytes = make_fadt(length, 0, None, None);
             assert!(Fadt::parse(&bytes).is_ok(), "valid field boundary {length}");
         }
