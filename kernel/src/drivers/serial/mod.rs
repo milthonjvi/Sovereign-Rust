@@ -107,6 +107,9 @@ impl Uart16550 {
 
     /// Programs baud divisor, FIFO, line format and modem control.
     pub fn initialize(&mut self) -> Result<(), UartError> {
+        if irq::is_attached(self.base) {
+            return Err(UartError::InterruptsActive);
+        }
         let divisor = self.validate()?;
         // SAFETY: The constructor contract guarantees exclusive port ownership.
         unsafe {
