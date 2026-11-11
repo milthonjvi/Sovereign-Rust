@@ -343,6 +343,43 @@ mod tests {
     }
 
     #[test]
+    fn native_blit_writes_clipped_strided_rows_in_bgr_order() {
+        use super::super::color::PixelFormat;
+        use super::super::info::FramebufferInfo;
+        use super::super::surface::FramebufferSurface;
+
+        let source = [
+            Color::opaque(10, 20, 30),
+            Color::opaque(40, 50, 60),
+            Color::opaque(70, 80, 90),
+            Color::opaque(100, 110, 120),
+            Color::opaque(130, 140, 150),
+            Color::opaque(160, 170, 180),
+        ];
+        let image = ImageView::new(&source, 2, 2, 3).unwrap();
+        let mut memory = [0u8; 2 * 2 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 2,
+            height: 2,
+            pitch: 2 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Bgr,
+        };
+        // SAFETY: the backing array exactly covers the declared framebuffer.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        image.draw(&mut target, -1, 0).unwrap();
+        drop(target);
+
+        assert_eq!(&memory[0..4], &[60, 50, 40, 0]);
+        assert_eq!(&memory[4..8], &[0, 0, 0, 0]);
+        assert_eq!(&memory[8..12], &[180, 170, 160, 0]);
+        assert_eq!(&memory[12..16], &[0, 0, 0, 0]);
+    }
+
+    #[test]
     fn scaled_blit_uses_nearest_neighbor_mapping() {
         use super::super::color::PixelFormat;
         use super::super::info::FramebufferInfo;
