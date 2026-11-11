@@ -167,10 +167,17 @@ impl LimineBootInfo {
         &self,
         rsdp: &Rsdp,
     ) -> Result<crate::drivers::acpi::discover::AcpiTables, AcpiError> {
-        crate::drivers::acpi::discover::AcpiTables::discover(rsdp, |physical| {
-            // SAFETY: The caller guarantees that Limine mappings remain active.
-            unsafe { self.map_acpi_table(physical) }
-        })
+        crate::drivers::acpi::discover::AcpiTables::discover_with_mappers(
+            rsdp,
+            |physical| {
+                // SAFETY: The caller guarantees that Limine mappings remain active.
+                unsafe { self.map_acpi_table(physical) }
+            },
+            |physical| {
+                // SAFETY: The caller guarantees that Limine mappings remain active.
+                unsafe { self.map_acpi_facs(physical) }
+            },
+        )
     }
 
     /// Map and validate one physical ACPI SDT through the HHDM.
@@ -223,6 +230,73 @@ impl LimineBootInfo {
 
         // SAFETY: The complete table range was checked against a Limine memory
         // map entry and translated through the active HHDM.
+        Some(unsafe { core::slice::from_raw_parts(virtual_ptr, length) })
+    }
+
+    /// Map a FACS through the HHDM using its distinct 64-byte header contract.
+    ///
+    /// Unlike an SDT, FACS has no checksum and its minimum header is 64 bytes.
+    /// The physical address must also satisfy the ACPI FACS 64-byte alignment.
+    ///
+    /// # Safety
+    /// HHDM and memory-map response pointers must remain valid, and the HHDM
+    /// must map the complete accepted physical range for the returned lifetime.
+    pub unsafe fn map_acpi_facs(&self, physical: u64) -> Option<&'static [u8]> {
+        const FACS_MIN_LENGTH: usize = 64;
+        const MAX_FACS_LENGTH: usize = 16 * 1024 * 1024;
+
+        if physical == 0
+            || physical % 64 != 0
+            || self.memory_map_entries.is_null()
+            || self.hhdm_offset == 0
+            || self.memory_map_count > 4096
+        {
+            return None;
+        }
+
+        let header_end = physical.checked_add(8)?;
+        let mut containing_end = None;
+        for index in 0..self.memory_map_count {
+            // SAFETY: Limine supplied an array with memory_map_count pointers.
+            let entry_ptr = unsafe { ptr::read(self.memory_map_entries.add(index)) };
+            if entry_ptr.is_null() {
+                continue;
+            }
+            // SAFETY: Each non-null entry pointer is bootloader-owned.
+            let entry = unsafe { ptr::read(entry_ptr) };
+            let Some(end) = entry.base.checked_add(entry.length) else {
+                continue;
+            };
+            if entry.kind != 4
+                && entry.kind != 7
+                && physical >= entry.base
+                && header_end <= end
+            {
+                containing_end = Some(end);
+                break;
+            }
+        }
+        let region_end = containing_end?;
+        let virtual_address = self.hhdm_offset.checked_add(physical)?;
+        let virtual_ptr = usize::try_from(virtual_address).ok()? as *const u8;
+
+        // SAFETY: The first eight bytes lie inside the validated memory-map entry.
+        let signature = unsafe { ptr::read_unaligned(virtual_ptr.cast::<u32>()) };
+        if signature != u32::from_le_bytes(*b"FACS") {
+            return None;
+        }
+        // SAFETY: FACS length is an unaligned little-endian u32 at offset 4.
+        let length = unsafe { ptr::read_unaligned(virtual_ptr.add(4).cast::<u32>()) } as usize;
+        if !(FACS_MIN_LENGTH..=MAX_FACS_LENGTH).contains(&length) {
+            return None;
+        }
+        let facs_end = physical.checked_add(length as u64)?;
+        if facs_end > region_end {
+            return None;
+        }
+
+        // SAFETY: The complete FACS range was checked against one memory-map
+        // entry and translated through the active HHDM.
         Some(unsafe { core::slice::from_raw_parts(virtual_ptr, length) })
     }
 
