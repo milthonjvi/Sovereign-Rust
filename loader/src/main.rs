@@ -11,7 +11,7 @@ use crate::boot_info::{SovereignBootInfo, BOOT_INFO_MAGIC, BOOT_INFO_VERSION, ME
 use crate::page_tables::{PagePermissions, PageTableBuilder, PageTableError, PageTableMemory};
 use uefi::{
     allocate_loader_pages, inspect_loaded_image, load_kernel_file, Console, EfiBootServices, EfiHandle, EfiMemoryMapBuffer,
-    EfiStatus, EfiSystemTable, UefiPageTableMemory, DEFAULT_MEMORY_MAP_PAGES,
+    EfiStatus, EfiSystemTable, EfiConfigurationTable, UefiPageTableMemory, DEFAULT_MEMORY_MAP_PAGES,
     EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_OUT_OF_RESOURCES, EFI_SUCCESS, EFI_UNSUPPORTED,
     EFI_SYSTEM_TABLE_SIGNATURE,
 };
@@ -68,6 +68,12 @@ pub extern "efiapi" fn efi_main(
     if !console.write_ascii("Kernel PT_LOAD segments copied to reserved physical memory.\r\n") {
         return EFI_INVALID_PARAMETER;
     }
+
+    // UEFI configuration tables are the authoritative source for the ACPI
+    // RSDP. Prefer ACPI 2.0+ and fall back to the legacy ACPI 1.0 GUID.
+    // SAFETY: UEFI guarantees the configuration table array remains readable
+    // until ExitBootServices; the selected RSDP is validated before retention.
+    let acpi_rsdp = unsafe { find_acpi_rsdp(system_table) };
 
     // Reserve handoff and memory-map storage before building page tables.
     // The map is captured only after every remaining loader allocation.
@@ -267,6 +273,16 @@ pub extern "efiapi" fn efi_main(
     ) {
         return page_table_error_status(error);
     }
+    if let Some((rsdp_physical, rsdp_length)) = acpi_rsdp {
+        if let Err(error) = map_identity_range(
+            &mut page_tables,
+            rsdp_physical,
+            rsdp_length,
+            PagePermissions::KERNEL_READ_ONLY,
+        ) {
+            return page_table_error_status(error);
+        }
+    }
 
     for segment in loaded_kernel.segments.iter().take(loaded_kernel.segment_count) {
         if segment.file_size > segment.memory_size {
@@ -310,7 +326,7 @@ pub extern "efiapi" fn efi_main(
         magic: BOOT_INFO_MAGIC,
         version: BOOT_INFO_VERSION,
         structure_size: mem::size_of::<SovereignBootInfo>() as u32,
-        flags: 0,
+        flags: if acpi_rsdp.is_some() { crate::boot_info::BOOT_INFO_FLAG_ACPI_VALID } else { 0 },
         memory_map_physical: captured_map.physical_base,
         memory_map_size: captured_map.size_bytes as u64,
         memory_descriptor_size: captured_map.descriptor_size as u64,
@@ -320,7 +336,7 @@ pub extern "efiapi" fn efi_main(
         kernel_virtual_base: loaded_kernel.virtual_base,
         kernel_image_size: loaded_kernel.image_size,
         kernel_entry: loaded_kernel.entry,
-        acpi_rsdp_physical: 0,
+        acpi_rsdp_physical: acpi_rsdp.map(|(physical, _)| physical).unwrap_or(0),
         framebuffer_physical: 0,
         framebuffer_size: 0,
         framebuffer_width: 0,
@@ -466,6 +482,97 @@ fn current_gdt() -> (u64, u16) {
     // SAFETY: The first two bytes are the descriptor limit.
     let limit = unsafe { ptr::addr_of!(pointer.limit).read_unaligned() };
     (base, limit)
+}
+
+const ACPI_20_TABLE_GUID: crate::uefi::EfiGuid = crate::uefi::EfiGuid {
+    data1: 0x8868_e871,
+    data2: 0xe4f1,
+    data3: 0x11d3,
+    data4: [0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81],
+};
+const ACPI_10_TABLE_GUID: crate::uefi::EfiGuid = crate::uefi::EfiGuid {
+    data1: 0xeb9d_2d30,
+    data2: 0x2d88,
+    data3: 0x11d3,
+    data4: [0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d],
+};
+
+fn guid_matches(left: &crate::uefi::EfiGuid, right: &crate::uefi::EfiGuid) -> bool {
+    left.data1 == right.data1
+        && left.data2 == right.data2
+        && left.data3 == right.data3
+        && left.data4 == right.data4
+}
+
+/// Locate and validate an ACPI RSDP from the UEFI configuration table.
+unsafe fn find_acpi_rsdp(system_table: &EfiSystemTable) -> Option<(u64, u64)> {
+    if system_table.number_of_table_entries == 0
+        || system_table.number_of_table_entries > 4096
+        || system_table.configuration_table.is_null()
+    {
+        return None;
+    }
+
+    let entries = system_table.configuration_table.cast::<EfiConfigurationTable>();
+    let mut legacy = None;
+    for index in 0..system_table.number_of_table_entries {
+        // SAFETY: The system table advertises this many configuration entries.
+        let entry = unsafe { ptr::read(entries.add(index)) };
+        let is_acpi_20 = guid_matches(&entry.vendor_guid, &ACPI_20_TABLE_GUID);
+        let is_acpi_10 = guid_matches(&entry.vendor_guid, &ACPI_10_TABLE_GUID);
+        if !is_acpi_20 && !is_acpi_10 {
+            continue;
+        }
+        // SAFETY: Firmware owns the configuration-table vendor pointer.
+        let Some(length) = (unsafe { validate_rsdp(entry.vendor_table.cast()) }) else {
+            continue;
+        };
+        let candidate = (entry.vendor_table as usize as u64, length);
+        if is_acpi_20 {
+            return Some(candidate);
+        }
+        legacy = Some(candidate);
+    }
+    legacy
+}
+
+/// Validate RSDP signature, legacy checksum, revision and extended checksum.
+unsafe fn validate_rsdp(address: *const u8) -> Option<u64> {
+    if address.is_null() || (address as usize) & 0xf != 0 {
+        return None;
+    }
+    // SAFETY: Caller receives this pointer from a firmware configuration entry.
+    let signature = unsafe { core::slice::from_raw_parts(address, 8) };
+    if signature != b"RSD PTR " {
+        return None;
+    }
+    // SAFETY: The ACPI RSDP fixed v1 prefix is 20 bytes.
+    let legacy = unsafe { core::slice::from_raw_parts(address, 20) };
+    if legacy.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0 {
+        return None;
+    }
+    // SAFETY: Revision is byte 15 in the validated fixed prefix.
+    let revision = unsafe { address.add(15).read() };
+    let length = if revision == 0 {
+        20u64
+    } else if revision >= 2 {
+        // SAFETY: ACPI 2.0+ extends the fixed prefix with a length at offset 20.
+        let length = unsafe { ptr::read_unaligned(address.add(20).cast::<u32>()) } as u64;
+        if !(36..=4096).contains(&length) {
+            return None;
+        }
+        // SAFETY: The RSDP length is firmware-supplied; checksum reads are
+        // bounded by the explicit 4 KiB maximum above.
+        let extended = unsafe { core::slice::from_raw_parts(address, length as usize) };
+        if extended.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0 {
+            return None;
+        }
+        length
+    } else {
+        return None;
+    };
+    (address as u64).checked_add(length)?;
+    Some(length)
 }
 
 fn align_page_up(value: u64) -> Option<u64> {
