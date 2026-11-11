@@ -563,6 +563,38 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_resets_dma_engines_and_prevents_software_reactivation() {
+        let mut registers = MockRegisters::default();
+        let mut rx_descriptors = [RxDescriptor::for_buffer(0x10000); 8];
+        let mut tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut rx_storage = [[0u8; 2048]; 8];
+        let mut tx_storage = [[0u8; 2048]; 8];
+        let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| mock_dma_buffer(0x10000 + i as u64 * 2048, bytes))
+            .collect::<Vec<_>>().try_into().ok().unwrap();
+        let mut tx_buffers: [DmaBuffer<'_>; 8] = tx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| mock_dma_buffer(0x20000 + i as u64 * 2048, bytes))
+            .collect::<Vec<_>>().try_into().ok().unwrap();
+        for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
+            descriptor.buffer_address = buffer.dma_address();
+        }
+        // SAFETY: the mock backend performs no DMA; these arrays model pinned mappings.
+        let mut device = unsafe { E1000Device::new(
+            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+        ) }.unwrap();
+        device.initialize(&supported_device()).unwrap();
+
+        assert_eq!(device.shutdown(), Ok(()));
+        assert!(device.stopped);
+        assert!(!device.ready);
+        assert_eq!(device.interface.link, LinkState::Down);
+        assert!(device.registers.writes.contains(&(super::super::e1000::REG_CTRL,
+            super::super::e1000::CTRL_RST)));
+        assert_eq!(device.initialize(&supported_device()), Err(DriverError::NotReady));
+    }
+
+    #[test]
     fn batch_transmit_copies_and_publishes_with_one_tail_write() {
         let mut registers = MockRegisters::default();
         let mut rx_descriptors = [RxDescriptor::for_buffer(0x10000); 8];
