@@ -84,6 +84,61 @@ impl HidInterfaceInfo{
  }
 }
 
+/// Periodic endpoint timing expressed without losing the USB speed semantics.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum HidServiceInterval{
+ /// Full/Low Speed interrupt endpoints are scheduled in 1 ms frames.
+ Frames(u8),
+ /// High/SuperSpeed intervals are powers of two in 125 us microframes.
+ Microframes(u16),
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct HidInterruptEndpoint{
+ pub endpoint:Endpoint,
+ pub speed:super::transfer::UsbSpeed,
+ pub service_interval:HidServiceInterval,
+ /// Transactions per service opportunity (High Speed high-bandwidth endpoints).
+ pub transactions_per_interval:u8,
+ /// SuperSpeed companion burst count, as encoded by bMaxBurst (zero for USB 2).
+ pub max_burst:u8,
+ /// Maximum aggregate payload per service interval when supplied by SS companion.
+ pub bytes_per_interval:u16,
+}
+impl HidInterruptEndpoint{
+ pub fn from_parsed(parsed:super::descriptors::ParsedEndpoint,speed:super::transfer::UsbSpeed)->Result<Self,UsbError>{
+  if parsed.address&0x80==0||(parsed.attributes&3)!=TransferType::Interrupt as u8
+   ||parsed.max_packet_size==0||parsed.interval==0{
+   return Err(UsbError::MalformedDescriptor)
+  }
+  let service_interval=match speed{
+   super::transfer::UsbSpeed::Low|super::transfer::UsbSpeed::Full=>{
+    if parsed.interval<1{return Err(UsbError::MalformedDescriptor)}
+    HidServiceInterval::Frames(parsed.interval)
+   }
+   super::transfer::UsbSpeed::High|super::transfer::UsbSpeed::Super|super::transfer::UsbSpeed::SuperPlus=>{
+    if parsed.interval>16{return Err(UsbError::MalformedDescriptor)}
+    HidServiceInterval::Microframes(1u16<<(parsed.interval-1))
+   }
+  };
+  let transactions=if speed==super::transfer::UsbSpeed::High{
+   parsed.transactions_per_microframe
+  }else{1};
+  if transactions==0||transactions>3{return Err(UsbError::MalformedDescriptor)}
+  if (speed==super::transfer::UsbSpeed::Super||speed==super::transfer::UsbSpeed::SuperPlus)
+   &&!parsed.has_ss_companion{return Err(UsbError::MalformedDescriptor)}
+  let bytes=if parsed.has_ss_companion{parsed.bytes_per_interval}else{
+   parsed.max_packet_size.saturating_mul(transactions as u16)
+  };
+  if bytes==0{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{
+   endpoint:Endpoint{address:EndpointAddress::from_raw(parsed.address),
+    transfer_type:TransferType::Interrupt,max_packet_size:parsed.max_packet_size,interval:parsed.interval},
+   speed,service_interval,transactions_per_interval:transactions,
+   max_burst:parsed.max_burst,bytes_per_interval:bytes,
+  })
+ }
+}
+
 /// Finds one HID interface alternate setting, including non-boot devices.
 pub fn find_interface(
  configuration:&ParsedConfiguration,number:u8,alternate:u8,
