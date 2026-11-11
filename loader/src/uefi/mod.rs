@@ -5,6 +5,7 @@ mod kernel_file;
 mod memory_map;
 mod protocols;
 mod page_table_memory;
+mod pe_image;
 mod system_table;
 
 pub use console::Console;
@@ -13,6 +14,7 @@ pub use system_table::{EfiHandle, EfiSystemTable, EfiTableHeader};
 pub use elf_loader::{load_kernel_file, LoadedKernel, LoadedSegment};
 pub use kernel_file::inspect_kernel_file;
 pub use page_table_memory::UefiPageTableMemory;
+pub use pe_image::{inspect_loaded_image, PeImageError, PeImageLayout, PeImageSection};
 pub use memory_map::{CapturedMemoryMap, EfiMemoryMapBuffer, DEFAULT_MEMORY_MAP_PAGES};
 pub use boot_services::{allocate_loader_pages, EfiBootServices};
 
