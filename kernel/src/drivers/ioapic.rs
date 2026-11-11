@@ -19,6 +19,23 @@ const REDIRECTION_LEVEL: u32 = 1 << 15;
 const REDIRECTION_WRITABLE_LOW_MASK: u32 = 0x0001_AFFF;
 const REDIRECTION_WRITABLE_HIGH_MASK: u32 = 0xFF00_0000;
 
+/// Decode the controller's 4-bit hardware ID from IOAPICID.
+#[inline]
+const fn decode_controller_id(id_register: u32) -> u8 {
+    ((id_register >> 24) & 0x0F) as u8
+}
+
+/// Decode the maximum redirection index in IOAPICVER into an entry count.
+#[inline]
+const fn decode_redirection_count(version_register: u32) -> Result<u32, IoApicError> {
+    let count = ((version_register >> 16) & 0xFF) + 1;
+    if count == 0 || count > MAX_REDIRECTION_ENTRIES {
+        Err(IoApicError::InvalidRedirectionCount)
+    } else {
+        Ok(count)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IoApicError {
     InvalidMapping,
@@ -31,6 +48,9 @@ pub enum IoApicError {
     InvalidFlags,
     HardwareRejectedWrite,
     InvalidIsaIrq,
+    ControllerIdMismatch,
+    InvalidRedirectionCount,
+    GsiRangeOverflow,
 }
 
 /// Decoded ACPI interrupt electrical configuration.
@@ -190,13 +210,13 @@ impl IoApicController {
         };
         let id_version = controller.read_register(REG_ID);
         let version = controller.read_register(REG_VERSION);
-        controller.id = ((id_version >> 24) & 0x0F) as u8;
-        controller.redirection_count = ((version >> 16) & 0xFF) + 1;
-        if controller.redirection_count == 0
-            || controller.redirection_count > MAX_REDIRECTION_ENTRIES
-            || controller.gsi_base.checked_add(controller.redirection_count).is_none()
-        {
-            return Err(IoApicError::GsiOutOfRange);
+        controller.id = decode_controller_id(id_version);
+        if controller.id != descriptor.id {
+            return Err(IoApicError::ControllerIdMismatch);
+        }
+        controller.redirection_count = decode_redirection_count(version)?;
+        if controller.gsi_base.checked_add(controller.redirection_count).is_none() {
+            return Err(IoApicError::GsiRangeOverflow);
         }
         Ok(controller)
     }
@@ -370,6 +390,26 @@ pub fn resolve_isa_irq(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_ioapic_id_and_redirection_count_registers() {
+        assert_eq!(decode_controller_id(0x0B00_0000), 0x0B);
+        assert_eq!(decode_redirection_count(23 << 16), Ok(24));
+        assert_eq!(
+            decode_redirection_count((MAX_REDIRECTION_ENTRIES - 1) << 16),
+            Ok(MAX_REDIRECTION_ENTRIES)
+        );
+        assert_eq!(
+            decode_redirection_count(MAX_REDIRECTION_ENTRIES << 16),
+            Err(IoApicError::InvalidRedirectionCount)
+        );
+    }
+
+    #[test]
+    fn rejects_gsi_interval_overflow_without_wrapping() {
+        let base = u32::MAX - 7;
+        assert!(base.checked_add(8).is_none());
+    }
 
     #[test]
     fn rejects_invalid_mmio_mapping_before_register_access() {
