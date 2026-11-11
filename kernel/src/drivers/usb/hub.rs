@@ -1,5 +1,5 @@
 //! USB 2.0 and SuperSpeed hub descriptor parsing.
-use super::{UsbError,transfer::SetupPacket};
+use super::{UsbError,transfer::{SetupPacket,UsbSpeed}};
 pub const HUB_DESCRIPTOR:u8=0x29;
 pub const HUB_DESCRIPTOR_SS:u8=0x2a;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -75,6 +75,18 @@ impl HubPortStatus{
  pub const fn low_speed(self)->bool{self.status&Self::LOW_SPEED!=0}
  pub const fn high_speed(self)->bool{self.status&Self::HIGH_SPEED!=0}
  pub const fn has_change(self)->bool{self.change!=0}
+ /// USB 2.0 port-speed interpretation. Do not use for SuperSpeed hubs.
+ pub const fn speed_usb2(self)->Option<UsbSpeed>{
+  if !self.connected(){None}else if self.low_speed(){Some(UsbSpeed::Low)}
+  else if self.high_speed(){Some(UsbSpeed::High)}else{Some(UsbSpeed::Full)}
+ }
+ /// SuperSpeed port-speed field (wPortStatus bits 10..13).
+ pub const fn speed_superspeed(self)->Option<UsbSpeed>{
+  if !self.connected(){return None}
+  match (self.status>>10)&0x0f{1=>Some(UsbSpeed::Full),2=>Some(UsbSpeed::Low),3=>Some(UsbSpeed::High),4=>Some(UsbSpeed::Super),5=>Some(UsbSpeed::SuperPlus),_=>None}
+ }
+ /// SuperSpeed port link state (wPortStatus bits 5..8).
+ pub const fn superspeed_link_state(self)->u8{((self.status>>5)&0x0f)as u8}
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange}
