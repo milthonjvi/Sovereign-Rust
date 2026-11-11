@@ -49,7 +49,7 @@ impl<'a, D: BlockDevice, const N: usize> BlockCache<'a, D, N> {
     fn slot(&mut self, lba: u64) -> Option<usize> {
         if N == 0 { return None; }
         if let Some(index) = self.lines.iter().position(|line| !line.valid) {
-            self.lines[index] = CacheLine { lba, valid: true, last_used: 0 };
+            self.lines[index] = CacheLine { lba, valid: false, last_used: 0 };
             return Some(index);
         }
         let index = self.lines.iter().enumerate().min_by_key(|(_, line)| line.last_used).map(|(i, _)| i)?;
@@ -84,6 +84,7 @@ impl<D: BlockDevice, const N: usize> BlockDevice for BlockCache<'_, D, N> {
                 if let Some(line) = self.slot(lba) {
                     let start = line * block_size;
                     self.inner.read_blocks(BlockRange::new(lba, 1), &mut self.storage[start..start + block_size])?;
+                    self.lines[line].valid = true;
                     self.touch(line);
                     dst.copy_from_slice(&self.storage[start..start + block_size]);
                 } else {
