@@ -195,7 +195,6 @@ impl Pit {
             io::out8(CHANNEL0_DATA, (config.divisor >> 8) as u8);
         }
         self.config = Some(config);
-        Ok(())
     }
 }
 
