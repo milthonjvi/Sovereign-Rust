@@ -5,7 +5,7 @@
 use super::block::{BlockError, BlockGeometry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AhciError { InvalidCapabilities, InvalidPort, InvalidTransfer, AddressOverflow, InvalidAlignment, PrdtCapacity, UnsupportedAddressing, QueueFull }
+pub enum AhciError { InvalidCapabilities, InvalidPort, InvalidTransfer, AddressOverflow, InvalidAlignment, PrdtCapacity, UnsupportedAddressing, QueueFull, Timeout, PortNotRunning, SlotBusy, DeviceFault, InvalidPortMemory, RegisterIo }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AhciCapabilities {
@@ -211,4 +211,107 @@ mod slot_tests{
         assert!(slots.release(a));assert!(!slots.release(a));
         assert_eq!(slots.in_flight(),1);assert!(slots.is_used(b));
     }
+}
+
+
+pub trait AhciRegisterIo {
+    fn read32(&mut self, offset:u32)->Result<u32,AhciError>;
+    fn write32(&mut self, offset:u32, value:u32)->Result<(),AhciError>;
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct AhciPortMemory { pub command_list_phys:u64, pub received_fis_phys:u64 }
+fn port_register(base:u32,register:u32)->Result<u32,AhciError>{
+    base.checked_add(register).ok_or(AhciError::AddressOverflow)
+}
+fn wait_register<R:AhciRegisterIo>(io:&mut R,offset:u32,mask:u32,clear:bool,polls:u32)->Result<(),AhciError>{
+    for _ in 0..polls{
+        let value=io.read32(offset)?;
+        if (value&mask==0)==clear{return Ok(());}
+        core::hint::spin_loop();
+    }
+    Err(AhciError::Timeout)
+}
+
+/// Stop command processing and FIS reception in the AHCI-defined order.
+pub fn stop_port<R:AhciRegisterIo>(io:&mut R,base:u32,polls:u32)->Result<(),AhciError>{
+    const CMD:u32=0x18; const ST:u32=1; const FRE:u32=1<<4; const FR:u32=1<<14; const CR:u32=1<<15;
+    let reg=port_register(base,CMD)?;
+    let command=io.read32(reg)?;
+    io.write32(reg,command&!ST)?;
+    wait_register(io,reg,CR,true,polls)?;
+    let command=io.read32(reg)?;
+    io.write32(reg,command&!FRE)?;
+    wait_register(io,reg,FR,true,polls)
+}
+
+/// Program DMA bases while the port is stopped. The supplied regions must be
+/// DMA-mapped, physically contiguous, command-list aligned to 1 KiB and FIS
+/// receive memory aligned to 256 bytes.
+pub fn configure_port<R:AhciRegisterIo>(
+    io:&mut R,base:u32,memory:AhciPortMemory,interrupt_enable:u32,polls:u32,
+)->Result<(),AhciError>{
+    if memory.command_list_phys&0x3FF!=0 || memory.received_fis_phys&0xFF!=0
+        || memory.command_list_phys.checked_add(1024).is_none()
+        || memory.received_fis_phys.checked_add(256).is_none(){
+        return Err(AhciError::InvalidPortMemory);
+    }
+    stop_port(io,base,polls)?;
+    io.write32(port_register(base,0x00)?,memory.command_list_phys as u32)?;
+    io.write32(port_register(base,0x04)?,(memory.command_list_phys>>32) as u32)?;
+    io.write32(port_register(base,0x08)?,memory.received_fis_phys as u32)?;
+    io.write32(port_register(base,0x0C)?,(memory.received_fis_phys>>32) as u32)?;
+    io.write32(port_register(base,0x30)?,u32::MAX)?;
+    io.write32(port_register(base,0x10)?,u32::MAX)?;
+    io.write32(port_register(base,0x14)?,interrupt_enable)?;
+    Ok(())
+}
+
+pub fn start_port<R:AhciRegisterIo>(io:&mut R,base:u32,polls:u32)->Result<(),AhciError>{
+    const CMD:u32=0x18; const ST:u32=1; const FRE:u32=1<<4; const FR:u32=1<<14; const CR:u32=1<<15;
+    let reg=port_register(base,CMD)?;
+    wait_register(io,reg,CR|FR,true,polls)?;
+    let command=io.read32(reg)?;
+    io.write32(reg,command|FRE)?;
+    io.write32(reg,(command|FRE)|ST)?;
+    Ok(())
+}
+
+/// Submit a prepared command-table slot. For NCQ, SACT is set before CI.
+pub fn issue_command<R:AhciRegisterIo>(
+    io:&mut R,base:u32,slot:u8,ncq:bool,polls:u32,
+)->Result<(),AhciError>{
+    if slot>=32{return Err(AhciError::InvalidPort);}
+    let cmd=port_register(base,0x18)?;
+    if io.read32(cmd)?&1==0{return Err(AhciError::PortNotRunning);}
+    let tfd=port_register(base,0x20)?;
+    let mut ready=false;
+    for _ in 0..polls{
+        let status=io.read32(tfd)?;
+        if status&1!=0{return Err(AhciError::DeviceFault);}
+        if status&(0x80|0x08)==0{ready=true;break;}
+        core::hint::spin_loop();
+    }
+    if !ready{return Err(AhciError::Timeout);}
+    let bit=1u32<<slot;
+    let ci=port_register(base,0x38)?;
+    if io.read32(ci)?&bit!=0{return Err(AhciError::SlotBusy);}
+    if ncq{
+        let sact=port_register(base,0x34)?;
+        if io.read32(sact)?&bit!=0{return Err(AhciError::SlotBusy);}
+        io.write32(sact,io.read32(sact)?|bit)?;
+    }
+    io.write32(ci,io.read32(ci)?|bit)
+}
+
+/// Return true only after hardware has cleared CI (and SACT for NCQ).
+pub fn command_complete<R:AhciRegisterIo>(
+    io:&mut R,base:u32,slot:u8,ncq:bool,
+)->Result<bool,AhciError>{
+    if slot>=32{return Err(AhciError::InvalidPort);}
+    let status=io.read32(port_register(base,0x10)?)?;
+    if status&(1<<30)!=0{return Err(AhciError::DeviceFault);}
+    let bit=1u32<<slot;
+    if io.read32(port_register(base,0x38)?)?&bit!=0{return Ok(false);}
+    if ncq && io.read32(port_register(base,0x34)?)?&bit!=0{return Ok(false);}
+    Ok(true)
 }
