@@ -44,6 +44,11 @@ const STATUS_SPEED_SHIFT: u32 = 6;
 /// A failed `write32` must be reported before any register write is issued;
 /// returning an error after a posted/possibly-visible write would make descriptor
 /// rollback unsafe because the device might already own the published buffers.
+/// # Safety
+/// Implementors must keep every access within the live, correctly-typed MMIO
+/// mapping. A failed write must guarantee that the write was not posted to the
+/// device; TX/RX queue rollback relies on that guarantee. DMA barriers must
+/// synchronize descriptor and packet-buffer ownership for this device.
 pub unsafe trait E1000Registers {
     type Error;
 
