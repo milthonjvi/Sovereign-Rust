@@ -55,6 +55,37 @@ impl<'a> FramebufferSurface<'a> {
         self.fill_rect(0, 0, self.info.width, self.info.height, color);
     }
 
+    /// Scroll the visible framebuffer upward by whole pixel rows.
+    /// The newly exposed rows are filled with the supplied background color.
+    pub fn scroll_up(&mut self, rows: usize, background: Color) {
+        if rows == 0 || rows >= self.info.height {
+            if rows >= self.info.height && rows != 0 {
+                self.clear(background);
+            }
+            return;
+        }
+
+        let byte_rows = rows.saturating_mul(self.info.pitch);
+        let copy_len = self.info.height.saturating_sub(rows).saturating_mul(self.info.pitch);
+        // SAFETY: source and destination ranges are within the validated
+        // framebuffer mapping. Forward copying is safe because destination
+        // addresses precede their corresponding source addresses.
+        unsafe {
+            let base = self.base.as_ptr();
+            for offset in 0..copy_len {
+                let value = ptr::read_volatile(base.add(byte_rows + offset));
+                ptr::write_volatile(base.add(offset), value);
+            }
+        }
+        self.fill_rect(
+            0,
+            self.info.height - rows,
+            self.info.width,
+            rows,
+            background,
+        );
+    }
+
     /// Draw a line, clipping its major axis to the visible framebuffer.
     ///
     /// The major-axis iteration is bounded by the display dimensions, even when
