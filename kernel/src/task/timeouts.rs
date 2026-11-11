@@ -256,6 +256,24 @@ mod tests {
     }
 
     #[test]
+    fn empty_storage_is_reported_without_consuming_events() {
+        let mut wakeups = [Some(TaskId(7))];
+        let report = task_wakeup_report(
+            &mut [],
+            &mut wakeups,
+            TimerProcessReport {
+                expired: 0,
+                reprogram_error: None,
+                buffer_unavailable: true,
+            },
+        );
+
+        assert_eq!(report.wakeups, 0);
+        assert!(report.buffer_unavailable);
+        assert_eq!(wakeups, [None]);
+    }
+
+    #[test]
     fn wakeup_output_is_cleared_when_no_task_events_exist() {
         let mut events = [event(2, 7)];
         let mut wakeups = [Some(TaskId(99)); 2];
