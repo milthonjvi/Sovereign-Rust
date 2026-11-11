@@ -147,8 +147,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             return Err(DriverError::InvalidConfiguration);
         }
 
-        self.reclaim_tx()?;
-        let available = self.tx_queue.available_slots(
+        let available = self.tx_queue.reclaim_and_available_slots(
             self.registers,
             self.tx_descriptors,
             &mut slots[..frames.len()],
