@@ -5,7 +5,7 @@
 //! the scheduler, which owns task-state transitions and ready-queue insertion.
 
 use crate::time::{
-    BootstrapTimerInitError, ClockSource, Deadline, TimerEvent, TimerId, TimerProcessReport, TscDeadlineQueue, TscDeadlineQueueError,
+    BootstrapTimerInitError, ClockSource, Deadline, TimerEvent, TimerId, TimerCancelReport, TimerProcessReport, TscDeadlineQueue, TscDeadlineQueueError,
 };
 
 /// Stable task identifier used by timeout registration.
@@ -24,6 +24,16 @@ pub struct TaskWakeupReport {
     pub wakeups: usize,
     pub timer_reprogram_error: Option<crate::drivers::api::DriverError>,
     pub buffer_unavailable: bool,
+}
+
+/// Outcome of cancelling a task sleep.
+///
+/// The `cancelled` field reports the software-queue result even if updating
+/// the hardware comparator failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskCancelReport {
+    pub cancelled: bool,
+    pub timer_reprogram_error: Option<crate::drivers::api::DriverError>,
 }
 
 /// Per-CPU task timeout manager driven by the local APIC TSC-deadline timer.
@@ -119,12 +129,13 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
     ///
     /// # Safety
     /// Must be called on the CPU that owns this timeout manager.
-    pub unsafe fn cancel_sleep(
-        &self,
-        task: TaskId,
-    ) -> Result<bool, crate::drivers::api::DriverError> {
+    pub unsafe fn cancel_sleep(&self, task: TaskId) -> TaskCancelReport {
         // SAFETY: Same-CPU requirement is part of this method's contract.
-        Ok(unsafe { self.timers.cancel(TimerId(task.0)) }?.is_some())
+        let report = unsafe { self.timers.cancel(TimerId(task.0)) };
+        TaskCancelReport {
+            cancelled: report.removed.is_some(),
+            timer_reprogram_error: report.reprogram_error,
+        }
     }
 
     /// Collect expired task IDs for insertion into the scheduler ready queue.
