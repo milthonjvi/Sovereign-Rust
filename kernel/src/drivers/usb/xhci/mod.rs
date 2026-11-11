@@ -14,15 +14,19 @@ impl Trb{
 /// Bounds-checked access to an already mapped xHCI MMIO region.
 pub trait RegisterIo{fn read32(&self,offset:usize)->Result<u32,XhciError>;fn write32(&mut self,offset:usize,value:u32)->Result<(),XhciError>;}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub struct CapabilityRegisters{pub capability_length:u8,pub interface_version:u16,pub max_device_slots:u8,pub max_interrupters:u16,pub max_ports:u8}
+pub struct CapabilityRegisters{pub capability_length:u8,pub interface_version:u16,pub max_device_slots:u8,pub max_interrupters:u16,pub max_ports:u8,pub address_64bit:bool,pub context_size_64:bool,pub scratchpad_buffers:u16}
 impl CapabilityRegisters{
  pub fn parse(cap0:u32,hcs1:u32)->Result<Self,XhciError>{
+  Self::parse_extended(cap0,hcs1,0,0)
+ }
+ pub fn parse_extended(cap0:u32,hcs1:u32,hcs2:u32,hcc1:u32)->Result<Self,XhciError>{
   let len=(cap0&255)as u8;let version=(cap0>>16)as u16;
   if len<0x20{return Err(XhciError::InvalidCapability)}
   if version<0x0100{return Err(XhciError::UnsupportedVersion)}
   let slots=(hcs1&255)as u8;let interrupters=((hcs1>>8)&0x7ff)as u16;let ports=(hcs1>>24)as u8;
   if slots==0||interrupters==0{return Err(XhciError::InvalidCapability)}
-  Ok(Self{capability_length:len,interface_version:version,max_device_slots:slots,max_interrupters:interrupters,max_ports:ports})
+  let scratchpad_buffers=((((hcs2>>21)&0x1f)<<5)|((hcs2>>27)&0x1f))as u16;
+  Ok(Self{capability_length:len,interface_version:version,max_device_slots:slots,max_interrupters:interrupters,max_ports:ports,address_64bit:hcc1&1!=0,context_size_64:hcc1&(1<<2)!=0,scratchpad_buffers})
  }
 }
 
@@ -275,7 +279,7 @@ impl XhciController{
  /// Addresses must be physical, DMA-visible and aligned as required by xHCI.
  pub fn configure_dma<I:RegisterIo>(&mut self,io:&mut I,dcbaa:u64,command_ring:u64,slots:u8)->Result<(),XhciError>{
   if self.state!=ControllerState::Reset{return Err(XhciError::InvalidState)}
-  if dcbaa&0x3f!=0||command_ring&0x3f!=0{return Err(XhciError::InvalidDmaAddress)}
+  if dcbaa&0x3f!=0||command_ring&0x3f!=0||(!self.capabilities.address_64bit&&(dcbaa>>32!=0||command_ring>>32!=0)){return Err(XhciError::InvalidDmaAddress)}\n  if self.capabilities.scratchpad_buffers!=0{return Err(XhciError::NotReady)}
   if slots==0||slots>self.capabilities.max_device_slots{return Err(XhciError::InvalidCapability)}
   io.write32(self.op(OP_DCBAAP)+4,(dcbaa>>32)as u32)?;
   io.write32(self.op(OP_DCBAAP),dcbaa as u32)?;
@@ -288,7 +292,7 @@ impl XhciController{
  /// ERST entry at erst_physical with event_ring_physical and trb_count.
  pub fn configure_event_ring<I:RegisterIo>(&mut self,io:&mut I,erst_physical:u64,event_ring_physical:u64,trb_count:u16)->Result<(),XhciError>{
   if self.state!=ControllerState::Reset||!self.dma_configured||self.event_ring_configured{return Err(XhciError::InvalidState)}
-  if erst_physical&0x3f!=0||event_ring_physical&0x3f!=0||trb_count==0{return Err(XhciError::InvalidDmaAddress)}
+  if erst_physical&0x3f!=0||event_ring_physical&0x3f!=0||trb_count==0||(!self.capabilities.address_64bit&&(erst_physical>>32!=0||event_ring_physical>>32!=0)){return Err(XhciError::InvalidDmaAddress)}
   let interrupter=self.runtime_base+0x20;
   io.write32(interrupter+0x04,0)?;
   io.write32(interrupter+0x08,1)?;
