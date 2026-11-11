@@ -36,3 +36,23 @@ pub const CONTROLLER_COMPATIBILITY:&[ControllerCompatibility]=&[
  ControllerCompatibility{kind:ControllerKind::Ehci,revisions:&[UsbRevision::V2_0]},
  ControllerCompatibility{kind:ControllerKind::Xhci,revisions:&[UsbRevision::V1_0,UsbRevision::V1_1,UsbRevision::V2_0,UsbRevision::V3_0,UsbRevision::V3_1,UsbRevision::V3_2]},
 ];
+
+#[cfg(test)]
+mod tests{
+ use super::*;
+ #[test]fn pci_programming_interfaces_select_legacy_and_modern_hosts(){
+  assert_eq!(ControllerKind::from_pci(0x0c,0x03,0x00),Some(ControllerKind::Uhci));
+  assert_eq!(ControllerKind::from_pci(0x0c,0x03,0x10),Some(ControllerKind::Ohci));
+  assert_eq!(ControllerKind::from_pci(0x0c,0x03,0x20),Some(ControllerKind::Ehci));
+  assert_eq!(ControllerKind::from_pci(0x0c,0x03,0x30),Some(ControllerKind::Xhci));
+  assert_eq!(ControllerKind::from_pci(0x02,0x00,0x30),None);
+  assert_eq!(ControllerKind::from_pci(0x0c,0x03,0x80),None);
+ }
+ #[test]fn xhci_compatibility_includes_usb1_and_usb2_fallback(){
+  let entry=CONTROLLER_COMPATIBILITY.iter().find(|v|v.kind==ControllerKind::Xhci).unwrap();
+  assert!(entry.revisions.contains(&UsbRevision::V1_1));
+  assert!(entry.revisions.contains(&UsbRevision::V2_0));
+  assert!(entry.revisions.contains(&UsbRevision::V3_2));
+  assert!(!entry.revisions.contains(&UsbRevision::V4_0));
+ }
+}
