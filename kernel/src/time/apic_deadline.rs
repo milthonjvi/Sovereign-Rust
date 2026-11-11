@@ -17,6 +17,13 @@ use super::{
     tsc_clock::{monotonic_deadline_to_tsc, TscClockSource},
 };
 
+/// Errors from the per-CPU deadline queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TscDeadlineQueueError {
+    Service(TimerServiceError),
+    Hardware(DriverError),
+}
+
 /// Per-CPU timer queue driven by the local APIC TSC-deadline facility.
 pub struct TscDeadlineQueue<S: ClockSource, const N: usize> {
     service: TimerService<S, N>,
@@ -36,15 +43,15 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         source: S,
         initial_time_ns: u64,
         tsc_frequency_hz: u64,
-    ) -> Result<Self, TimerServiceError> {
+    ) -> Result<Self, TscDeadlineQueueError> {
         if tsc_frequency_hz == 0 {
-            return Err(TimerServiceError::InvalidClockSource);
+            return Err(TscDeadlineQueueError::Service(TimerServiceError::InvalidClockSource));
         }
         // SAFETY: The constructor's caller contract guarantees CPL 0 and
         // TSC-deadline feature support on this local CPU.
         let timer = unsafe { TscDeadline::new() }
-            .map_err(|_| TimerServiceError::InvalidClockSource)?;
-        let service = TimerService::new(source, initial_time_ns)?;
+            .map_err(TscDeadlineQueueError::Hardware)?;
+        let service = TimerService::new(source, initial_time_ns).map_err(TscDeadlineQueueError::Service)?;
         Ok(Self { service, timer, tsc_frequency_hz })
     }
 
@@ -64,10 +71,15 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         deadline: Deadline,
         kind: u32,
         context: usize,
-    ) -> Result<(), TimerServiceError> {
-        self.service.schedule_at(id, deadline, kind, context)?;
+    ) -> Result<(), TscDeadlineQueueError> {
+        self.service.schedule_at(id, deadline, kind, context)
+            .map_err(TscDeadlineQueueError::Service)?;
         // SAFETY: Same-CPU requirement is part of this method's contract.
-        unsafe { self.reprogram() }.map_err(|_| TimerServiceError::InvalidClockSource)
+        if let Err(error) = unsafe { self.reprogram() } {
+            let _ = self.service.cancel(id);
+            return Err(TscDeadlineQueueError::Hardware(error));
+        }
+        Ok(())
     }
 
     /// Schedule a relative event and reprogram the local comparator.
@@ -80,7 +92,7 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         delay_ns: u64,
         kind: u32,
         context: usize,
-    ) -> Result<Deadline, TimerServiceError> {
+    ) -> Result<Deadline, TscDeadlineQueueError> {
         let deadline = Deadline::after_ns(self.service.now_ns(), delay_ns);
         // SAFETY: Same-CPU requirement is part of this method's contract.
         unsafe { self.schedule_at(id, deadline, kind, context)? };
@@ -91,12 +103,11 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
     ///
     /// # Safety
     /// Must be called on the CPU that owns this timer instance.
-    pub unsafe fn cancel(&self, id: TimerId) -> Option<TimerEvent> {
+    pub unsafe fn cancel(&self, id: TimerId) -> Result<Option<TimerEvent>, DriverError> {
         let removed = self.service.cancel(id);
-        // A failed reprogram leaves the hardware at its prior deadline; callers
-        // can recover by invoking reprogram() explicitly.
-        let _ = unsafe { self.reprogram() };
-        removed
+        // SAFETY: Same-CPU requirement is part of this method's contract.
+        unsafe { self.reprogram()? };
+        Ok(removed)
     }
 
     /// Drain expired events and program the next queued deadline.
@@ -107,10 +118,14 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
     ///
     /// # Safety
     /// Must be called on the CPU that owns this timer instance.
-    pub unsafe fn process_expired(&self, output: &mut [Option<TimerEvent>]) -> usize {
+    pub unsafe fn process_expired(
+        &self,
+        output: &mut [Option<TimerEvent>],
+    ) -> Result<usize, DriverError> {
         let count = self.service.drain_expired(output);
-        let _ = unsafe { self.reprogram() };
-        count
+        // SAFETY: Same-CPU requirement is part of this method's contract.
+        unsafe { self.reprogram()? };
+        Ok(count)
     }
 
     /// Reprogram the hardware from the current queue head.
