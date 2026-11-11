@@ -388,15 +388,18 @@ impl Fadt {
     /// populated them despite the older layout. Table length takes precedence
     /// over the unreliable revision byte for this compatibility decision.
     pub fn validate_boot_architecture_flags(&self) -> Result<(), AcpiError> {
-        if self.table_length < 132 {
-            return Ok(());
-        }
-        if self.iapc_boot_architecture & !0x003F != 0 {
+        // IA-PC flags are present in the complete ACPI 2.0+ prefix (132
+        // bytes); ARM flags occupy their own complete field at bytes 129..131.
+        if self.has_boot_architecture_metadata()
+            && self.iapc_boot_architecture & !0x003F != 0
+        {
             return Err(AcpiError::MalformedTable);
         }
-        if let Some(flags) = self.arm_boot_architecture {
-            if flags & !0x0003 != 0 {
-                return Err(AcpiError::MalformedTable);
+        if self.has_arm_boot_architecture_metadata() {
+            if let Some(flags) = self.arm_boot_architecture {
+                if flags & !0x0003 != 0 {
+                    return Err(AcpiError::MalformedTable);
+                }
             }
         }
         Ok(())
@@ -405,6 +408,11 @@ impl Fadt {
     /// Whether the FADT actually contains the IA-PC boot architecture field.
     pub const fn has_boot_architecture_metadata(&self) -> bool {
         self.table_length >= 132
+    }
+
+    /// Whether both bytes of the ARM boot architecture field are present.
+    pub const fn has_arm_boot_architecture_metadata(&self) -> bool {
+        self.table_length >= 131
     }
 
     pub const fn has_legacy_devices(&self) -> bool { self.has_boot_architecture_metadata() && self.iapc_boot_architecture & (1 << 0) != 0 }
@@ -858,6 +866,27 @@ mod tests {
         assert!(modern.has_boot_architecture_metadata());
         assert_eq!(modern.validate_boot_architecture_flags(), Err(AcpiError::MalformedTable));
     }
+
+    #[test]
+    fn validates_arm_boot_flags_at_their_own_length_boundary() {
+        let mut bytes = make_fadt(131, 0, None, None);
+        bytes[109..111].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        bytes[129..131].copy_from_slice(&0x0004u16.to_le_bytes());
+        bytes[9] = 0;
+        bytes[9] = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert!(!fadt.has_boot_architecture_metadata());
+        assert!(fadt.has_arm_boot_architecture_metadata());
+        assert_eq!(fadt.validate_boot_architecture_flags(), Err(AcpiError::MalformedTable));
+
+        let mut valid = make_fadt(131, 0, None, None);
+        valid[129..131].copy_from_slice(&0x0003u16.to_le_bytes());
+        valid[9] = 0;
+        valid[9] = 0u8.wrapping_sub(valid.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&valid).unwrap();
+        assert_eq!(fadt.validate_boot_architecture_flags(), Ok(()));
+    }
+
 
     #[test]
     fn rejects_reserved_fadt_boot_architecture_bits_when_explicitly_validated() {
