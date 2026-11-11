@@ -145,9 +145,9 @@ impl MsixCapability {
     }
 
     /// Required byte length of the pending-bit array (one bit per vector).
-    pub const fn pending_bit_array_bytes(self) -> Option<u32> {
-        ((self.table_size as u32).checked_add(63).map(|n| n / 64))
-            .and_then(|qwords| qwords.checked_mul(8))
+    pub fn pending_bit_array_bytes(self) -> Option<u32> {
+        (self.table_size as u32).checked_add(63)
+            .and_then(|rounded| (rounded / 64).checked_mul(8))
     }
 }
 
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn decodes_64_bit_msi_and_mask_registers() {
         let mut registers = [0u32; 1024];
-        registers[0x50 / 4] = 0x0181_0005; // MSI, enabled, 64-bit, masking, MMC=2.
+        registers[0x50 / 4] = 0x0185_0005; // MSI, enabled, 64-bit, masking, MMC=2.
         registers[0x54 / 4] = 0xfee0_0000;
         registers[0x58 / 4] = 0;
         registers[0x5c / 4] = 0x0040;
