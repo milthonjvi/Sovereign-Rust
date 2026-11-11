@@ -133,6 +133,11 @@ impl<const N: usize> PitTimerService<N> {
         Some(count)
     }
 
+    /// Next absolute deadline in the bounded queue.
+    pub fn next_deadline(&self) -> Option<Deadline> {
+        self.service.next_deadline()
+    }
+
     /// Number of events currently queued.
     pub fn pending(&self) -> usize {
         self.service.pending()
