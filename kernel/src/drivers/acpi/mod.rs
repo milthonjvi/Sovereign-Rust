@@ -5,6 +5,7 @@
 //! bytes to these parsers. All lengths and checksums are validated before data
 //! is exposed.
 
+pub mod discover;
 pub mod fadt;
 pub mod madt;
 pub mod rsdp;
