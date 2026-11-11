@@ -467,7 +467,10 @@ impl HidReportDecoder {
                         pointer_button_seen = true;
                     }
                 } else if field.usage_page == 0x0C {
-                    if variable {
+                    if usage == 0x0238 {
+                        pointer_wheel_x = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                        pointer_changed = true;
+                    } else if variable {
                         if usage != 0 && ((!had_old && value != 0) || (had_old && old != value)) {
                             self.emit(InputEvent::ConsumerControl { device: self.device,
                                 usage_page: 0x0C, usage, pressed: value != 0 }, producer, &mut stats);
@@ -482,9 +485,6 @@ impl HidReportDecoder {
                                 usage_page: 0x0C, usage: value as u16, pressed: true }, producer, &mut stats);
                         }
                     }
-                } else if field.usage_page == 0x0C && usage == 0x0238 {
-                    pointer_wheel_x = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-                    pointer_changed = true;
                 } else if field.usage_page == 0x01 {
                     match usage {
                         0x30 | 0x31 if field.is_relative() => {
