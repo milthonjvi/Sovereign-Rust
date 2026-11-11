@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt};
 use sovereign_kernel::arch::x86_64::init::initialize_baseline;
 use sovereign_kernel::boot::limine::LimineBootInfo;
-use sovereign_kernel::drivers::framebuffer::{Color, FramebufferSurface};
+use sovereign_kernel::drivers::framebuffer::{Color, FramebufferConsole, FramebufferSurface};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -47,25 +47,18 @@ pub extern "C" fn _start() -> ! {
         if let Ok(mapped_len) = framebuffer_info.validate() {
             // SAFETY: Limine supplies a writable framebuffer mapping; the
             // surface is used only here and does not escape this scope.
-            if let Ok(mut display) = unsafe {
+            if let Ok(surface) = unsafe {
                 FramebufferSurface::from_mapped(address, mapped_len, framebuffer_info)
             } {
-                display.clear(Color::BLACK);
-                display.fill_rect(0, 0, framebuffer_info.width, 4, Color::with_alpha(32, 160, 255, 0));
-                let _ = display.draw_text(
-                    12,
-                    16,
-                    "SOVEREIGN CORE",
+                if let Some(mut console) = FramebufferConsole::new(
+                    surface,
                     Color::WHITE,
-                    None,
-                );
-                let _ = display.draw_text(
-                    12,
-                    34,
-                    "KERNEL INITIALIZED",
-                    Color::with_alpha(32, 160, 255, 0),
-                    None,
-                );
+                    Color::BLACK,
+                ) {
+                    console.write_line("SOVEREIGN CORE");
+                    console.write_line("KERNEL INITIALIZED");
+                    console.write_line("Framebuffer console ready.");
+                }
             }
         }
     }
