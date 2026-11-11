@@ -238,7 +238,11 @@ impl<'a> DoubleBuffer<'a> {
         &mut self.back
     }
 
-    /// Present selected regions, swap roles, then synchronize the next back buffer.
+    /// Present selected regions, swap roles, then synchronize those regions.
+    ///
+    /// The caller must ensure every modified pixel in the back buffer is covered
+    /// by one of `regions`. Changes outside them are intentionally not presented
+    /// or synchronized. Use `present_and_swap` after a full-frame update.
     pub fn present_regions_and_swap(
         &mut self,
         target: &mut FramebufferSurface<'_>,
@@ -294,6 +298,21 @@ mod tests {
         assert_eq!(buffer.pixels[2], Color::BLACK);
         assert_eq!(buffer.pixels[4], Color::RED);
         assert_eq!(buffer.pixels[5], Color::RED);
+    }
+
+    #[test]
+    fn partial_sync_copies_only_requested_region() {
+        let mut first = [Color::BLACK; 8];
+        let mut second = [Color::BLACK; 8];
+        {
+            let mut buffers = DoubleBuffer::new(&mut first, &mut second, 4, 2, 4).unwrap();
+            buffers.back_mut().put_pixel(0, 0, Color::RED);
+            buffers.back_mut().put_pixel(3, 1, Color::BLUE);
+            let (front, back) = (&buffers.back, &mut buffers.front);
+            back.copy_regions_from(front, &[Rect { x: 0, y: 0, width: 1, height: 1 }]);
+            assert_eq!(buffers.front.pixels[0], Color::RED);
+            assert_eq!(buffers.front.pixels[7], Color::BLACK);
+        }
     }
 
     #[test]
