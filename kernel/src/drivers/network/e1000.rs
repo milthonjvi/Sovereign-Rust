@@ -36,6 +36,7 @@ pub const REG_RAH0: u32 = 0x5404;
 pub const CTRL_RST: u32 = 1 << 26;
 pub const CTRL_ASDE: u32 = 1 << 5;
 pub const RCTL_EN: u32 = 1 << 1;
+pub const RCTL_LPE: u32 = 1 << 5;
 pub const RCTL_BAM: u32 = 1 << 15;
 pub const RCTL_SECRC: u32 = 1 << 26;
 pub const TCTL_EN: u32 = 1 << 1;
