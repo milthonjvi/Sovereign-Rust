@@ -52,9 +52,10 @@ protection. The image allocation and page-table allocations use UEFI
 `AllocatePages` and remain owned by the loader.
 
 The loader now also reserves a 512 KiB UEFI memory-map buffer and a boot-info
-page before page-table construction. It identity-maps the loaded EFI image as
-RX, a bounded window around the current RSP as RW/NX, the memory-map buffer as
-read-only, and the boot-info page as read-only in the new address space. After
+page before page-table construction. It parses the loaded PE32+ image and identity-maps headers RO/NX, executable
+sections RX, and writable data sections RW/NX. It also maps a bounded window
+around the current RSP as RW/NX, the memory-map buffer as read-only, and the
+boot-info page as read-only in the new address space. After
 all page-table allocations, it captures a memory-map snapshot and populates
 SovereignBootInfo v1 with the map's physical address, byte size, descriptor
 stride/version, and kernel image metadata. The snapshot is not yet final for
