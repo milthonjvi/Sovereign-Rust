@@ -155,7 +155,6 @@ const fn decode_redirection_state(low: u32, high: u32) -> RedirectionState {
 pub struct RedirectionEntry {
     pub vector: u8,
     pub destination_apic_id: u8,
-    pub masked: bool,
     pub mode: InterruptMode,
 }
 
@@ -164,7 +163,6 @@ impl RedirectionEntry {
         (self.vector as u32)
             | if self.mode.active_low { REDIRECTION_ACTIVE_LOW } else { 0 }
             | if self.mode.level_triggered { REDIRECTION_LEVEL } else { 0 }
-            | if self.masked { REDIRECTION_MASK } else { 0 }
     }
 
     fn high(self) -> u32 {
@@ -697,7 +695,6 @@ mod tests {
         let entry = RedirectionEntry {
             vector: 0x41,
             destination_apic_id: 3,
-            masked: true,
             mode: InterruptMode { active_low: true, level_triggered: true },
         };
         assert_eq!(entry.low(), 0x41 | REDIRECTION_MASK | REDIRECTION_ACTIVE_LOW | REDIRECTION_LEVEL);
