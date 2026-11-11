@@ -785,6 +785,7 @@ mod tests {
         let mut regs = MockRegisters::default();
         let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
         let mut queue = E1000TxQueue::new(8).unwrap();
+        assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(Some(0)));
         assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x8000, 128), Ok(0));
         assert_eq!(queue.reap(&mut regs, &descriptors), Ok(0));
         descriptors[0].status = TXD_STATUS_DD;
@@ -829,12 +830,15 @@ mod tests {
         regs.fail_register = Some(REG_TDT);
         let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
         let mut queue = E1000TxQueue::new(8).unwrap();
+        let mut free_slots = [0u16; 2];
+        assert_eq!(queue.available_slots(&mut regs, &descriptors, &mut free_slots), Ok(2));
         assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0x8000, 64), (0x9000, 96)]),
             Err(E1000QueueError::Register(())));
         assert_eq!(descriptors[0].status & TXD_STATUS_DD, TXD_STATUS_DD);
         assert_eq!(descriptors[1].status & TXD_STATUS_DD, TXD_STATUS_DD);
         assert_eq!(queue.pending, 0);
         regs.fail_register = None;
+        assert_eq!(queue.available_slots(&mut regs, &descriptors, &mut free_slots), Ok(2));
         assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0xa000, 64)]), Ok(1));
     }
 
@@ -843,6 +847,8 @@ mod tests {
         let mut regs = MockRegisters::default();
         let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
         let mut queue = E1000TxQueue::new(8).unwrap();
+        let mut free_slots = [0u16; 2];
+        assert_eq!(queue.available_slots(&mut regs, &descriptors, &mut free_slots), Ok(2));
         assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0x8000, 128), (0x9000, 256)]), Ok(2));
         assert_eq!(regs.writes.iter().filter(|(register, _)| *register == REG_TDT).count(), 1);
         assert!(regs.writes.contains(&(REG_TDT, 2)));
