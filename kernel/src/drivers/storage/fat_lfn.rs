@@ -198,10 +198,10 @@ where
     }
     let mut state = FatLongName::new();
     let mut visited = 0usize;
-    let mut stopped = false;
-    let mut process = |bytes: &[u8]| -> Result<(), FatError> {
+    let mut process = |bytes: &[u8]| -> Result<bool, FatError> {
+        let mut stop = false;
         for raw in bytes.chunks_exact(32) {
-            if raw[0] == 0 { stopped = true; state.reset(); break; }
+            if raw[0] == 0 { stop = true; state.reset(); break; }
             if raw[0] == 0xE5 { state.reset(); continue; }
             if raw[11] == 0x0F {
                 let _ = state.push_record(raw);
@@ -214,10 +214,10 @@ where
                     None => visitor(&entry, &[]),
                 };
                 visited += 1;
-                if !keep_going { stopped = true; break; }
+                if !keep_going { stop = true; break; }
             } else { state.reset(); }
         }
-        Ok(())
+        Ok(stop)
     };
     if let Some(mut cluster) = start_cluster {
         let mut clusters_seen = 0u32;
@@ -225,8 +225,7 @@ where
             if clusters_seen >= volume.bpb.cluster_count { return Err(FatError::ChainTooLong); }
             clusters_seen += 1;
             read_cluster(device, volume, cluster, cluster_buffer)?;
-            process(cluster_buffer)?;
-            if stopped { break; }
+            if process(cluster_buffer)? { break; }
             cluster = match read_fat_entry(device, volume, cluster, fat_scratch)? {
                 FatChainValue::Next(next) => next,
                 FatChainValue::End => break,
@@ -238,8 +237,7 @@ where
         for sector in 0..volume.bpb.root_directory_sectors as u64 {
             device.read_blocks(BlockRange::new(first + sector, 1), &mut cluster_buffer[..bps])
                 .map_err(FatError::Block)?;
-            process(&cluster_buffer[..bps])?;
-            if stopped { break; }
+            if process(&cluster_buffer[..bps])? { break; }
         }
     }
     Ok(visited)
