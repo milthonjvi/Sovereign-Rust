@@ -168,6 +168,17 @@ mod tests {
         assert_eq!(cache.inner().bytes[..512], input);
     }
     #[test]
+    fn chunked_reads_respect_inner_limit_through_cache() {
+        let disk = Disk { bytes: [0x6D; 2048], reads: 0 };
+        let mut storage = [0u8; 512];
+        let mut cache = BlockCache::<_, 1>::new(disk, &mut storage).unwrap();
+        let mut output = [0u8; 3 * 512];
+        super::super::block::read_blocks_chunked(&mut cache, BlockRange::new(0, 3), &mut output).unwrap();
+        assert_eq!(cache.inner().reads, 2);
+        assert!(output.iter().all(|byte| *byte == 0x6D));
+    }
+
+    #[test]
     fn large_reads_bypass_cache() {
         let disk = Disk { bytes: [0x11; 2048], reads: 0 };
         let mut storage = [0u8; 512];
