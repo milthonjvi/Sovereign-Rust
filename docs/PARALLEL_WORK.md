@@ -1,29 +1,48 @@
 # Parallel work coordination
 
-This repository is integrated through one coordination point. Parallel chats
-must not edit the same files or expand their assignment into another workstream.
+This repository has one integration owner: this project's coordinating chat.
+Other chats may implement isolated workstreams, but must not edit overlapping
+paths or redefine shared interfaces independently.
 
 ## Ownership map
 
 | Workstream | Assigned paths | Must not modify |
 |---|---|---|
-| Core integration (coordinator) | root manifests, `README.md`, `docs/`, shared interfaces | paths explicitly owned by an active workstream |
+| Core integration (coordinator) | root manifests, `README.md`, `docs/`, shared interfaces and integration | active workstream-owned files |
 | Boot and image pipeline | `boot/**`, `tools/boot/**` | `kernel/src/**`, root manifests, shared docs |
 | x86_64 CPU support | `kernel/src/arch/x86_64/**` | boot pipeline, memory, drivers, scheduler |
 | Memory management | `kernel/src/memory/**` | architecture implementation, boot pipeline, drivers |
 | Interrupts and exceptions | `kernel/src/interrupts/**` | boot pipeline, memory allocator, drivers |
-| Device drivers | `kernel/src/drivers/**` | architecture internals, memory allocator, scheduler |
+| Device bus and firmware | `kernel/src/drivers/pci/**`, `kernel/src/drivers/acpi/**`, `kernel/src/firmware/**` | driver API, other driver families, architecture internals |
+| Display and input | `kernel/src/drivers/framebuffer/**`, `kernel/src/drivers/input/**` | driver API, PCI, USB, architecture internals |
+| Storage and USB | `kernel/src/drivers/storage/**`, `kernel/src/drivers/usb/**` | driver API, PCI, memory allocator, interrupt internals |
+| Network and serial | `kernel/src/drivers/network/**`, `kernel/src/drivers/serial/**` | driver API, PCI, architecture internals |
+| Timer devices | `kernel/src/drivers/timer/**` | driver API, timekeeping policy, interrupt internals |
 | Scheduler and tasks | `kernel/src/task/**` | boot pipeline, architecture internals, memory allocator |
+| Other kernel services | `kernel/src/sync/**`, `time/**`, `fs/**`, `ipc/**`, `syscall/**`, `power/**`, `security/**`, `logging/**` | shared APIs and other assigned workstreams |
+
+## Shared-interface rules
+
+1. `kernel/src/drivers/api.rs` is coordinator-owned. Do not change it without
+   explicit approval; propose required additions with a concrete use case.
+2. `kernel/src/lib.rs` and all Cargo manifests are coordinator-owned.
+3. Drivers consume kernel services through narrow interfaces; they must not
+   implement their own memory allocator, interrupt controller, scheduler, or VFS.
+4. Hardware-specific unsafe code stays inside the relevant architecture or
+   driver module and must document its safety invariants.
+5. No driver may touch MMIO, port I/O, DMA, or interrupt registers until the
+   relevant platform primitives and resource ownership are available.
 
 ## Coordination rules
 
 1. One workstream owns a path at a time. No overlapping edits.
 2. Do not rename, move, or reformat another workstream's files.
-3. Do not modify root manifests or shared interfaces without coordinator approval.
-4. Before starting, inspect the latest `main` and check whether assigned paths
+3. Before starting, inspect the latest `main` and check whether assigned paths
    have changed since the task was issued.
-5. Commit directly to `main`; do not create branches or pull requests unless
+4. Commit directly to `main`; do not create branches or pull requests unless
    the repository owner explicitly changes this rule.
-6. Keep changes scoped to the assignment. Report exact files, commit, checks,
-   and anything not tested.
-7. The coordinator resolves interface conflicts and performs integration.
+5. Keep changes scoped to the assignment. Report exact files, commit, checks,
+   hardware/emulator tested, and anything not tested.
+6. The coordinator resolves interface conflicts and performs integration.
+7. A module declaration or compile-only check is not evidence of working
+   hardware support. State implementation and validation status precisely.
