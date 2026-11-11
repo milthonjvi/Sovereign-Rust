@@ -88,6 +88,33 @@ impl MsiCapability {
     }
 }
 
+/// Disable MSI-X and assert the function mask before switching interrupt modes.
+///
+/// # Safety
+/// The device must be quiescent and exclusively owned by the caller. No driver
+/// may be programming the MSI-X table concurrently, and any in-flight device
+/// interrupt activity must be drained or otherwise safe to suppress.
+pub unsafe fn disable_msix<A: ConfigAccess>(
+    io: &A,
+    address: PciAddress,
+    capability: Capability,
+) -> Result<(), ConfigError> {
+    if capability.id != MSIX_CAPABILITY_ID {
+        return Err(ConfigError::OutOfRange);
+    }
+    // Validate the complete conventional capability before writing its header.
+    let _ = MsixCapability::read(io, address, capability)?;
+    let offset = capability.offset as u16;
+    let header = read_standard(io, address, offset)?;
+    let control = (header >> 16) as u16;
+    let disabled_masked = (control & !(1 << 15)) | (1 << 14);
+    io.write_u32(
+        address,
+        offset,
+        (header & 0xffff) | ((disabled_masked as u32) << 16),
+    )
+}
+
 /// Errors returned while configuring a conventional MSI capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MsiConfigError {
