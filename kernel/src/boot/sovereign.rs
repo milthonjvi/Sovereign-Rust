@@ -116,13 +116,14 @@ impl SovereignBootInfo {
     /// # Safety
     /// The complete physical memory-map range must be mapped at its identity
     /// address and remain readable for the returned view's lifetime.
-    pub unsafe fn memory_map(&self) -> EfiMemoryMap<'_> {
-        EfiMemoryMap {
+    pub unsafe fn memory_map(&self) -> Result<EfiMemoryMap<'_>, SovereignBootError> {
+        self.validate()?;
+        Ok(EfiMemoryMap {
             base: self.memory_map_physical as usize as *const u8,
             byte_len: self.memory_map_size as usize,
             descriptor_stride: self.memory_descriptor_size as usize,
             _lifetime: core::marker::PhantomData,
-        }
+        })
     }
 }
 
