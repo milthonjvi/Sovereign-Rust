@@ -319,6 +319,38 @@ mod tests {
     }
 
     #[test]
+    fn refuses_to_program_bar_when_decode_disable_did_not_take_effect() {
+        struct IgnoreCommandWrites { registers: RefCell<[u32; 64]> }
+        impl ConfigAccess for IgnoreCommandWrites {
+            fn read_u32(&self, _address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+                self.registers.borrow().get((register / 4) as usize)
+                    .copied().ok_or(ConfigError::OutOfRange)
+            }
+            fn write_u32(&self, _address: PciAddress, register: u16, value: u32) -> Result<(), ConfigError> {
+                if register != COMMAND_STATUS {
+                    let mut registers = self.registers.borrow_mut();
+                    *registers.get_mut((register / 4) as usize).ok_or(ConfigError::OutOfRange)? = value;
+                }
+                Ok(())
+            }
+        }
+
+        let mut registers = [0u32; 64];
+        registers[1] = (0xa55a << 16) | 7;
+        registers[4] = 0x8000_0008;
+        let io = IgnoreCommandWrites { registers: RefCell::new(registers) };
+        let (allocation, size) = allocation_32();
+        assert_eq!(
+            unsafe { program_bar(&io, function(), allocation, size) },
+            Err(BarProgramError::DecodeDisableFailed)
+        );
+        let state = io.registers.borrow();
+        assert_eq!(state[4], 0x8000_0008);
+        assert_eq!(state[1] as u16, 7);
+        assert_eq!(state[1] >> 16, 0xa55a);
+    }
+
+    #[test]
     fn programs_64_bit_bar_as_one_pair() {
         let mut registers = [0u32; 64];
         registers[1] = 3;
