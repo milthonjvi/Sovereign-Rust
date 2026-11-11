@@ -249,6 +249,8 @@ pub extern "efiapi" fn efi_main(
     // XSDT/RSDT -> FADT/DSDT/MADT/HPET and the NVS FACS. ACPI reclaimable
     // tables are RO/NX; ACPI NVS remains RW/NX for the FACS global lock.
     let descriptor_count = initial_map.size_bytes / initial_map.descriptor_size;
+    const MAX_ACPI_MAPPING_SIZE: u64 = 256 * 1024 * 1024;
+    let mut mapped_acpi_bytes = 0u64;
     let mut rsdp_in_acpi_memory = false;
     let mut rsdp_in_reserved_memory = false;
     let rsdp_range = match acpi_rsdp {
@@ -286,6 +288,10 @@ pub extern "efiapi" fn efi_main(
         if descriptor.memory_type != 9 && descriptor.memory_type != 10 {
             continue;
         }
+        mapped_acpi_bytes = match mapped_acpi_bytes.checked_add(descriptor_size) {
+            Some(total) if total <= MAX_ACPI_MAPPING_SIZE => total,
+            _ => return EFI_OUT_OF_RESOURCES,
+        };
         let mut page = descriptor.physical_start;
         while page < descriptor_end {
             let page_end = match page.checked_add(4096) {
