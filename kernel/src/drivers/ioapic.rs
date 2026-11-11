@@ -119,6 +119,37 @@ const fn redirection_readback_matches(
             == (actual_high & REDIRECTION_WRITABLE_HIGH_MASK)
 }
 
+/// Decoded hardware state of one I/O APIC redirection entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RedirectionState {
+    pub vector: u8,
+    /// Raw three-bit APIC delivery mode from bits 8..=10.
+    pub delivery_mode: u8,
+    pub logical_destination: bool,
+    pub delivery_pending: bool,
+    pub mode: InterruptMode,
+    pub remote_irr: bool,
+    pub masked: bool,
+    pub destination_apic_id: u8,
+}
+
+#[inline]
+const fn decode_redirection_state(low: u32, high: u32) -> RedirectionState {
+    RedirectionState {
+        vector: (low & 0xFF) as u8,
+        delivery_mode: ((low >> 8) & 0x07) as u8,
+        logical_destination: low & (1 << 11) != 0,
+        delivery_pending: low & (1 << 12) != 0,
+        mode: InterruptMode {
+            active_low: low & REDIRECTION_ACTIVE_LOW != 0,
+            level_triggered: low & REDIRECTION_LEVEL != 0,
+        },
+        remote_irr: low & (1 << 14) != 0,
+        masked: low & REDIRECTION_MASK != 0,
+        destination_apic_id: (high >> 24) as u8,
+    }
+}
+
 /// One I/O APIC redirection entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RedirectionEntry {
@@ -287,6 +318,15 @@ impl IoApicController {
         let low = self.read_register(low_reg);
         let high = self.read_register(low_reg + 1);
         Ok((low, high))
+    }
+
+    /// Read and decode the current hardware state of one redirection entry.
+    pub fn read_redirection_state(
+        &mut self,
+        gsi: u32,
+    ) -> Result<RedirectionState, IoApicError> {
+        let (low, high) = self.read_redirection(gsi)?;
+        Ok(decode_redirection_state(low, high))
     }
 
     /// Program an entry masked, writing destination before delivery attributes.
@@ -598,6 +638,32 @@ mod tests {
                 "IOAPIC vector policy differs at {vector:#04x}",
             );
         }
+    }
+
+    #[test]
+    fn decodes_all_redirection_status_fields() {
+        let low = 0x45
+            | (0b101 << 8)
+            | (1 << 11)
+            | (1 << 12)
+            | REDIRECTION_ACTIVE_LOW
+            | (1 << 14)
+            | REDIRECTION_LEVEL
+            | REDIRECTION_MASK;
+        let high = 0xA500_0000;
+        assert_eq!(
+            decode_redirection_state(low, high),
+            RedirectionState {
+                vector: 0x45,
+                delivery_mode: 0b101,
+                logical_destination: true,
+                delivery_pending: true,
+                mode: InterruptMode { active_low: true, level_triggered: true },
+                remote_irr: true,
+                masked: true,
+                destination_apic_id: 0xA5,
+            }
+        );
     }
 
     #[test]
