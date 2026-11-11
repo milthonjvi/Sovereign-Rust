@@ -444,3 +444,44 @@ mod input_handoff_tests{
   assert_eq!(endpoint.max_packet_size,16);assert_eq!(endpoint.interval,4);
  }
 }
+
+
+#[cfg(test)]
+mod class_request_execution_tests{
+ use super::*;
+ use crate::drivers::usb::controller::{ControllerKind,PortStatus,TransferResult};
+ use crate::drivers::usb::transfer::{UsbSpeed};
+ struct MockHost{last:Option<SetupPacket>,response:[u8;8],length:usize}
+ impl HostController for MockHost{
+  fn kind(&self)->ControllerKind{ControllerKind::Xhci}
+  fn port_count(&self)->u8{1}
+  fn port_status(&self,_:u8)->Result<PortStatus,UsbError>{Ok(PortStatus{connected:true,enabled:true,suspended:false,over_current:false,speed:Some(UsbSpeed::High)})}
+  fn control_transfer(&mut self,_:DeviceAddress,setup:SetupPacket,data:&mut[u8])->Result<TransferResult,UsbError>{
+   self.last=Some(setup);
+   if setup.request_type&0x80!=0{
+    let n=self.length.min(data.len());data[..n].copy_from_slice(&self.response[..n]);
+    Ok(TransferResult{status:TransferStatus::Success,bytes_transferred:n})
+   }else{Ok(TransferResult{status:TransferStatus::Success,bytes_transferred:0})}
+  }
+  fn bulk_transfer(&mut self,_:DeviceAddress,_:Endpoint,_:&mut[u8])->Result<TransferResult,UsbError>{Err(UsbError::Unsupported)}
+  fn interrupt_transfer(&mut self,_:DeviceAddress,_:Endpoint,_:&mut[u8])->Result<TransferResult,UsbError>{Err(UsbError::Unsupported)}
+  fn reset_port(&mut self,_:u8)->Result<(),UsbError>{Ok(())}
+ }
+ fn host()->MockHost{MockHost{last:None,response:[1,2,3,4,0,0,0,0],length:4}}
+ #[test]fn executes_set_protocol_and_idle_without_data_stage(){
+  let mut h=host();let a=DeviceAddress::new(7).unwrap();
+  execute_set_protocol(&mut h,a,3,HID_PROTOCOL_BOOT).unwrap();
+  let p=h.last.unwrap();assert_eq!(p.request_type,0x21);assert_eq!(p.request,HID_SET_PROTOCOL);assert_eq!(p.index,3);assert_eq!(p.value,0);
+  execute_set_idle(&mut h,a,3,20,2).unwrap();
+  let p=h.last.unwrap();assert_eq!(p.request,HID_SET_IDLE);assert_eq!(p.value,0x1402);
+  assert_eq!(execute_set_protocol(&mut h,a,3,2),Err(UsbError::Unsupported));
+ }
+ #[test]fn executes_get_report_and_returns_actual_short_in_length(){
+  let mut h=host();let mut data=[0u8;8];
+  assert_eq!(execute_get_report(&mut h,DeviceAddress::new(2).unwrap(),4,1,7,&mut data),Ok(4));
+  assert_eq!(&data[..4],&[1,2,3,4]);
+  let p=h.last.unwrap();assert_eq!(p.request_type,0xa1);assert_eq!(p.request,HID_GET_REPORT);
+  assert_eq!(p.value,0x0107);assert_eq!(p.index,4);assert_eq!(p.length,8);
+  assert_eq!(execute_get_report(&mut h,DeviceAddress::new(2).unwrap(),4,0,0,&mut data),Err(UsbError::Unsupported));
+ }
+}
