@@ -262,8 +262,10 @@ impl ParsedConfiguration{
  }
  /// Validates every endpoint against the negotiated device speed.
  pub fn validate_for_speed(&self,speed:UsbSpeed)->Result<(),UsbError>{
-  if self.endpoint_len as usize>self.endpoints.len(){return Err(UsbError::MalformedDescriptor)}
-  for endpoint in self.endpoints[..self.endpoint_len as usize].iter().flatten(){
+  let count=self.endpoint_len as usize;
+  if count>self.endpoints.len(){return Err(UsbError::MalformedDescriptor)}
+  for index in 0..count{
+   let endpoint=self.endpoints[index].ok_or(UsbError::MalformedDescriptor)?;
    endpoint.validate_for_speed(speed)?;
   }
   Ok(())
