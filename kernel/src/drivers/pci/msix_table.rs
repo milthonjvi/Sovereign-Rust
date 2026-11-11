@@ -53,7 +53,8 @@ impl<'a> MsixTable<'a> {
             return Err(MsixTableError::InvalidMapping);
         }
         let base = NonNull::new(mapped_base).ok_or(MsixTableError::InvalidMapping)?;
-        if (base.as_ptr() as usize) & 3 != 0 {
+        // The MSI-X table base is 8-byte aligned by the capability format.
+        if (base.as_ptr() as usize) & 7 != 0 {
             return Err(MsixTableError::InvalidMapping);
         }
         Ok(Self {
@@ -264,6 +265,18 @@ mod tests {
         assert_eq!(pba.is_pending(63), Ok(false));
         assert_eq!(pba.is_pending(64), Ok(true));
         assert_eq!(pba.is_pending(65), Err(MsixTableError::OutOfRange));
+    }
+
+    #[test]
+    fn rejects_table_mapping_that_is_only_four_byte_aligned() {
+        #[repr(align(8))]
+        struct MisalignedMemory([u8; 24]);
+        let mut memory = MisalignedMemory([0; 24]);
+        let pointer = unsafe { memory.0.as_mut_ptr().add(4) };
+        assert_eq!(
+            unsafe { MsixTable::new(capability(), pointer, 16) }.err(),
+            Some(MsixTableError::InvalidMapping)
+        );
     }
 
     #[test]
