@@ -427,6 +427,10 @@ impl IoApicController {
     /// but the caller must serialize against handler removal and keep the
     /// handler valid for the lifetime of the unmasked route.
     pub unsafe fn unmask(&mut self, gsi: u32) -> Result<(), IoApicError> {
+        let index = self.redirection_index(gsi)?;
+        if !self.route_is_configured(index) {
+            return Err(IoApicError::RouteNotConfigured);
+        }
         let state = self.read_redirection_state(gsi)?;
         let local_apic_ready = crate::interrupts::init::is_initialized()
             && crate::interrupts::init::local_apic_mode()
