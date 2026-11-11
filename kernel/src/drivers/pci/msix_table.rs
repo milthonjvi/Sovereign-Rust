@@ -144,6 +144,19 @@ impl<'a> MsixTable<'a> {
     /// The caller must own this table mapping exclusively and must not race
     /// another CPU or driver updating the same vector entry.
     pub unsafe fn set_vector_mask(&mut self, index: u16, masked: bool) -> Result<(), MsixTableError> {
+        if !masked {
+            let current = self.read_entry(index)?;
+            if current.message_data & !0xff != 0 {
+                return Err(MsixTableError::InvalidMessageData);
+            }
+            let vector = current.message_data as u8;
+            if !crate::interrupts::apic::is_apic_vector(vector) {
+                return Err(MsixTableError::InvalidVector);
+            }
+            if !crate::interrupts::dispatch::is_registered(vector) {
+                return Err(MsixTableError::HandlerNotRegistered);
+            }
+        }
         let entry = self.entry_pointer(index)?;
         let control = unsafe { entry.add(3) };
         let value = if masked { VECTOR_CONTROL_MASK } else { 0 };
