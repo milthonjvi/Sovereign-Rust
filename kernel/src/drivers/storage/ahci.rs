@@ -24,7 +24,7 @@ impl AhciCapabilities {
     }
 }
 
-#[repr(C,align(128))]
+#[repr(C)]
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct AhciCommandHeader {
     pub flags:u16, pub prdt_length:u16, pub transferred_bytes:u32,
@@ -75,7 +75,7 @@ pub fn build_prdt(physical:u64,byte_len:usize,entries:&mut[AhciPrdtEntry],suppor
     if byte_len==0 || physical&1!=0{return Err(AhciError::InvalidTransfer);}
     let end=physical.checked_add(byte_len as u64).ok_or(AhciError::AddressOverflow)?;
     if !supports_64bit && end>u32::MAX as u64+1{return Err(AhciError::UnsupportedAddressing);}
-    let count=(byte_len+4*1024*1024-1)/(4*1024*1024);
+    let count=byte_len.checked_add(4*1024*1024-1).ok_or(AhciError::AddressOverflow)?/(4*1024*1024);
     if count>entries.len() || count>u16::MAX as usize{return Err(AhciError::PrdtCapacity);}
     let mut address=physical; let mut remaining=byte_len; let mut index=0usize;
     while remaining!=0{
@@ -103,11 +103,13 @@ impl AhciIdentify {
     /// Parse the 512-byte ATA IDENTIFY DEVICE payload.
     pub fn parse(words:&[u16])->Result<Self,AhciError>{
         if words.len()<256{return Err(AhciError::InvalidCapabilities);}
-        let supports_lba48=words[83]&(1<<10)!=0;
+        let word83_valid=words[83]&(1<<14)!=0 && words[83]&(1<<15)==0;
+        let supports_lba48=word83_valid && words[83]&(1<<10)!=0;
         if !supports_lba48{return Err(AhciError::UnsupportedAddressing);}
         let sector_count=(words[100] as u64)|((words[101] as u64)<<16)|((words[102] as u64)<<32)|((words[103] as u64)<<48);
         if sector_count==0{return Err(AhciError::InvalidCapabilities);}
         let logical_sector_size=if words[106]&(1<<12)!=0 {
+            if words[106]&(1<<14)==0 || words[106]&(1<<15)!=0 { return Err(AhciError::InvalidCapabilities); }
             let words_per_sector=(words[117] as u32)|((words[118] as u32)<<16);
             words_per_sector.checked_mul(2).ok_or(AhciError::InvalidCapabilities)?
         }else{512};
