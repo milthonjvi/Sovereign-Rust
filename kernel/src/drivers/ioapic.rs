@@ -61,6 +61,7 @@ pub enum IoApicError {
     ControllerIdMismatch,
     InvalidRedirectionCount,
     GsiRangeOverflow,
+    DestinationIdOutOfRange,
 }
 
 /// Decoded ACPI interrupt electrical configuration.
@@ -154,7 +155,7 @@ const fn decode_redirection_state(low: u32, high: u32) -> RedirectionState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RedirectionEntry {
     pub vector: u8,
-    pub destination_apic_id: u8,
+    pub destination_apic_id: u32,
     pub mode: InterruptMode,
 }
 
@@ -165,8 +166,11 @@ impl RedirectionEntry {
             | if self.mode.level_triggered { REDIRECTION_LEVEL } else { 0 }
     }
 
-    fn high(self) -> u32 {
-        (self.destination_apic_id as u32) << 24
+    fn high(self) -> Result<u32, IoApicError> {
+        if self.destination_apic_id > u8::MAX as u32 {
+            return Err(IoApicError::DestinationIdOutOfRange);
+        }
+        Ok(self.destination_apic_id << 24)
     }
 }
 
@@ -310,6 +314,7 @@ impl IoApicController {
 
     /// Read an existing redirection entry.
     pub fn read_redirection(&mut self, gsi: u32) -> Result<(u32, u32), IoApicError> {
+        let expected_high = entry.high()?;
         let index = self.redirection_index(gsi)?;
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
         // The low dword contains the asynchronously changing Remote-IRR bit.
@@ -358,7 +363,6 @@ impl IoApicController {
         }
 
         let expected_low = entry.low() | REDIRECTION_MASK;
-        let expected_high = entry.high();
         self.write_register(low_reg + 1, expected_high);
         self.write_register(low_reg, expected_low);
 
@@ -691,6 +695,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_x2apic_destination_ids_not_representable_by_ioapic() {
+        let entry = RedirectionEntry {
+            vector: 0x41,
+            destination_apic_id: 256,
+            mode: InterruptMode { active_low: false, level_triggered: false },
+        };
+        assert_eq!(entry.high(), Err(IoApicError::DestinationIdOutOfRange));
+    }
+
+    #[test]
     fn redirection_entry_encodes_delivery_attributes_and_destination() {
         let entry = RedirectionEntry {
             vector: 0x41,
@@ -698,7 +712,7 @@ mod tests {
             mode: InterruptMode { active_low: true, level_triggered: true },
         };
         assert_eq!(entry.low(), 0x41 | REDIRECTION_ACTIVE_LOW | REDIRECTION_LEVEL);
-        assert_eq!(entry.high(), 3 << 24);
+        assert_eq!(entry.high(), Ok(3 << 24));
         // configure_masked adds REDIRECTION_MASK independently of caller state.
         assert_ne!((entry.low() | REDIRECTION_MASK) & REDIRECTION_MASK, 0);
     }
