@@ -16,6 +16,7 @@ pub enum BootMemoryError {
     ZeroPageCount,
     MisalignedPhysicalStart,
     RangeOverflow,
+    OverlappingOrUnorderedDescriptors,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +55,7 @@ impl<'map, 'buffer> BootMemoryMap<'map, 'buffer> {
             descriptors: self.descriptors,
             next_index: 0,
             failed: false,
+            previous_end: None,
         }
     }
 
@@ -84,6 +86,7 @@ pub struct UsableRegionIter<'map, 'buffer> {
     descriptors: &'map EfiMemoryMap<'buffer>,
     next_index: usize,
     failed: bool,
+    previous_end: Option<u64>,
 }
 
 impl Iterator for UsableRegionIter<'_, '_> {
@@ -118,6 +121,15 @@ impl Iterator for UsableRegionIter<'_, '_> {
                     return Some(Err(error));
                 }
             };
+
+            // UEFI returns descriptors in ascending physical-address order.
+            // Reject overlaps and reordered entries rather than risking double
+            // allocation of the same physical pages.
+            if self.previous_end.is_some_and(|end| region.start < end) {
+                self.failed = true;
+                return Some(Err(BootMemoryError::OverlappingOrUnorderedDescriptors));
+            }
+            self.previous_end = Some(region.end);
 
             if descriptor.memory_type == EFI_CONVENTIONAL_MEMORY {
                 return Some(Ok(region));
