@@ -293,3 +293,40 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Compositor, CompositorError};
+    use crate::drivers::framebuffer::color::Color;
+    use crate::drivers::framebuffer::image::ImageView;
+
+    #[test]
+    fn z_order_changes_do_not_invalidate_layer_handles() {
+        let pixels_a = [Color::opaque(255, 0, 0)];
+        let pixels_b = [Color::opaque(0, 0, 255)];
+        let image_a = ImageView::new(&pixels_a, 1, 1, 1).unwrap();
+        let image_b = ImageView::new(&pixels_b, 1, 1, 1).unwrap();
+        let mut compositor = Compositor::<4, 8>::new(32, 32, Color::BLACK).unwrap();
+
+        let a = compositor.add_layer(image_a, 0, 0, 255).unwrap();
+        let b = compositor.add_layer(image_b, 1, 1, 255).unwrap();
+        compositor.raise_layer(a).unwrap();
+        compositor.lower_layer(b).unwrap();
+        compositor.swap_layer_order(a, b).unwrap();
+
+        assert_eq!(compositor.layer_count(), 2);
+        compositor.remove_layer(a).unwrap();
+        compositor.remove_layer(b).unwrap();
+        assert_eq!(compositor.layer_count(), 0);
+    }
+
+    #[test]
+    fn rejects_stale_layer_handle_after_removal() {
+        let pixels = [Color::opaque(1, 2, 3)];
+        let image = ImageView::new(&pixels, 1, 1, 1).unwrap();
+        let mut compositor = Compositor::<1, 2>::new(8, 8, Color::BLACK).unwrap();
+        let id = compositor.add_layer(image, 0, 0, 255).unwrap();
+        compositor.remove_layer(id).unwrap();
+        assert_eq!(compositor.set_visible(id, false), Err(CompositorError::InvalidLayer));
+    }
+}
