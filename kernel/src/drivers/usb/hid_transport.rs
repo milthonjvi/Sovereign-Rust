@@ -277,6 +277,15 @@ mod tests{
   }
   fn reset_port(&mut self,_:u8)->Result<(),UsbError>{Ok(())}
  }
+ #[test]fn report_descriptor_reader_rejects_insufficient_storage_before_io(){
+  let mut host=MockHost{status:TransferStatus::Success,bytes:0};
+  let descriptor=HidDescriptor{hid_release:0x0111,country_code:0,subordinate_count:1,report_length:16};
+  let mut short=[0u8;8];
+  assert_eq!(read_report_descriptor(&mut host,DeviceAddress::new(2).unwrap(),3,descriptor,&mut short),Err(UsbError::BufferTooShort));
+  let empty=HidDescriptor{report_length:0,..descriptor};
+  let mut buffer=[0u8;16];
+  assert_eq!(read_report_descriptor(&mut host,DeviceAddress::new(2).unwrap(),3,empty,&mut buffer),Err(UsbError::MalformedDescriptor));
+ }
  #[test]fn normalizes_interrupt_service_intervals_by_usb_speed(){
   let parsed=ParsedEndpoint{address:0x81,attributes:3,max_packet_size:8,interval:4,
    transactions_per_microframe:2,max_burst:0,companion_attributes:0,bytes_per_interval:0,has_ss_companion:false};
