@@ -140,6 +140,16 @@ mod tests{
         assert_eq!(n,2);assert_eq!(entries[0].byte_count(),4*1024*1024);
         assert_eq!(entries[1].byte_count(),512);assert!(entries[1].interrupt_on_completion());
     }
+    #[test]fn identify_decodes_lba48_and_large_logical_sector(){
+        let mut words=[0u16;256];
+        words[83]=(1<<14)|(1<<10); words[76]=1<<8;
+        words[100]=0x5678; words[101]=0x1234; words[102]=1;
+        words[106]=(1<<14)|(1<<12); words[117]=2048;
+        let id=AhciIdentify::parse(&words).unwrap();
+        assert_eq!(id.sector_count,0x1_1234_5678);
+        assert_eq!(id.logical_sector_size,4096);
+        assert!(id.supports_ncq);
+    }
     #[test]fn rejects_dma_above_4g_without_support(){
         let mut entries=[AhciPrdtEntry::default();1];
         assert_eq!(build_prdt(0x1_0000_0000,512,&mut entries,false),Err(AhciError::UnsupportedAddressing));
