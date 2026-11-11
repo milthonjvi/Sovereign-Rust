@@ -5,13 +5,35 @@
 //! only acknowledge the hardware source and request deferred processing.
 //! Queue mutation and expiration draining are performed by task/softirq context.
 
-use crate::sync::irq_lock::IrqSpinLock;
+use crate::{drivers::api::DriverError, sync::irq_lock::IrqSpinLock};
 
 use super::{
     clock::{ClockSource, MonotonicClock},
     deadline::Deadline,
     timer_queue::{TimerEvent, TimerId, TimerQueue, TimerQueueError},
 };
+
+/// Outcome of draining expired timers and attempting to re-arm a hardware comparator.
+///
+/// Expired events remain delivered in the caller's output buffer even when
+/// hardware reprogramming fails. The caller must process those events and
+/// arrange a deferred retry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimerProcessReport {
+    pub expired: usize,
+    pub reprogram_error: Option<DriverError>,
+    pub buffer_unavailable: bool,
+}
+
+/// Outcome of cancelling a queued timer and updating its hardware comparator.
+///
+/// `removed` is authoritative even if comparator reprogramming fails: the
+/// event has already been removed from the software queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimerCancelReport {
+    pub removed: Option<TimerEvent>,
+    pub reprogram_error: Option<DriverError>,
+}
 
 /// Errors surfaced by the generic timer service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
