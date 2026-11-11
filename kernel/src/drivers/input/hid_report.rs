@@ -4,6 +4,7 @@
 //! descriptor/report bytes. No allocation, recursion, or unbounded item storage.
 use super::event::{GamepadAxis, InputDeviceId, InputEvent};
 use super::queue::SpscProducer;
+use super::usb_hid_adapter::HidPublishStats;
 
 pub const MAX_HID_INPUT_FIELDS: usize = 64;
 pub const MAX_HID_VALUES: usize = 128;
@@ -629,10 +630,6 @@ impl HidReportDecoder {
         }
     }
 }
-
-/// Shared publication accounting used by boot and report-protocol adapters.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct HidPublishStats { pub published: u8, pub dropped: u8 }
 
 #[cfg(test)]
 mod tests {
