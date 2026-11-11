@@ -35,12 +35,22 @@ const KERNEL_PATH: [u16; 31] = [
 ];
 
 #[derive(Clone, Copy, Debug)]
+pub struct LoadedSegment {
+    pub virtual_address: u64,
+    pub file_size: u64,
+    pub memory_size: u64,
+    pub flags: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct LoadedKernel {
     pub physical_base: u64,
     pub virtual_base: u64,
     pub image_size: u64,
     pub entry: u64,
     pub pages: usize,
+    pub segments: [LoadedSegment; MAX_PROGRAM_HEADERS],
+    pub segment_count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -257,7 +267,19 @@ fn load_open_file(file: *mut EfiFileProtocol, boot: &mut EfiBootServices) -> Res
         }
     }
 
-    Ok(LoadedKernel { physical_base, virtual_base, image_size, entry, pages })
+    let mut loaded_segments = [LoadedSegment { virtual_address: 0, file_size: 0, memory_size: 0, flags: 0 }; MAX_PROGRAM_HEADERS];
+    for (index, segment) in segments.iter().take(count).enumerate() {
+        loaded_segments[index] = LoadedSegment {
+            virtual_address: segment.virtual_address,
+            file_size: segment.file_size,
+            memory_size: segment.memory_size,
+            flags: segment.flags,
+        };
+    }
+    Ok(LoadedKernel {
+        physical_base, virtual_base, image_size, entry, pages,
+        segments: loaded_segments, segment_count: count,
+    })
 }
 
 fn align_down(value: u64) -> u64 { value & !(PAGE_SIZE - 1) }
