@@ -354,21 +354,22 @@ impl E1000TxQueue {
             return Ok(0);
         }
 
-        registers.dma_read_barrier();
         let count = descriptors.len();
         let start = self.cursor.index() as usize;
         let mut available = 0;
         while available < limit {
             let index = (start + available) & (count - 1);
-            // SAFETY: read-only ownership check on the pinned DMA descriptor ring.
-            let descriptor = unsafe {
-                core::ptr::read_volatile(descriptors.as_ptr().add(index))
-            };
-            if descriptor.status & TXD_STATUS_DD == 0 {
+            let descriptor = unsafe { descriptors.as_ptr().add(index) };
+            // SAFETY: read the device-written ownership byte from the pinned ring.
+            let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+            if status & TXD_STATUS_DD == 0 {
                 break;
             }
             output[available] = index as u16;
             available += 1;
+        }
+        if available != 0 {
+            registers.dma_read_barrier();
         }
         Ok(available)
     }
