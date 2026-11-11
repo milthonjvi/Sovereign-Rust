@@ -376,7 +376,7 @@ struct DescriptorTablePointer {
     base: u64,
 }
 
-unsafe fn build_emergency_idt(physical_base: u64) -> Result<(), EfiStatus> {
+unsafe fn build_emergency_idt(physical_base: u64) {
     let selector: u16;
     // SAFETY: Reading CS is valid in x86_64 UEFI long mode.
     unsafe {
@@ -401,7 +401,6 @@ unsafe fn build_emergency_idt(physical_base: u64) -> Result<(), EfiStatus> {
         // SAFETY: The caller reserved a page for exactly 256 16-byte gates.
         unsafe { ptr::write(table.add(vector), gate) };
     }
-    Ok(())
 }
 
 #[unsafe(no_mangle)]
