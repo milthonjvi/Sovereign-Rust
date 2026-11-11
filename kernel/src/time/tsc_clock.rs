@@ -1,8 +1,8 @@
 //! Invariant-TSC clocksource discovery for x86_64.
 //!
-//! The TSC is accepted only when CPUID advertises invariant TSC and leaf 0x15
-//! supplies a complete crystal ratio. Frequency is never guessed from nominal
-//! CPU MHz because that value is not a reliable TSC calibration source.
+//! The TSC is accepted only when CPUID advertises invariant TSC. Frequency is
+//! taken from a complete CPUID 0x15 crystal ratio when available, otherwise it
+//! can be calibrated against an enabled HPET. Nominal CPU MHz is never guessed.
 
 use crate::{arch::x86_64::cpuid::cpuid, drivers::timer::Hpet};
 use super::clock::ClockSource;
