@@ -198,8 +198,8 @@ impl RedirectionEntry {
     }
 }
 
-/// Minimal indexed-register interface used to test the redirection transaction
-/// without dereferencing real MMIO.
+/// Minimal indexed-register interface for the redirection transaction. A fake
+/// implementation lets unit tests exercise ordering and failure paths without MMIO.
 trait IoApicRegisterAccess {
     fn read_register(&mut self, register: u8) -> u32;
     fn write_register(&mut self, register: u8, value: u32);
