@@ -137,16 +137,56 @@ impl<'a> ImageView<'a> {
             if target_end > target.mapped_len() {
                 return Err(FramebufferError::BufferTooSmall);
             }
-            for source_x in source_start_x..source_end_x {
-                let mut color = self.pixels[source_row + source_x];
-                color.alpha = ((color.alpha as u16 * opacity as u16 + 127) / 255) as u8;
-                if color.alpha != 0 {
-                    // SAFETY: the clipped row range and its complete byte span
-                    // were validated against the target mapping above.
-                    unsafe { target.blend_pixel_unchecked(target_offset, color); }
+            if opacity == 255 {
+                // Preserve source alpha without a multiply in the common
+                // full-opacity case. Fully opaque runs can use the surface's
+                // paired-store writer instead of four volatile byte reads and
+                // a blend operation per pixel.
+                let mut source_x = source_start_x;
+                while source_x < source_end_x {
+                    let color = self.pixels[source_row + source_x];
+                    if color.alpha == 0 {
+                        source_x += 1;
+                        target_offset += 4;
+                        continue;
+                    }
+                    if color.alpha == 255 {
+                        let run_start = source_x;
+                        while source_x < source_end_x
+                            && self.pixels[source_row + source_x].alpha == 255
+                        {
+                            source_x += 1;
+                        }
+                        let run_len = source_x - run_start;
+                        // SAFETY: the run is within the already validated
+                        // source row and target byte span.
+                        unsafe {
+                            target.write_pixels_unchecked(
+                                target_offset,
+                                &self.pixels[source_row + run_start..source_row + source_x],
+                            );
+                        }
+                        target_offset = target_offset.checked_add(run_len * 4)
+                            .ok_or(FramebufferError::SizeOverflow)?;
+                    } else {
+                        // SAFETY: this pixel lies within the validated row.
+                        unsafe { target.blend_pixel_unchecked(target_offset, color); }
+                        source_x += 1;
+                        target_offset += 4;
+                    }
                 }
-                target_offset = target_offset.checked_add(4)
-                    .ok_or(FramebufferError::SizeOverflow)?;
+            } else {
+                for source_x in source_start_x..source_end_x {
+                    let mut color = self.pixels[source_row + source_x];
+                    color.alpha = ((color.alpha as u16 * opacity as u16 + 127) / 255) as u8;
+                    if color.alpha != 0 {
+                        // SAFETY: the clipped row range and its complete byte
+                        // span were validated against the target mapping above.
+                        unsafe { target.blend_pixel_unchecked(target_offset, color); }
+                    }
+                    target_offset = target_offset.checked_add(4)
+                        .ok_or(FramebufferError::SizeOverflow)?;
+                }
             }
         }
         Ok(())
