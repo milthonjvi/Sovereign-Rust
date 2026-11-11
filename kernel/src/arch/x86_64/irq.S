@@ -59,6 +59,8 @@ sovereign_irq_common:
 
     // Keep the original frame pointer across ABI stack alignment and the call.
     mov r12, rsp
+    // The x86-64 C ABI requires DF=0; iretq restores the interrupted RFLAGS.
+    cld
     mov rdi, rsp
     and rsp, -16
     call sovereign_irq_dispatch
