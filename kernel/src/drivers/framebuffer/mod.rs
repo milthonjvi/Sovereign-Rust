@@ -2,6 +2,7 @@
 pub mod color;
 pub mod console;
 pub mod font;
+pub mod fmt;
 pub mod info;
 pub mod surface;
 pub use color::{Color, PixelFormat};
