@@ -5,7 +5,7 @@
 //! the scheduler, which owns task-state transitions and ready-queue insertion.
 
 use crate::time::{
-    BootstrapTimerInitError, ClockSource, Deadline, TimerEvent, TimerId, TscDeadlineQueue, TscDeadlineQueueError,
+    BootstrapTimerInitError, ClockSource, Deadline, TimerEvent, TimerId, TimerProcessReport, TscDeadlineQueue, TscDeadlineQueueError,
 };
 
 /// Stable task identifier used by timeout registration.
@@ -144,11 +144,7 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         // SAFETY: Same-CPU and deferred-context requirements are part of the
         // caller contract for this method.
         let processed = unsafe { self.timers.process_expired(&mut events[..capacity]) };
-        let count = extract_task_wakeups(&mut events[..processed.expired], wakeups);
-        TaskWakeupReport {
-            wakeups: count,
-            timer_reprogram_error: processed.reprogram_error,
-        }
+        task_wakeup_report(&mut events[..processed.expired], wakeups, processed)
     }
 
 
@@ -181,6 +177,20 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
     /// Number of pending task sleeps.
     pub fn pending(&self) -> usize {
         self.timers.pending()
+    }
+}
+
+/// Convert a drained timer batch into task wakeups without discarding
+/// the hardware reprogramming status.
+fn task_wakeup_report(
+    events: &mut [Option<TimerEvent>],
+    wakeups: &mut [Option<TaskId>],
+    processed: TimerProcessReport,
+) -> TaskWakeupReport {
+    let count = extract_task_wakeups(events, wakeups);
+    TaskWakeupReport {
+        wakeups: count,
+        timer_reprogram_error: processed.reprogram_error,
     }
 }
 
@@ -219,6 +229,27 @@ mod tests {
         assert_eq!(extract_task_wakeups(&mut events, &mut wakeups), 2);
         assert_eq!(wakeups, [Some(TaskId(1)), Some(TaskId(3)), None]);
         assert!(events.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn wakeups_are_delivered_even_when_timer_reprogramming_fails() {
+        let mut events = [event(42, TASK_SLEEP_EVENT)];
+        let mut wakeups = [None; 1];
+        let report = task_wakeup_report(
+            &mut events,
+            &mut wakeups,
+            TimerProcessReport {
+                expired: 1,
+                reprogram_error: Some(crate::drivers::api::DriverError::HardwareFault),
+            },
+        );
+
+        assert_eq!(report.wakeups, 1);
+        assert_eq!(wakeups, [Some(TaskId(42))]);
+        assert_eq!(
+            report.timer_reprogram_error,
+            Some(crate::drivers::api::DriverError::HardwareFault)
+        );
     }
 
     #[test]
