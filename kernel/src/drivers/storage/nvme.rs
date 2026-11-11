@@ -252,6 +252,7 @@ pub fn initialize_controller<R: NvmeRegisterIo>(
     let depth=core::cmp::min(queues.depth as u32,core::cmp::min(capabilities.max_queue_entries,4096)) as u16;
     if depth<2{return Err(NvmeError::InvalidQueueDepth);}
     queues.submission[..depth as usize].fill(NvmeCommand::default());
+    queues.completion[..depth as usize].fill(NvmeCompletion::default());
     let aqa=((depth as u32-1)<<16)|(depth as u32-1);
     registers.write32(AQA,aqa)?;
     registers.write64(ASQ,queues.submission_phys)?;
@@ -295,4 +296,36 @@ pub fn ring_completion_doorbell<R: NvmeRegisterIo>(
     registers:&mut R, queue_id:u16, head:u32, stride:u32,
 )->Result<(),NvmeError>{
     registers.write32(doorbell_offset(queue_id,true,stride)?,head)
+}
+
+
+#[cfg(test)]
+mod controller_tests {
+    use super::*;
+    struct Registers { cap:u64, cc:u32, status:u32, aqa:u32, asq:u64, acq:u64 }
+    impl NvmeRegisterIo for Registers {
+        fn read32(&mut self, offset:u32)->Result<u32,NvmeError>{ Ok(match offset {0x14=>self.cc,0x1C=>self.status,_=>0}) }
+        fn read64(&mut self, offset:u32)->Result<u64,NvmeError>{ if offset==0{Ok(self.cap)}else{Ok(0)} }
+        fn write32(&mut self, offset:u32,value:u32)->Result<(),NvmeError>{
+            match offset {0x14=>{self.cc=value;self.status=if value&1!=0{1}else{0};},0x24=>self.aqa=value,_=>{}}
+            Ok(())
+        }
+        fn write64(&mut self, offset:u32,value:u64)->Result<(),NvmeError>{
+            match offset {0x28=>self.asq=value,0x30=>self.acq=value,_=>{}}
+            Ok(())
+        }
+    }
+    #[test]
+    fn initializes_admin_queues_and_controller_enable(){
+        let mut registers=Registers{cap:63,cc:0,status:0,aqa:0,asq:0,acq:0};
+        let mut sq=[NvmeCommand::default();2];
+        let mut cq=[NvmeCompletion{status:1,..NvmeCompletion::default()};2];
+        let mut queues=NvmeAdminQueueMemory{submission_phys:0x1000,completion_phys:0x2000,submission:&mut sq,completion:&mut cq,depth:2};
+        let info=initialize_controller(&mut registers,&mut queues,4).unwrap();
+        assert_eq!(info.admin_queue_depth,2);
+        assert_eq!(registers.aqa,0x0001_0001);
+        assert_eq!(registers.asq,0x1000);assert_eq!(registers.acq,0x2000);
+        assert_eq!(registers.cc&1,1);assert_eq!(registers.status&1,1);
+        assert_eq!(cq[0].status,0);
+    }
 }
