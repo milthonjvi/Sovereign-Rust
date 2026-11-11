@@ -73,10 +73,9 @@ impl TscClockSource {
         let tsc_start = midpoint(tsc_before_start, tsc_after_start);
 
         let mut elapsed_hpet = 0u64;
-        let mut hpet_end = hpet_start;
         for _ in 0..max_spin_iterations {
-            hpet_end = hpet.read_counter() & mask;
-            elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
+            let hpet_sample = hpet.read_counter() & mask;
+            elapsed_hpet = hpet_sample.wrapping_sub(hpet_start) & mask;
             if (elapsed_hpet as u128) >= target_ticks {
                 break;
             }
@@ -87,7 +86,7 @@ impl TscClockSource {
         }
 
         let tsc_before_end = Self::read_tsc();
-        hpet_end = hpet.read_counter() & mask;
+        let hpet_end = hpet.read_counter() & mask;
         elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
         let tsc_after_end = Self::read_tsc();
         let tsc_end = midpoint(tsc_before_end, tsc_after_end);
