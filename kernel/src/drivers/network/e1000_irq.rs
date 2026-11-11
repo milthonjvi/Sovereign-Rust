@@ -156,6 +156,7 @@ extern "C" fn e1000_interrupt_handler(vector: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::e1000_hw::E1000Registers;
 
     #[test]
     fn interrupt_callback_only_sets_deferred_pending_bit() {
@@ -166,6 +167,36 @@ mod tests {
         e1000_interrupt_handler(vector);
         assert!(PENDING_VECTORS[word].load(Ordering::Acquire) & bit != 0);
         assert!(PENDING_VECTORS[word].fetch_and(!bit, Ordering::AcqRel) & bit != 0);
+    }
+
+    struct MockRegisters { fail_read: bool, causes: u32 }
+
+    unsafe impl E1000Registers for MockRegisters {
+        type Error = ();
+        fn read32(&mut self, offset: u32) -> Result<u32, Self::Error> {
+            if offset == REG_ICR && self.fail_read { Err(()) } else { Ok(self.causes) }
+        }
+        fn write32(&mut self, _offset: u32, _value: u32) -> Result<(), Self::Error> { Ok(()) }
+        fn dma_write_barrier(&mut self) {}
+        fn dma_read_barrier(&mut self) {}
+    }
+
+    #[test]
+    fn failed_cause_read_preserves_deferred_notification_for_retry() {
+        let vector = 0xb6;
+        let mut interrupt = E1000Interrupt {
+            vector, mask: E1000_DEFAULT_INTERRUPT_MASK,
+            enabled: false, registered: true,
+        };
+        let word = vector as usize / 64;
+        let bit = 1u64 << (vector as usize % 64);
+        PENDING_VECTORS[word].fetch_or(bit, Ordering::Release);
+        let mut registers = MockRegisters { fail_read: true, causes: E1000_ICR_RXT0 };
+        assert_eq!(interrupt.take_causes(&mut registers), Err(E1000InterruptError::Register(())));
+        assert!(interrupt.take_pending());
+        PENDING_VECTORS[word].fetch_or(bit, Ordering::Release);
+        registers.fail_read = false;
+        assert_eq!(interrupt.take_causes(&mut registers), Ok(Some(E1000_ICR_RXT0)));
     }
 
     #[test]
