@@ -128,25 +128,50 @@ impl AcpiTables {
             let fadt = Fadt::parse(fadt_bytes)?;
 
             // FACS is referenced by FADT.FIRMWARE_CTRL / X_FIRMWARE_CTRL,
-            // not listed in the RSDT/XSDT. It is a special structure without
-            // an SDT checksum, so validate it with the dedicated parser.
-            let facs_address = fadt.firmware_control_address();
-            if facs_address != 0 {
-                let facs_bytes = map_facs(facs_address)
-                    .ok_or(AcpiError::UnsupportedAddress)?;
-                let _facs = Facs::parse(facs_address, facs_bytes)?;
-                found.facs = Some(facs_address);
+            // not listed in the RSDT/XSDT. It has no SDT checksum. Prefer a
+            // nonzero extended pointer, but retry the legacy pointer if the
+            // mapping layer cannot use the extended address. A mapped but
+            // malformed FACS is an error, not a fallback case.
+            let extended_facs = fadt.x_firmware_ctrl.filter(|address| *address != 0);
+            let mut facs_mapped = false;
+            if let Some(address) = extended_facs {
+                if let Some(bytes) = map_facs(address) {
+                    let _facs = Facs::parse(address, bytes)?;
+                    found.facs = Some(address);
+                    facs_mapped = true;
+                }
+            }
+            if !facs_mapped && fadt.firmware_ctrl != 0 {
+                let address = fadt.firmware_ctrl as u64;
+                let bytes = map_facs(address).ok_or(AcpiError::UnsupportedAddress)?;
+                let _facs = Facs::parse(address, bytes)?;
+                found.facs = Some(address);
             }
 
-            let dsdt_address = fadt.dsdt_address();
-            if dsdt_address != 0 {
-                let dsdt_bytes = map_table(dsdt_address)
-                    .ok_or(AcpiError::UnsupportedAddress)?;
-                let dsdt = Sdt::parse(dsdt_bytes)?;
+            // DSDT is reached through FADT, never through the root table.
+            // Apply the same extended-first / legacy-if-unusable policy.
+            // Once a candidate maps, its SDT and signature must validate;
+            // malformed mapped tables must not be hidden by legacy fallback.
+            let extended_dsdt = fadt.x_dsdt.filter(|address| *address != 0);
+            let mut dsdt_mapped = false;
+            if let Some(address) = extended_dsdt {
+                if let Some(bytes) = map_table(address) {
+                    let dsdt = Sdt::parse(bytes)?;
+                    if dsdt.signature() != *b"DSDT" {
+                        return Err(AcpiError::InvalidSignature);
+                    }
+                    found.dsdt = Some(address);
+                    dsdt_mapped = true;
+                }
+            }
+            if !dsdt_mapped && fadt.dsdt != 0 {
+                let address = fadt.dsdt as u64;
+                let bytes = map_table(address).ok_or(AcpiError::UnsupportedAddress)?;
+                let dsdt = Sdt::parse(bytes)?;
                 if dsdt.signature() != *b"DSDT" {
                     return Err(AcpiError::InvalidSignature);
                 }
-                found.dsdt = Some(dsdt_address);
+                found.dsdt = Some(address);
             }
         }
 
@@ -272,6 +297,85 @@ mod tests {
             },
             |address| if address == 0x5000 { Some(facs.as_slice()) } else { None },
         ).unwrap();
+        assert_eq!(result.facs, Some(0x5000));
+    }
+
+    #[test]
+    fn falls_back_to_legacy_dsdt_when_extended_pointer_cannot_be_mapped() {
+        let root = make_xsdt(0x2000);
+        let fadt = make_fadt(0x3000, 0x1_0000_3000);
+        let dsdt = make_sdt(*b"DSDT", 36);
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(fadt.as_slice()),
+            0x3000 => Some(dsdt.as_slice()),
+            _ => None,
+        }).unwrap();
+
+        assert_eq!(result.dsdt, Some(0x3000));
+    }
+
+    #[test]
+    fn does_not_hide_malformed_mapped_extended_dsdt_with_legacy_pointer() {
+        let root = make_xsdt(0x2000);
+        let fadt = make_fadt(0x3000, 0x4000);
+        let wrong_table = make_sdt(*b"APIC", 36);
+        let legacy_dsdt = make_sdt(*b"DSDT", 36);
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(fadt.as_slice()),
+            0x3000 => Some(legacy_dsdt.as_slice()),
+            0x4000 => Some(wrong_table.as_slice()),
+            _ => None,
+        });
+
+        assert_eq!(result, Err(AcpiError::InvalidSignature));
+    }
+
+    #[test]
+    fn falls_back_to_legacy_facs_when_extended_pointer_cannot_be_mapped() {
+        let root = make_xsdt(0x2000);
+        let mut fadt = make_fadt(0, 0);
+        fadt[36..40].copy_from_slice(&0x5000u32.to_le_bytes());
+        fadt[132..140].copy_from_slice(&0x1_0000_5000u64.to_le_bytes());
+        fadt[9] = 0;
+        let checksum = 0u8.wrapping_sub(fadt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        fadt[9] = checksum;
+
+        let mut facs = std::vec![0u8; 64];
+        facs[0..4].copy_from_slice(b"FACS");
+        facs[4..8].copy_from_slice(&64u32.to_le_bytes());
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover_with_mappers(
+            &rsdp,
+            |address| match address {
+                0x1000 => Some(root.as_slice()),
+                0x2000 => Some(fadt.as_slice()),
+                _ => None,
+            },
+            |address| if address == 0x5000 { Some(facs.as_slice()) } else { None },
+        ).unwrap();
+
         assert_eq!(result.facs, Some(0x5000));
     }
 
