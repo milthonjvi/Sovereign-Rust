@@ -16,6 +16,8 @@ pub struct FramebufferConsole<'a> {
     rows: usize,
     column: usize,
     row: usize,
+    cursor_visible: bool,
+    cursor_color: Color,
 }
 
 impl<'a> FramebufferConsole<'a> {
@@ -41,6 +43,8 @@ impl<'a> FramebufferConsole<'a> {
             rows,
             column: 0,
             row: 0,
+            cursor_visible: false,
+            cursor_color: foreground,
         })
     }
 
@@ -52,6 +56,36 @@ impl<'a> FramebufferConsole<'a> {
     /// Console dimensions in character cells (columns, rows).
     pub const fn dimensions(&self) -> (usize, usize) {
         (self.columns, self.rows)
+    }
+
+    /// Whether the insertion cursor is currently rendered.
+    pub const fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    /// Set the insertion cursor visibility.
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        if self.cursor_visible == visible {
+            return;
+        }
+        if visible {
+            self.cursor_visible = true;
+            self.draw_cursor();
+        } else {
+            self.erase_cursor();
+            self.cursor_visible = false;
+        }
+    }
+
+    /// Change the color used by the insertion cursor.
+    pub fn set_cursor_color(&mut self, color: Color) {
+        if self.cursor_visible {
+            self.erase_cursor();
+        }
+        self.cursor_color = color;
+        if self.cursor_visible {
+            self.draw_cursor();
+        }
     }
 
     /// Current text colors (foreground, background).
@@ -111,26 +145,40 @@ impl<'a> FramebufferConsole<'a> {
     /// Write a UTF-8 string. Unsupported non-ASCII characters use the font's
     /// replacement glyph.
     pub fn write_str(&mut self, text: &str) {
+        self.erase_cursor_if_visible();
         for character in text.chars() {
-            self.write_char(character);
+            self.write_char_inner(character);
         }
+        self.draw_cursor_if_visible();
     }
 
     /// Write text followed by a newline.
     pub fn write_line(&mut self, text: &str) {
-        self.write_str(text);
+        self.erase_cursor_if_visible();
+        for character in text.chars() {
+            self.write_char_inner(character);
+        }
         self.newline();
+        self.draw_cursor_if_visible();
     }
 
     /// Clear the display and reset the cursor.
     pub fn clear(&mut self) {
+        self.erase_cursor_if_visible();
         self.surface.clear(self.background);
         self.column = 0;
         self.row = 0;
+        self.draw_cursor_if_visible();
     }
 
     /// Write one character or process a basic terminal control character.
     pub fn write_char(&mut self, character: char) {
+        self.erase_cursor_if_visible();
+        self.write_char_inner(character);
+        self.draw_cursor_if_visible();
+    }
+
+    fn write_char_inner(&mut self, character: char) {
         match character {
             '\n' => self.newline(),
             '\r' => self.column = 0,
@@ -192,6 +240,30 @@ impl<'a> FramebufferConsole<'a> {
     fn scroll(&mut self) {
         self.surface.scroll_up(FONT_LINE_HEIGHT, self.background);
         self.row = self.rows - 1;
+    }
+
+    fn erase_cursor_if_visible(&mut self) {
+        if self.cursor_visible {
+            self.erase_cursor();
+        }
+    }
+
+    fn draw_cursor_if_visible(&mut self) {
+        if self.cursor_visible {
+            self.draw_cursor();
+        }
+    }
+
+    fn draw_cursor(&mut self) {
+        let x = self.column * FONT_ADVANCE;
+        let y = self.row * FONT_LINE_HEIGHT + FONT_HEIGHT;
+        self.surface.fill_rect(x, y, FONT_ADVANCE - 1, FONT_LINE_HEIGHT - FONT_HEIGHT, self.cursor_color);
+    }
+
+    fn erase_cursor(&mut self) {
+        let x = self.column * FONT_ADVANCE;
+        let y = self.row * FONT_LINE_HEIGHT + FONT_HEIGHT;
+        self.surface.fill_rect(x, y, FONT_ADVANCE - 1, FONT_LINE_HEIGHT - FONT_HEIGHT, self.background);
     }
 
     fn backspace(&mut self) {
