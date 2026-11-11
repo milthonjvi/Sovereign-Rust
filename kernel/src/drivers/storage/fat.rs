@@ -10,7 +10,9 @@ pub enum FatError {
     InvalidBytesPerSector, SectorSizeMismatch, InvalidSectorsPerCluster,
     InvalidReservedSectorCount, InvalidFatCount, InvalidRootDirectory,
     InvalidTotalSectors, InvalidFatSize, InvalidClusterCount, FatTooSmall,
-    InvalidFat32Metadata, UnsupportedFilesystem,
+    InvalidFat32Metadata, UnsupportedFilesystem, InvalidCluster, FatEntryIo,
+    FatSectorBufferTooSmall, ClusterBufferTooSmall, ChainCorrupt, ChainTooLong,
+    FileSizeMismatch, InvalidDirectoryEntry,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FatBpb {
@@ -158,4 +160,34 @@ mod tests {
         let mut d=Disk(fat16_boot(),0); let mut buf=[0;512];
         assert_eq!(probe_fat(&mut d,&mut buf).unwrap().kind,FatKind::Fat16); assert_eq!(d.1,1);
     }
+}
+
+/// Result of decoding a FAT allocation-table entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FatChainValue { Next(u32), End }
+
+/// Decoded short-name directory record (LFN and volume-label records are omitted).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FatDirEntry {
+    pub short_name: [u8; 11],
+    pub attributes: u8,
+    pub first_cluster: u32,
+    pub file_size: u32,
+}
+impl FatDirEntry {
+    pub fn parse(raw: &[u8]) -> Result<Option<Self>, FatError> {
+        if raw.len() < 32 { return Err(FatError::InvalidDirectoryEntry); }
+        if raw[0] == 0x00 || raw[0] == 0xE5 || raw[11] == 0x0F || raw[11] & 0x08 != 0 {
+            return Ok(None);
+        }
+        let mut name = [0u8; 11];
+        name.copy_from_slice(&raw[..11]);
+        Ok(Some(Self {
+            short_name: name,
+            attributes: raw[11],
+            first_cluster: ((le16(raw, 20) as u32) << 16) | le16(raw, 26) as u32,
+            file_size: le32(raw, 28),
+        }))
+    }
+    pub const fn is_directory(&self) -> bool { self.attributes & 0x10 != 0 }
 }
