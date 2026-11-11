@@ -9,7 +9,7 @@ use super::e1000::{
     REG_CTRL, REG_STATUS, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
     REG_RDBAH, REG_RDBAL, REG_RDH, REG_RDLEN, REG_RDT,
     REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
-    RCTL_BAM, RCTL_EN, RCTL_SECRC, TCTL_COLD_SHIFT, TCTL_CT_SHIFT, TCTL_EN, TCTL_PSP,
+    RCTL_BAM, RCTL_EN, RCTL_LPE, RCTL_SECRC, TCTL_COLD_SHIFT, TCTL_CT_SHIFT, TCTL_EN, TCTL_PSP,
 };
 use super::e1000_descriptor::mac_address_from_registers;
 use super::ethernet::MacAddress;
@@ -161,7 +161,7 @@ pub fn initialize<R: E1000Registers>(
         | (TCTL_COLLISION_DISTANCE << TCTL_COLD_SHIFT);
     registers.write32(REG_TCTL, tctl).map_err(E1000InitError::Register)?;
     registers.dma_write_barrier();
-    registers.write32(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)
+    registers.write32(REG_RCTL, RCTL_EN | RCTL_LPE | RCTL_BAM | RCTL_SECRC)
         .map_err(E1000InitError::Register)?;
 
     Ok(E1000InitInfo {
@@ -684,7 +684,7 @@ mod tests {
         assert!(regs.writes.contains(&(REG_TDBAH, 1)));
         assert!(regs.writes.contains(&(REG_RDT, 31)));
         assert!(regs.writes.contains(&(REG_TDT, 0)));
-        assert!(regs.writes.contains(&(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)));
+        assert!(regs.writes.contains(&(REG_RCTL, RCTL_EN | RCTL_LPE | RCTL_BAM | RCTL_SECRC)));
         assert!(regs.writes.iter().any(|(reg, value)| *reg == REG_TCTL && value & TCTL_EN != 0));
     }
 
