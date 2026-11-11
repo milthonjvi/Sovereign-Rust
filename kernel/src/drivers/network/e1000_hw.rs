@@ -598,7 +598,10 @@ mod tests {
         let mut queue = E1000TxQueue::new(8).unwrap();
         assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(Some(0)));
         assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x8000, 64), Ok(0));
+        assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(Some(1)));
+        descriptors[1].status = 0;
         assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(None));
+        descriptors[1].status = TXD_STATUS_DD;
         descriptors[0].status = TXD_STATUS_DD;
         assert_eq!(queue.reap_one(&mut regs, &descriptors), Ok(Some(0)));
         assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(Some(1)));
