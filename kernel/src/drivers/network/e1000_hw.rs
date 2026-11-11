@@ -795,6 +795,7 @@ mod tests {
         descriptors[0].status = TXD_STATUS_DD;
         assert_eq!(queue.reap_one(&mut regs, &descriptors), Ok(Some(0)));
         assert_eq!(queue.reap(&mut regs, &descriptors), Ok(0));
+        assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(Some(1)));
         assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x9000, 256), Ok(1));
     }
 
