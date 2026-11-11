@@ -18,8 +18,10 @@ pub const TD_DIRECTION_SETUP:u32=0<<19;
 pub const TD_DIRECTION_OUT:u32=1<<19;
 pub const TD_DIRECTION_IN:u32=2<<19;
 pub const TD_DIRECTION_FROM_ED:u32=3<<19;
-pub const TD_TOGGLE_DATA0:u32=2<<24;
-pub const TD_TOGGLE_DATA1:u32=3<<24;
+pub const TD_TOGGLE_DATA0:u32=0<<24;
+pub const TD_TOGGLE_DATA1:u32=1<<24;
+pub const TD_TOGGLE_FROM_ED:u32=2<<24;
+pub const TD_CC_NOT_ACCESSED:u32=0xf<<28;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum OhciDirection{FromTd,Out,In,Setup}
