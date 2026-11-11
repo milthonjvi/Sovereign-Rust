@@ -22,7 +22,7 @@ pub use queue::{EventQueue, SpscConsumer, SpscProducer, SpscQueue};
 
 pub use mux::{InputEventMux, InputSourceId, SourcedInputEvent};
 
-pub use usb_hid_adapter::{HidInputError, HidPublishStats, InputDeviceIdAllocator, UsbBootKeyboardAdapter, UsbBootMouseAdapter};
+pub use usb_hid_adapter::{HidInputError, HidPublishStats, UsbBootKeyboardAdapter, UsbBootMouseAdapter};
 
 pub use hid_report::{HidInputField, HidReportDecoder, HidReportError, HidReportMap, MAX_HID_INPUT_FIELDS, MAX_HID_VALUES};
 
