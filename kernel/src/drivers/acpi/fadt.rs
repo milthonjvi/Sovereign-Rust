@@ -1029,6 +1029,30 @@ mod tests {
     }
 
     #[test]
+    fn optional_pm2_block_also_uses_legacy_when_extended_io_is_unaddressable() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x400u32.to_le_bytes());
+        b[88] = 4;
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes());
+        b[89] = 2;
+        b[72..76].copy_from_slice(&0x600u32.to_le_bytes());
+        b[90] = 1;
+        b[196] = GenericAddress::ADDRESS_SPACE_SYSTEM_IO;
+        b[197] = 8;
+        b[199] = GenericAddress::ACCESS_BYTE;
+        b[200..208].copy_from_slice(&0x1_0000u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+
+        let fadt = Fadt::parse(&b).unwrap();
+        let map = fadt.resolve_pm_register_map().unwrap();
+        assert_eq!(map.pm2_control, Some(PmRegisterAddress::SystemIo(0x600)));
+        // PM1b is optional and its absence must not prevent map resolution.
+        assert_eq!(map.pm1b_event, None);
+        assert_eq!(map.pm1b_control, None);
+    }
+
+    #[test]
     fn unsupported_extended_pm_address_without_legacy_fallback_is_rejected() {
         let mut b = make_fadt(244, 0, None, None);
         b[56..60].copy_from_slice(&0x400u32.to_le_bytes());
