@@ -17,6 +17,14 @@ pub struct Fadt {
     pub smi_command_port: u32,
     pub acpi_enable: u8,
     pub acpi_disable: u8,
+    pub s4bios_request: u8,
+    pub pstate_control: u8,
+    /// IA-PC boot architecture capability flags (FADT offset 109).
+    pub iapc_boot_architecture: u16,
+    /// ARM boot architecture flags (FADT offset 129), when present.
+    pub arm_boot_architecture: Option<u16>,
+    /// FADT minor version (offset 131), when present.
+    pub minor_version: Option<u8>,
     pub pm1a_control_block: u32,
     pub pm1b_control_block: u32,
     pub legacy_pm_registers: LegacyPmRegisters,
@@ -70,6 +78,7 @@ impl Fadt {
         // partially supplied GAS and 64-bit pointers from being mistaken for
         // absent fields.
         if (b.len() > 116 && b.len() < 128)
+            || (b.len() > 129 && b.len() < 131)
             || (b.len() > 132 && b.len() < 140)
             || (b.len() > 140 && b.len() < 148)
             || (b.len() > 148 && b.len() < 244)
@@ -123,6 +132,11 @@ impl Fadt {
             smi_command_port: read_u32(b, 48)?,
             acpi_enable: b[52],
             acpi_disable: b[53],
+            s4bios_request: b[54],
+            pstate_control: b[55],
+            iapc_boot_architecture: read_u16(b, 109)?,
+            arm_boot_architecture: if b.len() >= 131 { Some(read_u16(b, 129)?) } else { None },
+            minor_version: b.get(131).copied(),
             pm1a_control_block: read_u32(b, 64)?,
             pm1b_control_block: read_u32(b, 68)?,
             legacy_pm_registers: LegacyPmRegisters {
@@ -265,6 +279,25 @@ impl Fadt {
         }
         Ok(())
     }
+
+    /// Validate reserved bits in the IA-PC and ARM boot-architecture fields.
+    /// This is explicit so callers can inspect older or non-x86 firmware data.
+    pub fn validate_boot_architecture_flags(&self) -> Result<(), AcpiError> {
+        if self.iapc_boot_architecture & !0x003F != 0 {
+            return Err(AcpiError::MalformedTable);
+        }
+        if self.arm_boot_architecture.is_some_and(|flags| flags & !0x0003 != 0) {
+            return Err(AcpiError::MalformedTable);
+        }
+        Ok(())
+    }
+
+    pub const fn has_legacy_devices(&self) -> bool { self.iapc_boot_architecture & (1 << 0) != 0 }
+    pub const fn has_8042_controller(&self) -> bool { self.iapc_boot_architecture & (1 << 1) != 0 }
+    pub const fn vga_hardware_not_present(&self) -> bool { self.iapc_boot_architecture & (1 << 2) != 0 }
+    pub const fn msi_not_supported(&self) -> bool { self.iapc_boot_architecture & (1 << 3) != 0 }
+    pub const fn pcie_aspm_controls_not_supported(&self) -> bool { self.iapc_boot_architecture & (1 << 4) != 0 }
+    pub const fn cmos_rtc_not_present(&self) -> bool { self.iapc_boot_architecture & (1 << 5) != 0 }
 
     /// Whether firmware advertises a usable ACPI reset register.
     pub const fn reset_supported(&self) -> bool {
@@ -601,6 +634,41 @@ mod tests {
         malformed[9] = checksum;
         let fadt = Fadt::parse(&malformed).unwrap();
         assert_eq!(fadt.extended_pm_registers.unwrap().validate(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn parses_fadt_boot_architecture_and_minor_version_fields() {
+        let mut b = make_fadt(132, 0, None, None);
+        b[54] = 0xA5; b[55] = 0x5A;
+        b[109..111].copy_from_slice(&0x003Fu16.to_le_bytes());
+        b[129..131].copy_from_slice(&0x0003u16.to_le_bytes());
+        b[131] = 0x21;
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.s4bios_request, 0xA5);
+        assert_eq!(fadt.pstate_control, 0x5A);
+        assert_eq!(fadt.iapc_boot_architecture, 0x003F);
+        assert_eq!(fadt.arm_boot_architecture, Some(0x0003));
+        assert_eq!(fadt.minor_version, Some(0x21));
+        assert!(fadt.has_legacy_devices()); assert!(fadt.has_8042_controller());
+        assert!(fadt.vga_hardware_not_present()); assert!(fadt.msi_not_supported());
+        assert!(fadt.pcie_aspm_controls_not_supported()); assert!(fadt.cmos_rtc_not_present());
+        assert_eq!(fadt.validate_boot_architecture_flags(), Ok(()));
+        let old = Fadt::parse(&make_fadt(129, 0, None, None)).unwrap();
+        assert_eq!(old.arm_boot_architecture, None);
+        assert_eq!(old.minor_version, None);
+    }
+
+    #[test]
+    fn rejects_reserved_fadt_boot_architecture_bits_when_explicitly_validated() {
+        let mut b = make_fadt(132, 0, None, None);
+        b[109..111].copy_from_slice(&0x0040u16.to_le_bytes());
+        b[129..131].copy_from_slice(&0x0004u16.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validate_boot_architecture_flags(), Err(AcpiError::MalformedTable));
     }
 
     #[test]
