@@ -228,6 +228,9 @@ impl Uart16550 {
     /// Sends one byte, using bounded polling to prevent an infinite kernel hang.
     pub fn write_byte(&self, byte: u8) -> Result<(), UartError> {
         self.ensure_initialized()?;
+        if irq::is_attached(self.base) {
+            return Err(UartError::InterruptsActive);
+        }
         for _ in 0..self.poll_limit {
             // SAFETY: This instance owns the UART.
             if unsafe { io::in8(self.port(LSR)) } & THR_EMPTY != 0 {
@@ -258,6 +261,9 @@ impl Uart16550 {
     pub fn write(&self, bytes: &[u8]) -> Result<usize, (usize, UartError)> {
         if let Err(error) = self.ensure_initialized() {
             return Err((0, error));
+        }
+        if irq::is_attached(self.base) {
+            return Err((0, UartError::InterruptsActive));
         }
         let burst = self.tx_fifo_depth();
         let mut written = 0;
@@ -338,7 +344,9 @@ impl Uart16550 {
         self.ensure_initialized()?;
         for _ in 0..self.poll_limit {
             // SAFETY: This instance owns the UART.
-            if unsafe { io::in8(self.port(LSR)) } & TRANSMITTER_EMPTY != 0 {
+            if irq::transmit_pending(self.base).unwrap_or(0) == 0
+                && unsafe { io::in8(self.port(LSR)) } & TRANSMITTER_EMPTY != 0
+            {
                 return Ok(());
             }
             core::hint::spin_loop();
