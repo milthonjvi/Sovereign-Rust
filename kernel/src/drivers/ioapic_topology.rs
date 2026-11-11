@@ -291,6 +291,11 @@ mod tests {
         ];
         assert_eq!(validate_io_apic_ranges(&duplicate_id),
             Err(TopologyError::DuplicateControllerId));
+        assert_eq!(
+            resolve_gsi(0, &duplicate_id),
+            Err(TopologyError::DuplicateControllerId),
+            "resolution must reject duplicate IDs even when their GSI ranges do not overlap",
+        );
     }
 
     #[test]
