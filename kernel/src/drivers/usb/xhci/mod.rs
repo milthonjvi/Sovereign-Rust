@@ -86,9 +86,13 @@ impl<'a,const N:usize>XhciProducerRing<'a,N>{
 /// only when their Cycle bit matches the consumer cycle state.
 pub struct XhciEventRing<'a,const N:usize>{entries:&'a mut[Trb;N],physical_base:u64,dequeue:usize,cycle:bool}
 impl<'a,const N:usize>XhciEventRing<'a,N>{
- pub fn new(entries:&'a[Trb;N])->Result<Self,XhciError>{
-  if N==0{return Err(XhciError::InvalidRing)}
-  Ok(Self{entries,dequeue:0,cycle:true})
+ /// # Safety
+ /// The array must be the DMA event-ring segment at physical_base, remain
+ /// pinned/coherent, and the controller must be stopped during initialization.
+ pub unsafe fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
+  if N==0||physical_base&0x3f!=0{return Err(XhciError::InvalidRing)}
+  for entry in entries.iter_mut(){unsafe{core::ptr::write_volatile(entry,Trb::EMPTY);}}
+  Ok(Self{entries,physical_base,dequeue:0,cycle:true})
  }
  pub fn pop(&mut self)->Option<Trb>{
   let entry=&self.entries[self.dequeue];
