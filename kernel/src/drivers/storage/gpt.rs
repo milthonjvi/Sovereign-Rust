@@ -4,7 +4,7 @@ const SIGNATURE: &[u8; 8] = b"EFI PART";
 const MIN_HEADER: usize = 92;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GptError { BufferTooSmall, InvalidSignature, UnsupportedRevision, InvalidHeaderSize, HeaderCrcMismatch, InvalidLba, InvalidUsableRange, InvalidEntryGeometry, AddressOverflow, TableOutOfBounds, InvalidBlockGeometry }
+pub enum GptError { BufferTooSmall, InvalidSignature, UnsupportedRevision, InvalidHeaderSize, HeaderCrcMismatch, InvalidLba, InvalidUsableRange, InvalidEntryGeometry, AddressOverflow, TableOutOfBounds, InvalidBlockGeometry, EntryArrayCrcMismatch, InvalidPartitionEntry, OverlappingPartitions, DuplicatePartitionGuid, PartitionOutputFull, DeviceReadFailed }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GptHeader { pub revision:u32, pub header_size:u32, pub current_lba:u64, pub backup_lba:u64, pub first_usable_lba:u64, pub last_usable_lba:u64, pub disk_guid:[u8;16], pub entries_lba:u64, pub entry_count:u32, pub entry_size:u32, pub entries_crc32:u32 }
