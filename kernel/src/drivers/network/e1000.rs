@@ -175,6 +175,24 @@ mod tests {
     }
 
     #[test]
+    fn supports_full_64k_descriptor_ring_limit() {
+        let ring = RingConfig::new(0x1_0000, 65_536).unwrap();
+        assert_eq!(ring.descriptor_count, 65_536);
+        assert_eq!(ring.byte_length, 1_048_576);
+        assert_eq!(
+            RingConfig::new(0x1_0000, 131_072),
+            Err(E1000Error::InvalidRingSize),
+        );
+
+        let mut cursor = RingCursor::new(65_536).unwrap();
+        for _ in 0..65_535 {
+            cursor.advance();
+        }
+        assert_eq!(cursor.index(), u16::MAX);
+        assert_eq!(cursor.advance(), 0);
+    }
+
+    #[test]
     fn ring_cursor_wraps_at_power_of_two_boundary() {
         let mut cursor = RingCursor::new(8).unwrap();
         for expected in 1..8 { assert_eq!(cursor.advance(), expected); }
