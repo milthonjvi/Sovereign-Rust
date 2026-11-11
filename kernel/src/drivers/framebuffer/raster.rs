@@ -279,6 +279,18 @@ pub fn stroke_polyline(
     }
 }
 
+/// Draw an open polyline with antialiased segment coverage.
+pub fn stroke_polyline_aa(
+    target: &mut FramebufferSurface<'_>,
+    vertices: &[(i64, i64)],
+    color: Color,
+) -> Result<(), FramebufferError> {
+    for segment in vertices.windows(2) {
+        stroke_line_aa(target, segment[0], segment[1], color)?;
+    }
+    Ok(())
+}
+
 /// Fill an axis-aligned ellipse using integer scan conversion.
 ///
 /// Radii larger than i64::MAX are rejected before any framebuffer writes.
@@ -520,6 +532,84 @@ fn cubic_adaptive(
     let center = midpoint(d, e);
     cubic_adaptive(target, start, a, d, center, tolerance, depth - 1, color);
     cubic_adaptive(target, center, e, c, end, tolerance, depth - 1, color);
+}
+
+/// Stroke a quadratic Bézier curve with adaptive subdivision and antialiased segments.
+pub fn stroke_quadratic_bezier_aa(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control: (i64, i64),
+    end: (i64, i64),
+    flatness_tolerance: usize,
+    max_depth: u8,
+    color: Color,
+) -> Result<(), FramebufferError> {
+    let tolerance = flatness_tolerance.min(i64::MAX as usize) as u128;
+    quadratic_adaptive_aa(
+        target, start, control, end, tolerance, max_depth.min(10), color,
+    )
+}
+
+fn quadratic_adaptive_aa(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control: (i64, i64),
+    end: (i64, i64),
+    tolerance: u128,
+    depth: u8,
+    color: Color,
+) -> Result<(), FramebufferError> {
+    if depth == 0 || point_within_chord_tolerance(start, control, end, tolerance) {
+        return stroke_line_aa(target, start, end, color);
+    }
+    let a = midpoint(start, control);
+    let b = midpoint(control, end);
+    let center = midpoint(a, b);
+    quadratic_adaptive_aa(target, start, a, center, tolerance, depth - 1, color)?;
+    quadratic_adaptive_aa(target, center, b, end, tolerance, depth - 1, color)
+}
+
+/// Stroke a cubic Bézier curve with adaptive subdivision and antialiased segments.
+pub fn stroke_cubic_bezier_aa(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control1: (i64, i64),
+    control2: (i64, i64),
+    end: (i64, i64),
+    flatness_tolerance: usize,
+    max_depth: u8,
+    color: Color,
+) -> Result<(), FramebufferError> {
+    let tolerance = flatness_tolerance.min(i64::MAX as usize) as u128;
+    cubic_adaptive_aa(
+        target, start, control1, control2, end, tolerance, max_depth.min(10), color,
+    )
+}
+
+fn cubic_adaptive_aa(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control1: (i64, i64),
+    control2: (i64, i64),
+    end: (i64, i64),
+    tolerance: u128,
+    depth: u8,
+    color: Color,
+) -> Result<(), FramebufferError> {
+    if depth == 0
+        || (point_within_chord_tolerance(start, control1, end, tolerance)
+            && point_within_chord_tolerance(start, control2, end, tolerance))
+    {
+        return stroke_line_aa(target, start, end, color);
+    }
+    let a = midpoint(start, control1);
+    let b = midpoint(control1, control2);
+    let c = midpoint(control2, end);
+    let d = midpoint(a, b);
+    let e = midpoint(b, c);
+    let center = midpoint(d, e);
+    cubic_adaptive_aa(target, start, a, d, center, tolerance, depth - 1, color)?;
+    cubic_adaptive_aa(target, center, e, c, end, tolerance, depth - 1, color)
 }
 
 /// Conservative distance test using the chord's cross product. Checked i128
@@ -841,6 +931,26 @@ mod tests {
             assert_eq!(memory[vertical], 255);
             assert_eq!(memory[vertical + 3], 0);
         }
+    }
+
+    #[test]
+    fn antialiased_polyline_and_bezier_curves_render_with_partial_coverage() {
+        use super::{stroke_cubic_bezier_aa, stroke_polyline_aa, stroke_quadratic_bezier_aa};
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        target.clear(Color::BLACK);
+        stroke_polyline_aa(&mut target, &[(0, 1), (5, 3), (7, 6)], Color::WHITE).unwrap();
+        stroke_quadratic_bezier_aa(
+            &mut target, (0, 7), (3, 2), (7, 7), 1, 8, Color::RED,
+        ).unwrap();
+        stroke_cubic_bezier_aa(
+            &mut target, (0, 0), (1, 6), (6, 6), (7, 0), 1, 8, Color::GREEN,
+        ).unwrap();
+        drop(target);
+        assert!(memory.chunks_exact(4).any(|pixel| pixel[0] > 0 && pixel[0] < 255));
+        assert!(memory.chunks_exact(4).any(|pixel| pixel[1] > 0 && pixel[1] < 255));
+        assert!(memory.chunks_exact(4).any(|pixel| pixel[2] > 0 && pixel[2] < 255));
+        assert!(memory.chunks_exact(4).all(|pixel| pixel[3] == 0));
     }
 
     #[test]
