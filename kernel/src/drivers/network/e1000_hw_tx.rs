@@ -67,7 +67,7 @@ impl E1000TxQueue {
         // copied packet bytes into these buffers. Recheck DD before staging.
         for (offset, &(buffer_dma, length)) in frames.iter().enumerate() {
             let index = (start + offset) & (count - 1);
-            let descriptor = super::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
+            let descriptor = crate::drivers::network::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
                 .map_err(|_| E1000QueueError::InvalidFrameLength)?;
             // SAFETY: this descriptor belongs to the pinned DMA ring supplied by the caller.
             unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(index), descriptor); }
