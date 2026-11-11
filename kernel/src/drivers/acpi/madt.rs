@@ -162,19 +162,39 @@ impl Iterator for MadtProcessors<'_> {
                 Ok(record) => record,
                 Err(error) => return Some(Err(error)),
             };
-            if let Some(cpu) = record.local_apic() {
-                return Some(Ok(ProcessorInfo {
-                    processor_uid: cpu.processor_uid as u32,
-                    apic_id: ProcessorApicId::XApic(cpu.apic_id),
-                    flags: cpu.flags,
-                }));
-            }
-            if let Some(cpu) = record.local_x2apic() {
-                return Some(Ok(ProcessorInfo {
-                    processor_uid: cpu.processor_uid,
-                    apic_id: ProcessorApicId::X2Apic(cpu.x2apic_id),
-                    flags: cpu.flags,
-                }));
+            match record.record_type {
+                0 => {
+                    if record.data.len() != 6 {
+                        return Some(Err(AcpiError::MalformedTable));
+                    }
+                    let cpu = record.local_apic()?;
+                    if cpu.flags & !0b11 != 0 {
+                        return Some(Err(AcpiError::MalformedTable));
+                    }
+                    return Some(Ok(ProcessorInfo {
+                        processor_uid: cpu.processor_uid as u32,
+                        apic_id: ProcessorApicId::XApic(cpu.apic_id),
+                        flags: cpu.flags,
+                    }));
+                }
+                9 => {
+                    if record.data.len() != 14
+                        || record.data[0] != 0
+                        || record.data[1] != 0
+                    {
+                        return Some(Err(AcpiError::MalformedTable));
+                    }
+                    let cpu = record.local_x2apic()?;
+                    if cpu.flags & !0b11 != 0 {
+                        return Some(Err(AcpiError::MalformedTable));
+                    }
+                    return Some(Ok(ProcessorInfo {
+                        processor_uid: cpu.processor_uid,
+                        apic_id: ProcessorApicId::X2Apic(cpu.x2apic_id),
+                        flags: cpu.flags,
+                    }));
+                }
+                _ => {}
             }
         }
     }
@@ -191,8 +211,13 @@ impl Iterator for MadtIoApics<'_> {
                 Ok(record) => record,
                 Err(error) => return Some(Err(error)),
             };
-            if let Some(io_apic) = record.io_apic() {
-                return Some(Ok(io_apic));
+            if record.record_type == 1 {
+                if record.data.len() != 10 || record.data[1] != 0 {
+                    return Some(Err(AcpiError::MalformedTable));
+                }
+                return Some(
+                    record.io_apic().ok_or(AcpiError::MalformedTable)
+                );
             }
         }
     }
@@ -209,8 +234,13 @@ impl Iterator for MadtInterruptOverrides<'_> {
                 Ok(record) => record,
                 Err(error) => return Some(Err(error)),
             };
-            if let Some(override_entry) = record.interrupt_source_override() {
-                return Some(Ok(override_entry));
+            if record.record_type == 2 {
+                if record.data.len() != 8 {
+                    return Some(Err(AcpiError::MalformedTable));
+                }
+                return Some(
+                    record.interrupt_source_override().ok_or(AcpiError::MalformedTable)
+                );
             }
         }
     }
