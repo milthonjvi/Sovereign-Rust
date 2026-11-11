@@ -80,12 +80,28 @@ impl<'a> FramebufferSurface<'a> {
         let copy_len = self.info.height.saturating_sub(rows).saturating_mul(self.info.pitch);
         // SAFETY: source and destination ranges are within the validated
         // framebuffer mapping. Forward copying is safe because destination
-        // addresses precede their corresponding source addresses.
+        // addresses precede their corresponding source addresses. Use native
+        // 64-bit volatile transfers only when every row and the base are
+        // aligned; otherwise retain the alignment-independent byte path.
         unsafe {
             let base = self.base.as_ptr();
-            for offset in 0..copy_len {
-                let value = ptr::read_volatile(base.add(byte_rows + offset));
-                ptr::write_volatile(base.add(offset), value);
+            if (base as usize) & (core::mem::align_of::<u64>() - 1) == 0
+                && self.info.pitch % core::mem::size_of::<u64>() == 0
+                && byte_rows % core::mem::size_of::<u64>() == 0
+                && copy_len % core::mem::size_of::<u64>() == 0
+            {
+                let words = copy_len / core::mem::size_of::<u64>();
+                let source = base.add(byte_rows).cast::<u64>();
+                let destination = base.cast::<u64>();
+                for index in 0..words {
+                    let value = ptr::read_volatile(source.add(index));
+                    ptr::write_volatile(destination.add(index), value);
+                }
+            } else {
+                for offset in 0..copy_len {
+                    let value = ptr::read_volatile(base.add(byte_rows + offset));
+                    ptr::write_volatile(base.add(offset), value);
+                }
             }
         }
         self.fill_rect(
