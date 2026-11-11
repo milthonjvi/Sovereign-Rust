@@ -134,6 +134,43 @@ const fn align_up(value: u64, alignment: u64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boot::sovereign::{EfiMemoryDescriptor, EfiMemoryMap};
+
+    #[test]
+    fn allocator_skips_low_memory_and_non_conventional_regions() {
+        let descriptors = [
+            EfiMemoryDescriptor::new(7, 0x0000_0000, 0, 0x110, 0),
+            EfiMemoryDescriptor::new(2, 0x0011_0000, 0, 0x10, 0),
+            EfiMemoryDescriptor::new(7, 0x0012_0000, 0, 0x20, 0),
+        ];
+        let raw_map = EfiMemoryMap::from_descriptors(&descriptors);
+        let map = BootMemoryMap::new(&raw_map).unwrap();
+        let mut allocator = FrameAllocator::new(&map);
+
+        let first = allocator.allocate_contiguous(16, 1).unwrap().unwrap();
+        assert_eq!(first.start, LOW_MEMORY_RESERVED_END);
+        assert_eq!(first.page_count, 16);
+
+        // The loader-data descriptor is not allocatable; the next frame comes
+        // from the following conventional-memory descriptor instead.
+        let second = allocator.allocate_frame().unwrap().unwrap();
+        assert_eq!(second.start, 0x0012_0000);
+        assert_eq!(allocator.allocated_pages(), 17);
+    }
+
+    #[test]
+    fn allocator_honors_contiguous_alignment() {
+        let descriptors = [
+            EfiMemoryDescriptor::new(7, 0x0020_0000, 0, 0x40, 0),
+        ];
+        let raw_map = EfiMemoryMap::from_descriptors(&descriptors);
+        let map = BootMemoryMap::new(&raw_map).unwrap();
+        let mut allocator = FrameAllocator::new(&map);
+
+        let allocation = allocator.allocate_contiguous(2, 8).unwrap().unwrap();
+        assert_eq!(allocation.start, 0x0020_0000);
+        assert_eq!(allocation.page_count, 2);
+    }
 
     #[test]
     fn alignment_rounds_to_requested_power_of_two() {
