@@ -369,6 +369,51 @@ impl<S: ClockSource, const N: usize> ApicCountdownTaskTimeouts<S, N> {
     }
 }
 
+impl<const N: usize>
+    ApicCountdownTaskTimeouts<crate::time::TscClockSource, N>
+{
+    /// Discover invariant-TSC frequency and choose the available calibration
+    /// reference: HPET when supplied, otherwise the TSC itself.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, after x2APIC bootstrap. If CPUID does not
+    /// provide a complete TSC ratio, HPET must be supplied.
+    pub unsafe fn initialize_bootstrap_detected(
+        vector: u8,
+        divide: crate::drivers::timer::ApicDivide,
+        hpet: Option<&crate::drivers::timer::Hpet>,
+        initial_time_ns: u64,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Result<Self, ApicCountdownInitError> {
+        let source = crate::time::TscClockSource::detect_or_calibrate(
+            hpet, sample_ms, max_spin_iterations,
+        ).ok_or(ApicCountdownInitError::Queue(
+            crate::time::ApicCountdownQueueError::Service(
+                crate::time::TimerServiceError::InvalidClockSource,
+            ),
+        ))?;
+        let frequency_hz = source.frequency_hz();
+        if let Some(hpet) = hpet {
+            // SAFETY: Forwarded from the x2APIC bootstrap contract.
+            unsafe {
+                Self::initialize_bootstrap(
+                    vector, divide, hpet, source, initial_time_ns,
+                    sample_ms, max_spin_iterations,
+                )
+            }
+        } else {
+            // SAFETY: The detected source guarantees invariant TSC frequency.
+            unsafe {
+                Self::initialize_bootstrap_tsc(
+                    vector, divide, source, initial_time_ns, frequency_hz,
+                    sample_ms, max_spin_iterations,
+                )
+            }
+        }
+    }
+}
+
 impl<'a, const N: usize>
     ApicCountdownTaskTimeouts<crate::time::HpetClockSource<'a>, N>
 {
