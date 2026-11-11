@@ -86,9 +86,10 @@ pub struct E1000InitInfo {
 /// Safety is delegated to the platform accessor and caller: the MMIO window
 /// must refer to this device, RX descriptors must contain valid DMA buffer
 /// addresses, RX buffers must each provide at least 2048 writable bytes,
-/// all rings and buffers must be DMA-mapped and pinned, and PCI bus mastering
-/// must already be enabled.
-/// No DMA memory is dereferenced here.
+/// all rings and buffers must be DMA-mapped and pinned, the descriptor slices
+/// must alias the physical ring bases supplied in queues, and PCI bus mastering
+/// must already be enabled. The platform must provide coherent DMA or implement
+/// cache maintenance in its barrier methods.
 pub fn initialize<R: E1000Registers>(
     registers: &mut R,
     queues: E1000QueueConfig,
@@ -301,7 +302,9 @@ impl E1000TxQueue {
         }
         let index = self.clean.index() as usize;
         registers.dma_read_barrier();
-        if descriptors[index].status & TXD_STATUS_DD == 0 {
+        // SAFETY: volatile read observes device write-back in the pinned DMA ring.
+        let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+        if descriptor.status & TXD_STATUS_DD == 0 {
             return Ok(None);
         }
         self.clean.advance();
