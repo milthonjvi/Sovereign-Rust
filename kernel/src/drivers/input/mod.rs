@@ -1,8 +1,7 @@
 //! Keyboard, mouse, and other input-device drivers.
 //!
-//! This layer normalizes device data. Hardware IRQ registration and PS/2
-//! controller activation remain deferred until the interrupt/resource services
-//! are ready; decoders can already be exercised independently.
+//! This layer normalizes device data and provides a PS/2 IRQ adapter. Hardware
+//! activation remains an explicit boot-time operation after IDT/PIC setup.
 
 pub mod event;
 pub mod irq;
