@@ -17,6 +17,7 @@ use super::e1000_hw::{
     REG_IMC, REG_RCTL, REG_TCTL,
 };
 use super::ethernet::MacAddress;
+use super::e1000_irq::E1000Interrupt;
 
 /// Maximum Ethernet frame accepted by this non-jumbo adapter (header included,
 /// FCS excluded because RCTL.SECRC strips it). Includes one 802.1Q VLAN tag.
@@ -116,6 +117,33 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         let link = read_link_state(self.registers).map_err(|_| DriverError::HardwareFault)?;
         self.interface.link = link;
         Ok(link)
+    }
+
+    /// Enable the interrupt causes configured in an installed E1000 APIC bridge.
+    /// The platform must have completed MSI routing before this call.
+    pub fn enable_interrupts(&mut self, interrupt: &mut E1000Interrupt) -> Result<(), DriverError> {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        interrupt.enable(self.registers).map_err(map_interrupt_error)
+    }
+
+    /// Mask all device interrupt causes. The vector can then be uninstalled
+    /// after the platform confirms that no interrupt callback is in flight.
+    pub fn disable_interrupts(&mut self, interrupt: &mut E1000Interrupt) -> Result<(), DriverError> {
+        interrupt.disable(self.registers).map_err(map_interrupt_error)
+    }
+
+    /// Consume one coalesced APIC notification and read/clear the E1000 ICR
+    /// from deferred context. Queue processing remains in receive/transmit paths.
+    pub fn take_interrupt_causes(
+        &mut self,
+        interrupt: &E1000Interrupt,
+    ) -> Result<Option<u32>, DriverError> {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        interrupt.take_causes(self.registers).map_err(map_interrupt_error)
     }
 
     /// Copy and publish several frames as one hardware batch.
@@ -380,6 +408,13 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
 
     fn interface_info(&self) -> NetworkInterfaceInfo {
         self.interface
+    }
+}
+
+fn map_interrupt_error<E>(error: super::e1000_irq::E1000InterruptError<E>) -> DriverError {
+    match error {
+        super::e1000_irq::E1000InterruptError::Register(_) => DriverError::HardwareFault,
+        _ => DriverError::InvalidConfiguration,
     }
 }
 
