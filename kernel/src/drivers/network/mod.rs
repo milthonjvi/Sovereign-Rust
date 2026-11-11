@@ -1,8 +1,10 @@
 //! Network interface driver contracts and Ethernet framing primitives.
 //!
 //! NIC hardware queues remain separate from protocol implementations
-//! (ARP, IPv4/IPv6, ICMP, UDP, TCP, DNS). Concrete hardware support is tracked
-//! separately from register and descriptor groundwork.
+//! (ARP, IPv4/IPv6, ICMP, UDP, TCP, DNS). This module includes an allocation-free
+//! Intel E1000 datapath, volatile MMIO access, DMA ownership contracts, and
+//! deferred APIC interrupt notification; platform mapping and DMA allocation
+//! remain supplied by kernel services.
 
 pub mod device;
 pub mod dma;
