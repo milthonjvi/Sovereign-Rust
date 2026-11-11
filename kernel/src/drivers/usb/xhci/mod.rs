@@ -347,8 +347,8 @@ impl XhciController{
 #[cfg(test)]
 mod controller_state_tests{
  use super::*;
- struct FakeRegisters{words:[u32;256]}
- impl FakeRegisters{fn new()->Self{Self{words:[0;256]}}}
+ struct FakeRegisters{words:[u32;512]}
+ impl FakeRegisters{fn new()->Self{Self{words:[0;512]}}}
  impl RegisterIo for FakeRegisters{
   fn read32(&self,offset:usize)->Result<u32,XhciError>{self.words.get(offset/4).copied().ok_or(XhciError::HardwareFault)}
   fn write32(&mut self,offset:usize,value:u32)->Result<(),XhciError>{
@@ -374,6 +374,26 @@ mod controller_state_tests{
   h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());
   assert_eq!(h.state,ControllerState::Running);
  }
+
+ #[test]fn requests_warm_reset_for_superspeed_and_clears_change_bits(){
+  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<24);
+  let mut h=XhciController::discover(&io).unwrap();h.state=ControllerState::Running;
+  let port_offset=0x40+OP_PORT_BASE;
+  io.words[port_offset/4]=(1<<0)|(1<<9)|(4<<10);
+  h.request_port_reset(&mut io,1).unwrap();
+  assert_eq!(io.words[port_offset/4],(1<<9)|(1<<31));
+  io.words[port_offset/4]=(1<<0)|(1<<1)|(1<<9)|(4<<10)|(1<<19);
+  assert!(h.port_reset_complete(&io,1).unwrap());
+  h.clear_port_changes(&mut io,1,1<<19).unwrap();
+  assert_eq!(io.words[port_offset/4],(1<<9)|(1<<19));
+ }
+ #[test]fn requests_standard_reset_for_usb2(){
+  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<24);
+  let mut h=XhciController::discover(&io).unwrap();h.state=ControllerState::Running;
+  let offset=0x40+OP_PORT_BASE;io.words[offset/4]=(1<<0)|(1<<9)|(3<<10);
+  h.request_port_reset(&mut io,1).unwrap();assert_eq!(io.words[offset/4],(1<<9)|(1<<4));
+ }
+
  #[test]fn rejects_unaligned_dma_addresses(){
   let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8;
   let mut h=XhciController::discover(&io).unwrap();h.state=ControllerState::Reset;
