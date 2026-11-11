@@ -139,7 +139,7 @@ mod tests {
         let mut b = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let pool = [
             DmaBuffer::new(0x4000, &mut a).unwrap(),
-            DmaBuffer::new(0x4800, &mut b).unwrap(),
+            DmaBuffer::new(0x4400, &mut b).unwrap(),
         ];
         assert_eq!(DmaBuffer::validate_rx_pool(&pool), Err(DmaBufferError::OverlappingBuffers));
     }
