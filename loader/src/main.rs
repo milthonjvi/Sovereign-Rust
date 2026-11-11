@@ -12,7 +12,7 @@ use crate::page_tables::{PagePermissions, PageTableBuilder, PageTableError, Page
 use uefi::{
     allocate_loader_pages, load_kernel_file, Console, EfiBootServices, EfiHandle, EfiMemoryMapBuffer,
     EfiStatus, EfiSystemTable, UefiPageTableMemory, DEFAULT_MEMORY_MAP_PAGES,
-    EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_SUCCESS, EFI_UNSUPPORTED,
+    EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_OUT_OF_RESOURCES, EFI_SUCCESS, EFI_UNSUPPORTED,
     EFI_SYSTEM_TABLE_SIGNATURE,
 };
 
@@ -103,7 +103,8 @@ pub extern "efiapi" fn efi_main(
     };
     let mut page_tables = match PageTableBuilder::new(table_memory, nxe) {
         Ok(builder) => builder,
-        Err(_) => return EFI_UNSUPPORTED,
+        Err(PageTableError::AllocationFailed) => return EFI_OUT_OF_RESOURCES,
+        Err(_) => return EFI_COMPROMISED_DATA,
     };
 
     // Map the loader image RX and its current stack RW/NX so a later
