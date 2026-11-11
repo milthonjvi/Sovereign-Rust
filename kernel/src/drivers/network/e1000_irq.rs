@@ -41,6 +41,7 @@ pub enum E1000InterruptError<E> {
     VectorRegistration,
     VectorRemoval,
     StillEnabled,
+    NotRegistered,
 }
 
 impl E1000Interrupt {
@@ -68,6 +69,9 @@ impl E1000Interrupt {
     pub fn enable<R: E1000Registers>(&mut self, registers: &mut R)
         -> Result<(), E1000InterruptError<R::Error>>
     {
+        if !self.registered {
+            return Err(E1000InterruptError::NotRegistered);
+        }
         registers.write32(REG_IMC, u32::MAX).map_err(E1000InterruptError::Register)?;
         registers.write32(REG_IMS, self.mask).map_err(E1000InterruptError::Register)?;
         self.enabled = true;
