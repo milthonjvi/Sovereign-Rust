@@ -161,6 +161,12 @@ use super::*;
     }
 
     #[test]
+    fn queue_cursors_accept_the_full_64k_descriptor_capacity() {
+        assert!(E1000TxQueue::new(65_536).is_ok());
+        assert!(E1000RxQueue::new(65_536).is_ok());
+    }
+
+    #[test]
     fn tx_queue_tracks_in_flight_descriptors_and_reclaims_in_order() {
         let mut regs = MockRegisters::default();
         let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
