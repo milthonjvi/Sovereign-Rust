@@ -396,10 +396,11 @@ mod tests {
         assert_eq!(gsi, 2);
         assert!(mode.active_low && mode.level_triggered);
         assert_eq!(resolve_isa_irq(4, &overrides).unwrap().0, 4);
-        let unsupported = [InterruptSourceOverride {
+        let non_isa = [InterruptSourceOverride {
             bus: 1, source: 4, global_system_interrupt: 9, flags: 0,
         }];
-        assert_eq!(resolve_isa_irq(4, &unsupported), Err(IoApicError::UnsupportedBus));
+        // A bus-1 source number is not an ISA IRQ override.
+        assert_eq!(resolve_isa_irq(4, &non_isa).unwrap().0, 4);
     }
 
     #[test]
