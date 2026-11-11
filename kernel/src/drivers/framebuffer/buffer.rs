@@ -222,7 +222,13 @@ impl<'a> DoubleBuffer<'a> {
         stride: usize,
     ) -> Result<Self, BufferError> {
         let front = SoftwareBuffer::new(first, width, height, stride)?;
-        let back = SoftwareBuffer::new(second, width, height, stride)?;
+        let mut back = SoftwareBuffer::new(second, width, height, stride)?;
+        // Establish an identical baseline so later dirty-only synchronization
+        // is correct even when the caller supplied uninitialized/stale storage.
+        back.copy_regions_from(
+            &front,
+            &[Rect { x: 0, y: 0, width, height }],
+        );
         Ok(Self { front, back })
     }
 
