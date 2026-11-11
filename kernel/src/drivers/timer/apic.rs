@@ -4,7 +4,7 @@
 //! interrupt vector installed before the timer is unmasked. TSC-deadline MSR
 //! programming remains the responsibility of the architecture/MSR layer.
 
-use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::{marker::PhantomData, ptr::{read_volatile, write_volatile, NonNull}};
 use crate::drivers::api::DriverError;
 
 pub const LVT_TIMER: usize = 0x320;
@@ -205,6 +205,198 @@ impl LocalApicTimer {
     }
 }
 
+
+/// x2APIC one-shot countdown timer using the architectural initial-count MSR.
+///
+/// Unlike TSC-deadline mode, this backend works on x2APIC-capable CPUs that do
+/// not advertise the TSC-deadline feature. Its resolution depends on the
+/// calibrated local-APIC timer input clock and configured divider.
+pub struct X2ApicTimer {
+    vector: u8,
+    divide: ApicDivide,
+    frequency_hz: u64,
+    _cpu_local: PhantomData<*mut ()>,
+}
+
+impl X2ApicTimer {
+    /// Configure the x2APIC local timer in masked one-shot mode.
+    ///
+    /// # Safety
+    /// Must execute at CPL 0 on a CPU whose x2APIC mode is already enabled.
+    /// The supplied vector must have an IDT gate installed and a handler
+    /// registered before the timer is unmasked.
+    pub unsafe fn configure(
+        vector: u8,
+        divide: ApicDivide,
+        frequency_hz: u64,
+    ) -> Result<Self, DriverError> {
+        if frequency_hz == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        // SAFETY: Caller guarantees x2APIC is enabled on this CPU.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.configure_one_shot_timer(vector, divide.encoding())
+            .map_err(map_x2apic_error)?;
+        Ok(Self { vector, divide, frequency_hz, _cpu_local: PhantomData })
+    }
+
+    /// Calibrate the x2APIC countdown against an enabled HPET counter.
+    ///
+    /// The timer remains masked on return. The bounded polling loop prevents a
+    /// stopped HPET from hanging bootstrap. A 20-100 ms sample is recommended.
+    ///
+    /// # Safety
+    /// Must execute at CPL 0 on a CPU with x2APIC enabled. The caller must own
+    /// the local timer LVT during calibration and ensure the HPET is mapped,
+    /// enabled, and not concurrently reconfigured.
+    pub unsafe fn calibrate_with_hpet(
+        vector: u8,
+        divide: ApicDivide,
+        hpet: &Hpet,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Result<Self, DriverError> {
+        if !hpet.is_enabled() || sample_ms == 0 || max_spin_iterations == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let capabilities = hpet.capabilities();
+        let period_fs = capabilities.period_fs;
+        if period_fs == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let mask = if capabilities.counter_64_bit { u64::MAX } else { u32::MAX as u64 };
+        let target_ticks = ((sample_ms as u128)
+            .checked_mul(1_000_000_000_000)
+            .and_then(|value| value.checked_add(period_fs as u128 - 1))
+            .ok_or(DriverError::InvalidConfiguration)?)
+            / period_fs as u128;
+        if target_ticks == 0 || target_ticks > mask as u128 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        // SAFETY: Caller guarantees this CPU's x2APIC is initialized.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.configure_one_shot_timer(vector, divide.encoding())
+            .map_err(map_x2apic_error)?;
+        let hpet_start = hpet.read_counter() & mask;
+        if apic.load_masked_one_shot_count(u32::MAX).is_err() {
+            apic.stop_one_shot_timer();
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        let mut reached_target = false;
+        for _ in 0..max_spin_iterations {
+            let sample = hpet.read_counter() & mask;
+            let elapsed = sample.wrapping_sub(hpet_start) & mask;
+            if (elapsed as u128) >= target_ticks {
+                reached_target = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        if !reached_target {
+            apic.stop_one_shot_timer();
+            return Err(DriverError::HardwareFault);
+        }
+
+        let current_count = apic.timer_current_count();
+        let hpet_end = hpet.read_counter() & mask;
+        let elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
+        apic.stop_one_shot_timer();
+
+        let elapsed_apic = u32::MAX.saturating_sub(current_count);
+        if elapsed_apic == 0 || (elapsed_hpet as u128) < target_ticks {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let bus_frequency = calibrate_bus_clock_hz(
+            elapsed_apic,
+            elapsed_hpet,
+            period_fs,
+            divide,
+        )?;
+        let frequency_hz = bus_frequency / divide.factor() as u64;
+        if frequency_hz == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        Ok(Self { vector, divide, frequency_hz, _cpu_local: PhantomData })
+    }
+
+    /// Unmask the configured one-shot LVT after the handler is registered.
+    ///
+    /// # Safety
+    /// Must execute on the owning CPU at CPL 0.
+    pub unsafe fn unmask(&mut self) -> Result<(), DriverError> {
+        // SAFETY: Caller guarantees x2APIC is enabled on this CPU.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.unmask_one_shot_timer().map_err(map_x2apic_error)
+    }
+
+    /// Arm a relative delay, rounding up so it is never intentionally early.
+    ///
+    /// Delays longer than the 32-bit APIC counter range are split: this first
+    /// arm expires at the maximum representable interval, and deferred code
+    /// must re-evaluate and arm the remaining duration.
+    ///
+    /// # Safety
+    /// Must execute on the owning CPU at CPL 0 after unmasking the timer.
+    pub unsafe fn arm_after_ns(&mut self, delay_ns: u64) -> Result<u32, DriverError> {
+        let numerator = (delay_ns as u128)
+            .checked_mul(self.frequency_hz as u128)
+            .ok_or(DriverError::InvalidConfiguration)?;
+        let ticks = if delay_ns == 0 {
+            1
+        } else {
+            numerator
+                .checked_add(999_999_999)
+                .ok_or(DriverError::InvalidConfiguration)?
+                / 1_000_000_000
+        };
+        let count = core::cmp::min(core::cmp::max(1, ticks), u32::MAX as u128) as u32;
+        // SAFETY: Caller guarantees this CPU's x2APIC timer is configured and unmasked.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.arm_one_shot_timer(count).map_err(map_x2apic_error)?;
+        Ok(count)
+    }
+
+    /// Arm an explicit non-zero APIC countdown value.
+    ///
+    /// # Safety
+    /// Must execute on the owning CPU at CPL 0 after unmasking the timer.
+    pub unsafe fn arm_count(&mut self, count: u32) -> Result<(), DriverError> {
+        // SAFETY: Caller guarantees this CPU's x2APIC timer is configured and unmasked.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.arm_one_shot_timer(count).map_err(map_x2apic_error)
+    }
+
+    /// Read the current local APIC countdown.
+    ///
+    /// # Safety
+    /// Must execute on the owning CPU at CPL 0.
+    pub unsafe fn current_count(&self) -> u32 {
+        // SAFETY: Caller guarantees this CPU's x2APIC is enabled.
+        let apic = unsafe { X2Apic::new() };
+        apic.timer_current_count()
+    }
+
+    /// Stop the countdown and mask its LVT source.
+    ///
+    /// # Safety
+    /// Must execute on the owning CPU at CPL 0.
+    pub unsafe fn stop(&mut self) {
+        // SAFETY: Caller guarantees this CPU's x2APIC is enabled.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.stop_one_shot_timer();
+    }
+
+    pub const fn vector(&self) -> u8 { self.vector }
+    pub const fn divide(&self) -> ApicDivide { self.divide }
+    pub const fn frequency_hz(&self) -> u64 { self.frequency_hz }
+}
+
+fn map_x2apic_error(_error: X2ApicError) -> DriverError {
+    DriverError::InvalidConfiguration
+}
 
 /// IA32_TSC_DEADLINE model-specific register.
 pub const IA32_TSC_DEADLINE: u32 = 0x6E0;
