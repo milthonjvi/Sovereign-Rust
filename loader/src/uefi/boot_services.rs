@@ -120,3 +120,6 @@ pub unsafe fn free_loader_pages(
     // SAFETY: The caller guarantees the allocation is live and owned by loader.
     unsafe { free_pages(address, pages) }
 }
+
+// UEFI descriptor prefix is 40 bytes; firmware may provide a larger stride.
+const _: [(); 40] = [(); core::mem::size_of::<EfiMemoryDescriptor>()];
