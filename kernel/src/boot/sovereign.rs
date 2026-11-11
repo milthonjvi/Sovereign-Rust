@@ -245,7 +245,7 @@ impl SovereignBootInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EfiMemoryDescriptor {
     pub memory_type: u32,
     _padding: u32,
