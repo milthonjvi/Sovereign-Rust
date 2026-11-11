@@ -881,12 +881,19 @@ mod tests {
         )).unwrap();
         assert_eq!(fadt.validated_reset_register(), Ok(Some((gas, 6))));
 
-        let mut invalid = gas;
-        invalid.address = 0x0001_0007_0002_0023; // Reserved highest word.
-        let fadt = Fadt::parse(&make_fadt(
-            148, FADT_RESET_REG_SUP, Some(invalid), Some(6),
-        )).unwrap();
-        assert_eq!(fadt.validated_reset_register(), Err(AcpiError::InvalidGas));
+        for invalid_address in [
+            0x0001_0007_0002_0023u64, // Reserved highest word.
+            0x0000_0020_0002_0023,    // Device number exceeds 31.
+            0x0000_0007_0008_0023,    // Function number exceeds 7.
+            0x0000_0007_0002_1000,    // Configuration offset exceeds 0xFFF.
+        ] {
+            let mut invalid = gas;
+            invalid.address = invalid_address;
+            let fadt = Fadt::parse(&make_fadt(
+                148, FADT_RESET_REG_SUP, Some(invalid), Some(6),
+            )).unwrap();
+            assert_eq!(fadt.validated_reset_register(), Err(AcpiError::InvalidGas));
+        }
     }
 
     #[test]
