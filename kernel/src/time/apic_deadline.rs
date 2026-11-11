@@ -199,10 +199,17 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
             return Ok(());
         }
 
+        // Bracket the monotonic clock read with TSC samples. Using the
+        // midpoint aligns the two clock domains and avoids programming a
+        // deadline early by the clock-read latency.
+        let tsc_before = TscClockSource::read_tsc();
+        let now_ns = self.service.now_ns();
+        let tsc_after = TscClockSource::read_tsc();
+        let now_tsc = tsc_before.wrapping_add(tsc_after.wrapping_sub(tsc_before) / 2);
         let absolute_tsc = monotonic_deadline_to_tsc(
             deadline.timestamp_ns(),
-            self.service.now_ns(),
-            TscClockSource::read_tsc(),
+            now_ns,
+            now_tsc,
             self.tsc_frequency_hz,
         ).ok_or(DriverError::InvalidConfiguration)?;
 
