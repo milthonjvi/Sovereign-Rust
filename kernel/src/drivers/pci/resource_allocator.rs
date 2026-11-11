@@ -37,7 +37,7 @@ impl ResourceWindow {
         base: u64,
         size: u64,
     ) -> Result<Self, AllocationError> {
-        if size == 0 || (space == ResourceSpace::Io && prefetchable) {
+        if size == 0 || (matches!(space, ResourceSpace::Io) && prefetchable) {
             return Err(AllocationError::InvalidWindow);
         }
         let end = match base.checked_add(size) {
@@ -67,7 +67,7 @@ impl ResourceRequest {
         prefetchable: bool,
         size: u64,
     ) -> Result<Self, AllocationError> {
-        if size == 0 || !size.is_power_of_two() || (kind == BarKind::Io && prefetchable) {
+        if size == 0 || !size.is_power_of_two() || (matches!(kind, BarKind::Io) && prefetchable) {
             return Err(AllocationError::InvalidRequest);
         }
         Ok(Self { bar_index, kind, prefetchable, size })
