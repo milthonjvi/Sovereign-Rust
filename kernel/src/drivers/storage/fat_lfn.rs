@@ -242,3 +242,77 @@ where
     }
     Ok(visited)
 }
+
+
+fn ascii_fold(unit: u16) -> u16 {
+    if (b'a' as u16..=b'z' as u16).contains(&unit) { unit - 32 } else { unit }
+}
+fn long_name_matches(name: &[u16], query: &[u16]) -> bool {
+    name.len() == query.len() && name.iter().zip(query).all(|(a,b)| ascii_fold(*a) == ascii_fold(*b))
+}
+fn short_name_matches(alias: &[u8; 11], query: &[u16]) -> bool {
+    let base_len = alias[..8].iter().rposition(|b| *b != b' ').map_or(0, |i| i + 1);
+    let ext_len = alias[8..].iter().rposition(|b| *b != b' ').map_or(0, |i| i + 1);
+    let expected_len = base_len + if ext_len != 0 { 1 + ext_len } else { 0 };
+    if expected_len != query.len() { return false; }
+    let mut out = 0usize;
+    for byte in &alias[..base_len] {
+        let value = if out == 0 && *byte == 0x05 { 0xE5 } else { *byte };
+        if ascii_fold(value as u16) != ascii_fold(query[out]) { return false; }
+        out += 1;
+    }
+    if ext_len != 0 {
+        if query[out] != b'.' as u16 { return false; }
+        out += 1;
+        for byte in &alias[8..8 + ext_len] {
+            if ascii_fold(*byte as u16) != ascii_fold(query[out]) { return false; }
+            out += 1;
+        }
+    }
+    true
+}
+
+/// Resolve a slash- or backslash-separated path using LFN names and 8.3 aliases.
+/// The path is UTF-16, matching VFAT on-disk names. ASCII letters are compared
+/// case-insensitively; non-ASCII code units are compared exactly. Dot components
+/// are rejected rather than interpreted without a parent-directory stack.
+pub fn lookup_path<D: super::block::BlockDevice>(
+    device: &mut D,
+    volume: &super::fat_read::FatVolume,
+    path: &[u16],
+    cluster_buffer: &mut [u8],
+    fat_scratch: &mut [u8],
+) -> Result<Option<FatDirEntry>, FatError> {
+    use super::fat::{FatKind};
+    if path.is_empty() { return Ok(None); }
+    let mut directory = if volume.bpb.kind == FatKind::Fat32 { volume.bpb.root_cluster } else { None };
+    let mut cursor = 0usize;
+    let mut result = None;
+    while cursor < path.len() {
+        while cursor < path.len() && (path[cursor] == b'/' as u16 || path[cursor] == b'\\' as u16) { cursor += 1; }
+        if cursor == path.len() { break; }
+        let start = cursor;
+        while cursor < path.len() && path[cursor] != b'/' as u16 && path[cursor] != b'\\' as u16 { cursor += 1; }
+        let component = &path[start..cursor];
+        if component.is_empty() || (component.len() == 1 && component[0] == b'.' as u16)
+            || (component.len() == 2 && component[0] == b'.' as u16 && component[1] == b'.' as u16) {
+            return Err(FatError::InvalidDirectoryEntry);
+        }
+        let mut found = None;
+        visit_directory(device, volume, directory, cluster_buffer, fat_scratch, |entry, long_name| {
+            let matches = if !long_name.is_empty() {
+                long_name_matches(long_name, component) || short_name_matches(&entry.short_name, component)
+            } else { short_name_matches(&entry.short_name, component) };
+            if matches { found = Some(*entry); false } else { true }
+        })?;
+        let entry = match found { Some(value) => value, None => return Ok(None) };
+        result = Some(entry);
+        let mut remaining = cursor;
+        while remaining < path.len() && (path[remaining] == b'/' as u16 || path[remaining] == b'\\' as u16) { remaining += 1; }
+        if remaining < path.len() {
+            if !entry.is_directory() || entry.first_cluster < 2 { return Ok(None); }
+            directory = Some(entry.first_cluster);
+        }
+    }
+    Ok(result)
+}
