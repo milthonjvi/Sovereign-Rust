@@ -142,6 +142,11 @@ impl ExtendedPmRegisters {
         ] {
             if gas.is_present() {
                 gas.validate()?;
+                // FADT fixed power-management blocks are only defined in
+                // System Memory or System I/O address space.
+                if !gas.is_system_memory_or_io() {
+                    return Err(AcpiError::InvalidGas);
+                }
             }
         }
         Ok(())
@@ -294,6 +299,26 @@ mod tests {
         malformed[9] = checksum;
         let fadt = Fadt::parse(&malformed).unwrap();
         assert_eq!(fadt.extended_pm_registers.unwrap().validate(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn rejects_non_memory_io_extended_pm_registers() {
+        let mut bytes = std::vec![0u8; 244];
+        bytes[0..4].copy_from_slice(b"FACP");
+        bytes[4..8].copy_from_slice(&(244u32).to_le_bytes());
+        bytes[8] = 6;
+        // A populated PM GAS using PCI configuration space is not valid here.
+        bytes[148] = 2;
+        bytes[149] = 8;
+        bytes[151] = GenericAddress::ACCESS_BYTE;
+        bytes[152..160].copy_from_slice(&0x100u64.to_le_bytes());
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert_eq!(
+            fadt.extended_pm_registers.unwrap().validate(),
+            Err(AcpiError::InvalidGas)
+        );
     }
 
     #[test]
