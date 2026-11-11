@@ -30,7 +30,7 @@ impl FatLongName {
         }
         let sequence = raw[0] & 0x1F;
         let is_last = raw[0] & 0x40 != 0;
-        if sequence == 0 || sequence > 20 || raw[0] & 0x80 != 0 {
+        if sequence == 0 || sequence > 20 || raw[0] & 0xA0 != 0 {
             self.reset();
             return Err(LfnError::InvalidSequence);
         }
@@ -67,19 +67,44 @@ impl FatLongName {
             return Err(LfnError::InvalidChecksum);
         }
         let mut end = self.len;
-        if let Some(pos) = self.units[..end].iter().position(|v| *v == 0) { end = pos; }
-        while end > 0 && self.units[end - 1] == 0xFFFF { end -= 1; }
+        if let Some(pos) = self.units[..end].iter().position(|v| *v == 0) {
+            if self.units[pos + 1..end].iter().any(|v| *v != 0xFFFF) {
+                self.reset();
+                return Err(LfnError::InvalidSequence);
+            }
+            end = pos;
+        } else if self.units[..end].iter().any(|v| *v == 0xFFFF) {
+            self.reset();
+            return Err(LfnError::InvalidSequence);
+        }
+        if end == 0 { self.reset(); return Err(LfnError::InvalidSequence); }
         if end > 255 { self.reset(); return Err(LfnError::NameTooLong); }
+        if self.units[end - 1] == b' ' as u16 || self.units[end - 1] == b'.' as u16 {
+            self.reset();
+            return Err(LfnError::InvalidSequence);
+        }
         for unit in &self.units[..end] {
-            if (0xD800..=0xDBFF).contains(unit) {
-                // The following low surrogate is checked in the next iteration.
+            if *unit < 0x20 || matches!(*unit, 0x22 | 0x2A | 0x2F | 0x3A | 0x3C | 0x3E | 0x3F | 0x5C | 0x7C) {
+                self.reset();
+                return Err(LfnError::InvalidSequence);
+            }
+        }
+        let mut index = 0usize;
+        while index < end {
+            let unit = self.units[index];
+            if (0xD800..=0xDBFF).contains(&unit) {
+                if index + 1 >= end || !(0xDC00..=0xDFFF).contains(&self.units[index + 1]) {
+                    self.reset();
+                    return Err(LfnError::InvalidUtf16);
+                }
+                index += 2;
                 continue;
             }
-            if (0xDC00..=0xDFFF).contains(unit) {
-                // A low surrogate must have a preceding high surrogate.
-                let index = self.units[..end].iter().position(|v| core::ptr::eq(v, unit));
-                if index == Some(0) { self.reset(); return Err(LfnError::InvalidUtf16); }
+            if (0xDC00..=0xDFFF).contains(&unit) {
+                self.reset();
+                return Err(LfnError::InvalidUtf16);
             }
+            index += 1;
         }
         let result = (self.units, end);
         self.reset();
