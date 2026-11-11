@@ -69,11 +69,22 @@ pub fn enumerate_gpt_partitions<D: super::block::BlockDevice>(
         || header.entry_size < 128 || header.entry_size % 8 != 0 || header.entry_count == 0 {
         return Err(GptError::BufferTooSmall);
     }
+    if header.current_lba >= geo.block_count || header.backup_lba >= geo.block_count
+        || header.current_lba == header.backup_lba
+        || header.first_usable_lba > header.last_usable_lba
+        || header.last_usable_lba >= geo.block_count {
+        return Err(GptError::InvalidLba);
+    }
     let bytes = (header.entry_count as u64).checked_mul(header.entry_size as u64).ok_or(GptError::AddressOverflow)?;
-    let end_byte = header.entries_lba.checked_mul(geo.block_size as u64)
-        .and_then(|v| v.checked_add(bytes)).ok_or(GptError::AddressOverflow)?;
-    let disk_bytes = geo.block_count.checked_mul(geo.block_size as u64).ok_or(GptError::AddressOverflow)?;
-    if end_byte > disk_bytes { return Err(GptError::TableOutOfBounds); }
+    let block_size = geo.block_size as u64;
+    let table_blocks = bytes.checked_add(block_size - 1).ok_or(GptError::AddressOverflow)? / block_size;
+    let table_end = header.entries_lba.checked_add(table_blocks).ok_or(GptError::AddressOverflow)?;
+    if header.entries_lba == 0 || table_end > geo.block_count
+        || (header.entries_lba <= header.current_lba && header.current_lba < table_end)
+        || (header.entries_lba <= header.backup_lba && header.backup_lba < table_end)
+        || (header.entries_lba <= header.last_usable_lba && header.first_usable_lba < table_end) {
+        return Err(GptError::TableOutOfBounds);
+    }
 
     output.fill(None);
     let mut crc = !0u32;
