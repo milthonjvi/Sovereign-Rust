@@ -1,6 +1,9 @@
 //! Kernel-side consumer for the Sovereign Boot v1 handoff ABI.
 
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use crate::drivers::acpi::discover::AcpiTables;
 
 pub const BOOT_INFO_MAGIC: [u8; 8] = *b"SOVBOOT\0";
 pub const BOOT_INFO_VERSION: u32 = 1;
@@ -9,6 +12,34 @@ pub const MEMORY_DESCRIPTOR_VERSION: u32 = 1;
 pub const BOOT_INFO_FLAG_FRAMEBUFFER_VALID: u64 = 1 << 0;
 pub const BOOT_INFO_FLAG_ACPI_VALID: u64 = 1 << 1;
 const MAX_MEMORY_DESCRIPTORS: u64 = 1_000_000;
+
+static ACPI_TABLES_READY: AtomicBool = AtomicBool::new(false);
+static mut ACPI_TABLES: Option<AcpiTables> = None;
+
+/// Publish validated ACPI table addresses for later kernel subsystems.
+///
+/// # Safety
+/// Call exactly once during single-CPU bootstrap with interrupts disabled.
+/// Readers may use the value after this function publishes readiness.
+pub unsafe fn install_acpi_tables(tables: AcpiTables) -> bool {
+    if ACPI_TABLES_READY.load(Ordering::Acquire) {
+        return false;
+    }
+    // SAFETY: The documented bootstrap contract guarantees exclusive access.
+    unsafe { ptr::addr_of_mut!(ACPI_TABLES).write(Some(tables)) };
+    ACPI_TABLES_READY.store(true, Ordering::Release);
+    true
+}
+
+/// Return the validated ACPI table address set, if firmware discovery succeeded.
+pub fn acpi_tables() -> Option<AcpiTables> {
+    if !ACPI_TABLES_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    // SAFETY: The Release/Acquire publication makes the immutable value visible.
+    unsafe { ptr::addr_of!(ACPI_TABLES).read() }
+}
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SovereignBootError {
