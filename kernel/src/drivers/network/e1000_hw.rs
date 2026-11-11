@@ -479,6 +479,66 @@ impl E1000RxQueue {
         Ok(count)
     }
 
+    /// Recycle a contiguous batch of processed RX descriptors with one RDT write.
+    ///
+    /// `backup` must have room for every completion. The descriptors are saved
+    /// before rearming so a failed MMIO tail update can restore CPU-visible
+    /// completion metadata and leave queue ownership unchanged.
+    pub fn recycle_batch<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &mut [RxDescriptor],
+        completed: &[(u16, super::e1000_descriptor::RxCompletion)],
+        backup: &mut [RxDescriptor],
+    ) -> Result<usize, E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count()
+            || completed.len() > backup.len()
+            || completed.len() > self.outstanding as usize
+        {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        if completed.is_empty() {
+            return Ok(0);
+        }
+
+        let count = descriptors.len();
+        for (offset, (index, _)) in completed.iter().enumerate() {
+            let expected = (self.recycle.index() as usize + offset) & (count - 1);
+            if *index as usize != expected {
+                return Err(E1000QueueError::InvalidRing);
+            }
+        }
+
+        for (offset, (index, _)) in completed.iter().enumerate() {
+            let slot = *index as usize;
+            // SAFETY: the completed descriptor remains CPU-owned until RDT advances.
+            let original = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(slot)) };
+            backup[offset] = original;
+            let rearmed = RxDescriptor::for_buffer(original.buffer_address);
+            // SAFETY: rearm only descriptors whose packets have already been consumed.
+            unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(slot), rearmed); }
+        }
+        registers.dma_write_barrier();
+        let tail = completed[completed.len() - 1].0 as u32;
+        if let Err(error) = registers.write32(REG_RDT, tail) {
+            for (offset, (index, _)) in completed.iter().enumerate() {
+                // SAFETY: failed tail publication leaves all descriptors CPU-owned.
+                unsafe {
+                    core::ptr::write_volatile(
+                        descriptors.as_mut_ptr().add(*index as usize), backup[offset],
+                    );
+                }
+            }
+            return Err(E1000QueueError::Register(error));
+        }
+
+        for _ in completed {
+            self.recycle.advance();
+        }
+        self.outstanding -= completed.len() as u16;
+        Ok(completed.len())
+    }
+
     /// Return a processed RX buffer to hardware. Recycling must follow descriptor
     /// order so RDT never advances past an unreleased buffer.
     pub fn recycle<R: E1000Registers>(
