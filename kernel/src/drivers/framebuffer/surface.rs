@@ -50,7 +50,7 @@ impl<'a> FramebufferSurface<'a> {
     /// # Safety
     /// The four bytes beginning at offset must be inside the mapped framebuffer.
     #[inline]
-    unsafe fn write_pixel_unchecked(&mut self, offset: usize, color: Color) {
+    pub(crate) unsafe fn write_pixel_unchecked(&mut self, offset: usize, color: Color) {
         let bytes = color.memory_bytes(self.info.pixel_format);
         // SAFETY: guaranteed by the caller. Use one native 32-bit store when
         // the framebuffer address is aligned; retain byte stores for unusual
@@ -67,6 +67,56 @@ impl<'a> FramebufferSurface<'a> {
                 ptr::write_volatile(destination.add(3), bytes[3]);
             }
         }
+    }
+
+    /// Alpha-composite a source color over the destination pixel.
+    ///
+    /// Source alpha uses the conventional range: 0 is transparent and 255 is
+    /// opaque. The destination's reserved fourth byte is written as zero.
+    pub fn blend_pixel(&mut self, x: usize, y: usize, source: Color) -> Result<(), FramebufferError> {
+        if x >= self.info.width || y >= self.info.height {
+            return Err(FramebufferError::OutOfBounds);
+        }
+        if source.alpha == 0 {
+            return Ok(());
+        }
+        let offset = y.checked_mul(self.info.pitch)
+            .and_then(|row| x.checked_mul(4).and_then(|column| row.checked_add(column)))
+            .ok_or(FramebufferError::SizeOverflow)?;
+        if offset.checked_add(4).ok_or(FramebufferError::SizeOverflow)? > self.mapped_len {
+            return Err(FramebufferError::BufferTooSmall);
+        }
+        if source.alpha == 255 {
+            // SAFETY: the complete destination pixel was checked above.
+            unsafe { self.write_pixel_unchecked(offset, source); }
+            return Ok(());
+        }
+
+        // SAFETY: the complete pixel range was checked above.
+        let destination = unsafe { self.base.as_ptr().add(offset) };
+        let mut bytes = [0u8; 4];
+        unsafe {
+            for (index, byte) in bytes.iter_mut().enumerate() {
+                *byte = ptr::read_volatile(destination.add(index));
+            }
+        }
+        let (red, green, blue) = match self.info.pixel_format {
+            super::color::PixelFormat::Rgb => (bytes[0], bytes[1], bytes[2]),
+            super::color::PixelFormat::Bgr => (bytes[2], bytes[1], bytes[0]),
+        };
+        let alpha = source.alpha as u32;
+        let inverse = 255 - alpha;
+        let blend = |foreground: u8, background: u8| -> u8 {
+            ((foreground as u32 * alpha + background as u32 * inverse + 127) / 255) as u8
+        };
+        let output = Color::new(
+            blend(source.red, red),
+            blend(source.green, green),
+            blend(source.blue, blue),
+        );
+        // SAFETY: offset remains within the mapping validated above.
+        unsafe { self.write_pixel_unchecked(offset, output); }
+        Ok(())
     }
 
     pub fn clear(&mut self, color: Color) {
