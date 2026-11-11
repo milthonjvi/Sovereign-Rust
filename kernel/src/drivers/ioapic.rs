@@ -430,7 +430,7 @@ impl IoApicController {
         let state = self.read_redirection_state(gsi)?;
         let local_apic_ready = crate::interrupts::init::is_initialized()
             && crate::interrupts::init::local_apic_mode()
-                == crate::interrupts::init::LocalApicMode::X2Apic;
+                != crate::interrupts::init::LocalApicMode::Disabled;
         let handler_registered =
             crate::interrupts::dispatch::is_registered(state.vector);
         validate_unmask_prerequisites(
