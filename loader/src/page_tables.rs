@@ -167,3 +167,34 @@ const fn is_canonical_for_levels(address: u64, levels: u8) -> bool {
     let upper_mask = u64::MAX >> upper_shift;
     (sign == 0 && upper == 0) || (sign == 1 && upper == upper_mask)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_boundaries_match_four_level_paging() {
+        assert!(is_canonical_for_levels(0x0000_7fff_ffff_ffff, 4));
+        assert!(is_canonical_for_levels(0xffff_8000_0000_0000, 4));
+        assert!(!is_canonical_for_levels(0x0000_8000_0000_0000, 4));
+        assert!(!is_canonical_for_levels(0xffff_7fff_ffff_ffff, 4));
+    }
+
+    #[test]
+    fn canonical_boundaries_match_five_level_paging() {
+        assert!(is_canonical_for_levels(0x00ff_ffff_ffff_ffff, 5));
+        assert!(is_canonical_for_levels(0xff00_0000_0000_0000, 5));
+        assert!(!is_canonical_for_levels(0x0100_0000_0000_0000, 5));
+        assert!(!is_canonical_for_levels(0xfeff_ffff_ffff_ffff, 5));
+    }
+
+    #[test]
+    fn page_count_rounds_up_without_overflow() {
+        assert_eq!(pages_for_range(0), Some(0));
+        assert_eq!(pages_for_range(1), Some(1));
+        assert_eq!(pages_for_range(PAGE_SIZE), Some(1));
+        assert_eq!(pages_for_range(PAGE_SIZE + 1), Some(2));
+        assert_eq!(pages_for_range(u64::MAX), None);
+    }
+}
