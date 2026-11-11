@@ -32,3 +32,18 @@ impl Color {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Color;
+
+    #[test]
+    fn opaque_constructor_sets_full_alpha() {
+        assert_eq!(Color::opaque(1, 2, 3).alpha, 255);
+    }
+
+    #[test]
+    fn rgb_constructor_keeps_reserved_byte_clear() {
+        assert_eq!(Color::new(1, 2, 3).alpha, 0);
+    }
+}
