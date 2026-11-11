@@ -35,3 +35,121 @@ impl<'a> Iterator for DescriptorIter<'a>{
   Some(Ok(Descriptor{descriptor_type:self.bytes[s+1],bytes:&self.bytes[s..s+n]}))
  }
 }
+
+
+// Standard configuration, interface, endpoint and SuperSpeed companion descriptors.
+pub const CONFIGURATION_DESCRIPTOR:u8=2;
+pub const INTERFACE_DESCRIPTOR:u8=4;
+pub const ENDPOINT_DESCRIPTOR:u8=5;
+pub const SS_ENDPOINT_COMPANION_DESCRIPTOR:u8=0x30;
+pub const MAX_INTERFACES:usize=16;
+pub const MAX_ENDPOINTS:usize=32;
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ConfigurationDescriptor{
+ pub total_length:u16,pub interface_count:u8,pub configuration_value:u8,
+ pub configuration_index:u8,pub attributes:u8,pub max_power:u8,
+}
+impl ConfigurationDescriptor{
+ pub const LENGTH:usize=9;
+ pub fn parse(b:&[u8])->Result<Self,UsbError>{
+  if b.len()<Self::LENGTH{return Err(UsbError::BufferTooShort)}
+  if b[0]<9||b[1]!=CONFIGURATION_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  let d=Self{total_length:u16::from_le_bytes([b[2],b[3]]),interface_count:b[4],
+   configuration_value:b[5],configuration_index:b[6],attributes:b[7],max_power:b[8]};
+  if d.total_length<9||d.interface_count==0||d.configuration_value==0||d.attributes&0x80==0{
+   return Err(UsbError::MalformedDescriptor)
+  }
+  Ok(d)
+ }
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct InterfaceDescriptor{
+ pub number:u8,pub alternate_setting:u8,pub endpoint_count:u8,
+ pub class:u8,pub subclass:u8,pub protocol:u8,pub string_index:u8,
+}
+impl InterfaceDescriptor{
+ fn parse(b:&[u8])->Result<Self,UsbError>{
+  if b.len()<9||b[0]<9||b[1]!=INTERFACE_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{number:b[2],alternate_setting:b[3],endpoint_count:b[4],class:b[5],
+   subclass:b[6],protocol:b[7],string_index:b[8]})
+ }
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ParsedEndpoint{
+ pub address:u8,pub attributes:u8,pub max_packet_size:u16,pub interval:u8,
+ pub transactions_per_microframe:u8,pub max_burst:u8,pub companion_attributes:u8,
+ pub bytes_per_interval:u16,pub has_ss_companion:bool,
+}
+impl ParsedEndpoint{
+ fn parse(b:&[u8])->Result<Self,UsbError>{
+  if b.len()<7||b[0]<7||b[1]!=ENDPOINT_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  let raw=u16::from_le_bytes([b[4],b[5]]);
+  let packet=raw&0x07ff;
+  let mult=((raw>>11)&3) as u8;
+  if packet==0||mult==3||b[2]&0x0f==0||b[2]&0x70!=0{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{address:b[2],attributes:b[3],max_packet_size:packet,interval:b[6],
+   transactions_per_microframe:mult+1,max_burst:0,companion_attributes:0,
+   bytes_per_interval:0,has_ss_companion:false})
+ }
+ fn apply_companion(&mut self,b:&[u8])->Result<(),UsbError>{
+  if b.len()<6||b[0]<6||b[1]!=SS_ENDPOINT_COMPANION_DESCRIPTOR||self.has_ss_companion{
+   return Err(UsbError::MalformedDescriptor)
+  }
+  self.max_burst=b[2];self.companion_attributes=b[3];
+  self.bytes_per_interval=u16::from_le_bytes([b[4],b[5]]);
+  self.has_ss_companion=true;Ok(())
+ }
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ParsedInterface{pub descriptor:InterfaceDescriptor,pub first_endpoint:u8,pub endpoint_count:u8}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ParsedConfiguration{
+ pub descriptor:ConfigurationDescriptor,
+ pub interfaces:[Option<ParsedInterface>;MAX_INTERFACES],
+ pub endpoints:[Option<ParsedEndpoint>;MAX_ENDPOINTS],
+ pub interface_len:u8,pub endpoint_len:u8,
+}
+impl ParsedConfiguration{
+ /// Parses a complete configuration blob without allocation. The input must
+ /// contain exactly the descriptor chain declared by wTotalLength.
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  let descriptor=ConfigurationDescriptor::parse(bytes)?;
+  let total=descriptor.total_length as usize;
+  if bytes.len()<total{return Err(UsbError::BufferTooShort)}
+  let mut out=Self{descriptor,interfaces:[None;MAX_INTERFACES],endpoints:[None;MAX_ENDPOINTS],interface_len:0,endpoint_len:0};
+  let mut current:Option<usize>=None;
+  for item in DescriptorIter::new(&bytes[..total]){
+   let item=item?;
+   match item.descriptor_type{
+    INTERFACE_DESCRIPTOR=>{
+     if out.interface_len as usize>=MAX_INTERFACES{return Err(UsbError::NoResources)}
+     let d=InterfaceDescriptor::parse(item.bytes)?;
+     // One entry per alternate setting; repeated interface numbers are valid.
+     let i=out.interface_len as usize;
+     out.interfaces[i]=Some(ParsedInterface{descriptor:d,first_endpoint:out.endpoint_len,endpoint_count:0});
+     out.interface_len+=1;current=Some(i);
+    }
+    ENDPOINT_DESCRIPTOR=>{
+     let i=current.ok_or(UsbError::MalformedDescriptor)?;
+     if out.endpoint_len as usize>=MAX_ENDPOINTS{return Err(UsbError::NoResources)}
+     let e=ParsedEndpoint::parse(item.bytes)?;
+     let n=out.endpoint_len as usize;out.endpoints[n]=Some(e);out.endpoint_len+=1;
+     let iface=out.interfaces[i].as_mut().ok_or(UsbError::MalformedDescriptor)?;
+     iface.endpoint_count=iface.endpoint_count.saturating_add(1);
+    }
+    SS_ENDPOINT_COMPANION_DESCRIPTOR=>{
+     if out.endpoint_len==0{return Err(UsbError::MalformedDescriptor)}
+     let e=out.endpoints[out.endpoint_len as usize-1].as_mut().ok_or(UsbError::MalformedDescriptor)?;
+     e.apply_companion(item.bytes)?;
+    }
+    _=>{}
+   }
+  }
+  if out.interface_len!=descriptor.interface_count{return Err(UsbError::MalformedDescriptor)}
+  for iface in out.interfaces[..out.interface_len as usize].iter().flatten(){
+   if iface.endpoint_count!=iface.descriptor.endpoint_count{return Err(UsbError::MalformedDescriptor)}
+  }
+  Ok(out)
+ }
+}
