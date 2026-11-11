@@ -34,6 +34,7 @@ const FIFO_64_BYTE_ENABLE: u8 = 1 << 5;
 const FIFO_STATUS_MASK: u8 = 0xC0;
 const FIFO_64_BYTE_STATUS: u8 = 0xE0;
 const DEFAULT_POLL_LIMIT: usize = 1_000_000;
+const MAX_RX_RECOVERY_DRAIN: usize = 256;
 
 /// Hardware FIFO capability detected during initialization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -326,7 +327,7 @@ impl Uart16550 {
         // larger than the maximum supported hardware FIFO, while still
         // preventing a faulty device from trapping the kernel in this routine.
         let mut discarded = 0usize;
-        for _ in 0..256 {
+        for _ in 0..MAX_RX_RECOVERY_DRAIN {
             // SAFETY: This instance exclusively owns the UART and IRQ mode is detached.
             let status = unsafe { io::in8(self.port(LSR)) };
             if status & DATA_READY == 0 {
@@ -560,7 +561,7 @@ mod tests {
         assert_eq!(receive_recovery_fcr(UartFifo::None), 0);
         assert_eq!(receive_recovery_fcr(UartFifo::Bytes16), 0xC1);
         assert_eq!(receive_recovery_fcr(UartFifo::Bytes64), 0xE1);
-        assert_eq!(256usize, 256);
+        assert_eq!(MAX_RX_RECOVERY_DRAIN, 256);
     }
 
     #[test]
