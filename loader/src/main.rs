@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+pub mod cpu;
 pub mod boot_info;
 pub mod page_tables;
 mod uefi;
