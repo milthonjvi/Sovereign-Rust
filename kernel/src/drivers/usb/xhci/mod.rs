@@ -210,6 +210,8 @@ mod trb_builder_tests{
   assert_ne!(data.control&(1<<16),0);
   let status=Trb::status_stage(false,true);
   assert_eq!(status.trb_type(),TrbType::StatusStage as u8);
+  let normal=Trb::normal_transfer(0x4000,512,0,false,true);
+  assert_eq!(normal.trb_type(),TrbType::Normal as u8);assert_eq!(normal.control&(1<<4),0);
  }
  #[test]fn decodes_transfer_and_command_completion_events(){
   let transfer=Trb{parameter:0x1230,status:(1<<24)|7,control:((TrbType::TransferEvent as u32)<<10)|(3<<16)|(2<<24)};
