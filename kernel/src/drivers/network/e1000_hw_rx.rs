@@ -14,7 +14,7 @@ pub(crate) struct E1000RxQueue {
 }
 
 impl E1000RxQueue {
-    pub(crate) fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
+    pub(crate) fn new(descriptor_count: usize) -> Result<Self, E1000Error> {
         Ok(Self { cursor: RingCursor::new(descriptor_count)?, recycle: RingCursor::new(descriptor_count)?, outstanding: 0 })
     }
 
