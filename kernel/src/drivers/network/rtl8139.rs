@@ -200,10 +200,17 @@ mod tests {
     #[test]
     fn rejects_corrupt_status_and_oversized_lengths() {
         let mut bytes = [0u8; RTL8139_MIN_RING_SIZE];
-        let rx = ring(&mut bytes);
+        let mut rx = ring(&mut bytes);
         rx.buffer[0..2].copy_from_slice(&2u16.to_le_bytes());
         rx.buffer[2..4].copy_from_slice(&64u16.to_le_bytes());
-        assert_eq!(rx.peek(68), Err(Rtl8139Error::ReceiveError(2)));
+        let corrupt = rx.peek(68).unwrap().unwrap();
+        assert_eq!(
+            rx.copy_packet(corrupt, &mut [0u8; 60]),
+            Err(Rtl8139Error::ReceiveError(2)),
+        );
+        rx.commit(corrupt).unwrap();
+
+        rx.reset_cursor();
         rx.buffer[0..2].copy_from_slice(&RX_STATUS_ROK.to_le_bytes());
         rx.buffer[2..4].copy_from_slice(&2048u16.to_le_bytes());
         assert_eq!(rx.peek(68), Err(Rtl8139Error::InvalidPacketLength));
