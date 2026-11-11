@@ -83,7 +83,7 @@ mod descriptor_tests{
  }
  #[test]fn validates_ohci_dma_alignment(){
   assert_eq!(OhciEndpointDescriptor::new(128,0,OhciDirection::Out,false,64),Err(UsbError::MalformedDescriptor));
-  assert_eq!(OhciTransferDescriptor::new(OhciDirection::Out,OhciDataToggle::FromEndpoint,0x1001,0x103f,0x2000,0,false),Err(UsbError::InvalidAddress));
+  assert_eq!(OhciTransferDescriptor::new(OhciDirection::Out,OhciDataToggle::FromEndpoint,0x1001,0x103f,0x2001,0,false),Err(UsbError::InvalidAddress));
  }
  #[test]fn hcca_has_required_256_byte_alignment(){
   assert_eq!(core::mem::align_of::<OhciHcca>(),256);assert_eq!(core::mem::size_of::<OhciHcca>(),256);
