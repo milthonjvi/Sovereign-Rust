@@ -101,9 +101,9 @@ pub fn stroke_triangle(
     c: (i64, i64),
     color: Color,
 ) -> Result<(), FramebufferError> {
-    target.draw_line(a.0, a.1, b.0, b.1, color)?;
-    target.draw_line(b.0, b.1, c.0, c.1, color)?;
-    target.draw_line(c.0, c.1, a.0, a.1, color)?;
+    target.draw_line(a.0, a.1, b.0, b.1, color);
+    target.draw_line(b.0, b.1, c.0, c.1, color);
+    target.draw_line(c.0, c.1, a.0, a.1, color);
     Ok(())
 }
 
