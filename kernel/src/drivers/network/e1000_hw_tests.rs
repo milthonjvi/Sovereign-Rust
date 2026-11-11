@@ -12,6 +12,7 @@ use super::*;
         fail_register: Option<u32>,
         read_barriers: usize,
         reset_stuck: bool,
+        multicast_mac: bool,
     }
 
     unsafe impl E1000Registers for MockRegisters {
@@ -21,7 +22,9 @@ use super::*;
             if offset == REG_CTRL {
                 return Ok(if self.reset_stuck { CTRL_RST } else { 0 });
             }
-            if offset == REG_RAL0 { return Ok(0x4433_2202); }
+            if offset == REG_RAL0 {
+                return Ok(if self.multicast_mac { 0x4433_2211 } else { 0x4433_2202 });
+            }
             if offset == REG_STATUS { return Ok(STATUS_LU | STATUS_FD | (2 << STATUS_SPEED_SHIFT)); }
             if offset == REG_RAH0 { return Ok(0x8000_6655); }
             Ok(0)
@@ -131,6 +134,26 @@ use super::*;
         assert!(regs.writes.contains(&(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)));
         assert!(!regs.writes.contains(&(REG_RCTL, 0)));
         assert!(regs.writes.iter().any(|(reg, value)| *reg == REG_TCTL && value & TCTL_EN != 0));
+    }
+
+    #[test]
+    fn initialization_rejects_multicast_hardware_mac_before_enabling_queues() {
+        let mut regs = MockRegisters { multicast_mac: true, ..MockRegisters::default() };
+        let queues = E1000QueueConfig::defaults(0x1_0000_1000, 0x1_0000_2000).unwrap();
+        let mut rx = [RxDescriptor::default(); 32];
+        let mut rx_storage = [[0u8; 2048]; 32];
+        let rx_buffers: Vec<DmaBuffer<'_>> = rx_storage.iter_mut().enumerate()
+            .map(|(index, bytes)| mock_dma_buffer(0x4000 + index as u64 * 2048, bytes))
+            .collect();
+        let mut tx = [TxDescriptor::default(); 32];
+
+        // SAFETY: MockRegisters does not perform DMA; the buffers model pinned mappings.
+        let result = unsafe { initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true) };
+        assert!(matches!(result, Err(E1000InitError::InvalidMacAddress)));
+        assert!(!regs.writes.iter().any(|(reg, value)| {
+            (*reg == REG_RCTL && value & RCTL_EN != 0)
+                || (*reg == REG_TCTL && value & TCTL_EN != 0)
+        }));
     }
 
     #[test]
