@@ -673,6 +673,35 @@ mod tests {
     }
 
     #[test]
+    fn decodes_touchscreen_contact_lifecycle_and_coordinates() {
+        // Application Touch Screen: absolute X/Y, Tip Switch, padding, Contact ID.
+        const TOUCH: &[u8] = &[
+            0x05,0x0D, 0x09,0x04, 0xA1,0x01,
+            0x05,0x01, 0x09,0x30, 0x09,0x31,
+            0x15,0x00, 0x26,0xE8,0x03, 0x75,0x10, 0x95,0x02, 0x81,0x02,
+            0x05,0x0D, 0x09,0x42, 0x15,0x00, 0x25,0x01,
+            0x75,0x01, 0x95,0x01, 0x81,0x02,
+            0x75,0x07, 0x95,0x01, 0x81,0x01,
+            0x09,0x51, 0x75,0x08, 0x95,0x01, 0x81,0x02,
+            0xC0,
+        ];
+        let map = HidReportMap::parse(TOUCH).unwrap();
+        assert_eq!(map.report_bytes(0), 6);
+        let mut q = SpscQueue::<InputEvent, 8>::new();
+        let (mut producer, mut consumer) = q.split();
+        let mut decoder = HidReportDecoder::new(InputDeviceId(22));
+        decoder.publish_report(&map, &[0xF4,0x01,0xEE,0x02,0x01,9], &mut producer).unwrap();
+        assert!(matches!(consumer.pop(), Some(InputEvent::TouchContact {
+            contact: 9, phase: super::super::event::ContactPhase::Down,
+            x, y, ..
+        }) if x > 30_000 && y > 45_000));
+        decoder.publish_report(&map, &[0xF4,0x01,0xEE,0x02,0x00,9], &mut producer).unwrap();
+        assert!(matches!(consumer.pop(), Some(InputEvent::TouchContact {
+            contact: 9, phase: super::super::event::ContactPhase::Up, ..
+        })));
+    }
+
+    #[test]
     fn rejects_truncated_and_wrong_id_reports() {
         assert_eq!(HidReportMap::parse(&[0x75]), Err(HidReportError::TruncatedDescriptor));
         let descriptor = [0x85,1,0x75,8,0x95,1,0x81,2];
