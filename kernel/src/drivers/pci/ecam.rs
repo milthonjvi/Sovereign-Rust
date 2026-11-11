@@ -51,13 +51,33 @@ pub fn parse_mcfg(table: &[u8], out: &mut [EcamWindow]) -> Result<usize, McfgErr
             .ok_or(McfgError::InvalidEntry)?;
         base.checked_add(span).ok_or(McfgError::InvalidEntry)?;
 
+        let physical_end = base.checked_add(span).ok_or(McfgError::InvalidEntry)?;
+
         for previous in entries[..index * MCFG_ENTRY_SIZE].chunks_exact(MCFG_ENTRY_SIZE) {
-            if u16le(previous, 8) == segment {
-                let previous_start = previous[10];
-                let previous_end = previous[11];
-                if start <= previous_end && previous_start <= end {
-                    return Err(McfgError::InvalidEntry);
-                }
+            let previous_base = u64le(previous, 0);
+            let previous_start = previous[10];
+            let previous_end = previous[11];
+            let previous_bus_count = (previous_end as u64)
+                .checked_sub(previous_start as u64)
+                .and_then(|count| count.checked_add(1))
+                .ok_or(McfgError::InvalidEntry)?;
+            let previous_span = previous_bus_count
+                .checked_mul(ECAM_BUS_SIZE as u64)
+                .ok_or(McfgError::InvalidEntry)?;
+            let previous_physical_end = previous_base
+                .checked_add(previous_span)
+                .ok_or(McfgError::InvalidEntry)?;
+
+            // A segment's BDF range and the physical ECAM aperture must both
+            // be unique. Aliased physical windows can make distinct segments
+            // silently access the same configuration registers.
+            let same_segment_bus_overlap = u16le(previous, 8) == segment
+                && start <= previous_end
+                && previous_start <= end;
+            let physical_overlap = base < previous_physical_end
+                && previous_base < physical_end;
+            if same_segment_bus_overlap || physical_overlap {
+                return Err(McfgError::InvalidEntry);
             }
         }
     }
@@ -180,6 +200,22 @@ mod tests {
         table[4..8].copy_from_slice(&table_length.to_le_bytes());
         write_entry(&mut table, MCFG_HEADER_SIZE, 0xe000_0000, 0, 0, 31);
         write_entry(&mut table, MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE, 0xf000_0000, 0, 31, 63);
+        finalize_checksum(&mut table);
+        let sentinel = EcamWindow { segment: 9, start_bus: 9, end_bus: 9, physical_base: 9 };
+        let mut windows = [sentinel; 2];
+        assert_eq!(parse_mcfg(&table, &mut windows), Err(McfgError::InvalidEntry));
+        assert_eq!(windows, [sentinel; 2]);
+    }
+
+    #[test]
+    fn rejects_physical_ecam_aliases_across_segments_without_partial_output() {
+        let mut table = [0u8; MCFG_HEADER_SIZE + 2 * MCFG_ENTRY_SIZE];
+        table[..4].copy_from_slice(b"MCFG");
+        let table_length = table.len() as u32;
+        table[4..8].copy_from_slice(&table_length.to_le_bytes());
+        write_entry(&mut table, MCFG_HEADER_SIZE, 0xe000_0000, 0, 0, 3);
+        // A different segment must not alias the first segment's physical aperture.
+        write_entry(&mut table, MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE, 0xe000_0000, 1, 0, 3);
         finalize_checksum(&mut table);
         let sentinel = EcamWindow { segment: 9, start_bus: 9, end_bus: 9, physical_base: 9 };
         let mut windows = [sentinel; 2];
