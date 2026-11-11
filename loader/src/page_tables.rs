@@ -4,6 +4,8 @@
 //! must keep the active loader mappings, stack, firmware call path, and all
 //! referenced buffers mapped before performing any address-space transition.
 
+use crate::cpu::NxeEnabled;
+
 const PAGE_SIZE: u64 = 4096;
 const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
@@ -29,7 +31,7 @@ impl PagePermissions {
 pub enum PageTableError {
     MisalignedAddress, NonCanonicalAddress, PhysicalAddressOutOfRange,
     AllocationFailed, InvalidTablePointer, AlreadyMapped, CorruptIntermediateEntry,
-    NxeNotEnabled, WritableExecutableMapping,
+    WritableExecutableMapping,
 }
 
 /// Supplies unique, zeroed, page-aligned table pages and their writable mapping.
@@ -51,8 +53,7 @@ pub struct PageTableBuilder<M: PageTableMemory> {
 }
 
 impl<M: PageTableMemory> PageTableBuilder<M> {
-    pub fn new(mut memory: M, nxe_enabled: bool) -> Result<Self, PageTableError> {
-        if !nxe_enabled { return Err(PageTableError::NxeNotEnabled); }
+    pub fn new(mut memory: M, _nxe: NxeEnabled) -> Result<Self, PageTableError> {
         let (physical, virtual_ptr) = memory.allocate_zeroed_table()?;
         validate_table_page(physical, virtual_ptr)?;
         Ok(Self { memory, root_physical: physical, root_virtual: virtual_ptr })
