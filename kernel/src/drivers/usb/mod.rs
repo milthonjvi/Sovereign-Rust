@@ -3,6 +3,7 @@
 //! controller; native USB4 router management is a separate future subsystem.
 pub mod controller;
 pub mod descriptors;
+pub mod enumeration;
 pub mod ehci;
 pub mod hub;
 pub mod ohci;
