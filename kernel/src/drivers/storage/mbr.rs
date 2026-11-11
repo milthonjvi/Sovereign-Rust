@@ -258,21 +258,21 @@ mod tests {
         assert_eq!(MbrTable::parse(&sector, GEOMETRY), Err(MbrError::OverlappingPartitions));
     }
     struct MockDisk { first: [u8; 512], second: [u8; 512] }
-    impl super::super::block::BlockDevice for MockDisk {
+    impl crate::drivers::storage::block::BlockDevice for MockDisk {
         fn geometry(&self) -> BlockGeometry { GEOMETRY }
-        fn read_blocks(&mut self, range: super::super::block::BlockRange, buffer: &mut [u8]) -> Result<(), super::super::block::BlockError> {
-            if range.block_count != 1 || buffer.len() != 512 { return Err(super::super::block::BlockError::BufferSizeMismatch); }
+        fn read_blocks(&mut self, range: crate::drivers::storage::block::BlockRange, buffer: &mut [u8]) -> Result<(), crate::drivers::storage::block::BlockError> {
+            if range.block_count != 1 || buffer.len() != 512 { return Err(crate::drivers::storage::block::BlockError::BufferSizeMismatch); }
             match range.start_block {
                 100 => buffer.copy_from_slice(&self.first),
                 200 => buffer.copy_from_slice(&self.second),
-                _ => return Err(super::super::block::BlockError::OutOfBounds),
+                _ => return Err(crate::drivers::storage::block::BlockError::OutOfBounds),
             }
             Ok(())
         }
-        fn write_blocks(&mut self, _: super::super::block::BlockRange, _: &[u8]) -> Result<(), super::super::block::BlockError> {
-            Err(super::super::block::BlockError::UnsupportedOperation)
+        fn write_blocks(&mut self, _: crate::drivers::storage::block::BlockRange, _: &[u8]) -> Result<(), crate::drivers::storage::block::BlockError> {
+            Err(crate::drivers::storage::block::BlockError::UnsupportedOperation)
         }
-        fn flush(&mut self) -> Result<(), super::super::block::BlockError> { Ok(()) }
+        fn flush(&mut self) -> Result<(), crate::drivers::storage::block::BlockError> { Ok(()) }
     }
     fn set_raw_entry(sector: &mut [u8; 512], index: usize, boot: u8, kind: u8, start: u32, count: u32) {
         set_partition(sector, index, boot, kind, start, count);
