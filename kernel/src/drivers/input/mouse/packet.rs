@@ -74,7 +74,8 @@ mod tests {
   let mut d=Ps2MouseDecoder::new_with_protocol(Ps2MouseProtocol::Wheel);
   let mut out=[None;3];
   d.feed(0x08,&mut out); d.feed(0,&mut out); d.feed(0,&mut out);
-  assert_eq!(d.feed(0x30,&mut out),0);
+  assert_eq!(d.feed(0x30,&mut out),1);
+  assert_eq!(out[0],Some(InputEvent::MouseButtons{buttons:MouseButtons::from_bits(0)}));
  }
  #[test] fn five_button_protocol_decodes_extra_buttons_and_signed_wheel() {
   let mut d=Ps2MouseDecoder::new_with_protocol(Ps2MouseProtocol::FiveButton);
