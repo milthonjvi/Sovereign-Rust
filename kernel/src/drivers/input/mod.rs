@@ -11,7 +11,7 @@ pub mod pipeline;
 pub mod ps2;
 pub mod queue;
 
-pub use event::{InputEvent, KeyCode, MouseButtons};
+pub use event::{ContactPhase, GamepadAxis, InputDeviceId, InputEvent, KeyCode, MouseButtons};
 pub use irq::{MAX_IRQ_DRAIN_BUDGET, Ps2IrqError, Ps2IrqService, legacy_irqs_registered};
 pub use pipeline::{InputPipelineStats, Ps2InputPipeline};
 pub use queue::{EventQueue, SpscConsumer, SpscProducer, SpscQueue};
