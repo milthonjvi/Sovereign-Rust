@@ -5,6 +5,8 @@
 
 pub mod block;
 pub mod gpt;
+pub mod mbr;
 
 pub use block::{BlockDevice, BlockError, BlockGeometry, BlockRange, validate_buffer};
 pub use gpt::{GptError, GptHeader};
+pub use mbr::{MbrError, MbrPartition, MbrTable};
