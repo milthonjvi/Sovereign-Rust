@@ -1,8 +1,9 @@
 //! Per-CPU task sleep deadlines and timeout-to-wakeup handoff.
 //!
-//! This layer connects task identifiers to the local APIC-backed deadline
-//! queue. It does not perform context switches: expired IDs are returned to
-//! the scheduler, which owns task-state transitions and ready-queue insertion.
+//! This layer connects task identifiers to TSC-deadline, x2APIC countdown,
+//! or legacy-PIT timeout backends. It does not perform context switches:
+//! expired IDs are returned to the scheduler, which owns task-state transitions
+//! and ready-queue insertion.
 
 mod apic_countdown;
 mod pit;
