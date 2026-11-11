@@ -96,7 +96,9 @@ impl SovereignBootInfo {
             return Err(SovereignBootError::InvalidKernelRange);
         }
         if (self.flags & BOOT_INFO_FLAG_ACPI_VALID == 0 && self.acpi_rsdp_physical != 0)
-            || (self.flags & BOOT_INFO_FLAG_ACPI_VALID != 0 && self.acpi_rsdp_physical == 0)
+            || (self.flags & BOOT_INFO_FLAG_ACPI_VALID != 0
+                && (self.acpi_rsdp_physical == 0
+                    || self.acpi_rsdp_physical & !0x000F_FFFF_FFFF_FFFF != 0))
             || (self.flags & BOOT_INFO_FLAG_FRAMEBUFFER_VALID == 0
                 && (self.framebuffer_physical != 0 || self.framebuffer_size != 0
                     || self.framebuffer_width != 0 || self.framebuffer_height != 0
