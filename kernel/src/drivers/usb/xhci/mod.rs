@@ -307,6 +307,34 @@ impl XhciController{
   if status&USBSTS_CONTROLLER_NOT_READY==0&&status&USBSTS_HALTED==0{self.state=ControllerState::Running;return Ok(true)}
   Ok(false)
  }
+
+ pub fn request_port_reset<I:RegisterIo>(&self,io:&mut I,port:u8)->Result<(),XhciError>{
+  if self.state!=ControllerState::Running{return Err(XhciError::NotReady)}
+  if port==0||port>self.capabilities.max_ports{return Err(XhciError::InvalidCapability)}
+  let offset=self.op(OP_PORT_BASE)+(port as usize-1)*OP_PORT_STRIDE;
+  let value=io.read32(offset)?;
+  if value&1==0{return Err(XhciError::NotReady)}
+  let speed=(value>>10)&0xf;
+  let reset=if speed==4||speed==5{1u32<<31}else{1u32<<4};
+  io.write32(offset,(value&(1<<9))|reset)
+ }
+ pub fn port_reset_complete<I:RegisterIo>(&self,io:&I,port:u8)->Result<bool,XhciError>{
+  if self.state!=ControllerState::Running{return Err(XhciError::NotReady)}
+  if port==0||port>self.capabilities.max_ports{return Err(XhciError::InvalidCapability)}
+  let value=io.read32(self.op(OP_PORT_BASE)+(port as usize-1)*OP_PORT_STRIDE)?;
+  let speed=(value>>10)&0xf;
+  let change=if speed==4||speed==5{1<<19}else{1<<21};
+  Ok(value&change!=0)
+ }
+ pub fn clear_port_changes<I:RegisterIo>(&self,io:&mut I,port:u8,changes:u32)->Result<(),XhciError>{
+  const CHANGE_MASK:u32=(1<<17)|(1<<18)|(1<<19)|(1<<20)|(1<<21)|(1<<22)|(1<<23);
+  if self.state!=ControllerState::Running{return Err(XhciError::NotReady)}
+  if port==0||port>self.capabilities.max_ports||changes&!CHANGE_MASK!=0{return Err(XhciError::InvalidCapability)}
+  let offset=self.op(OP_PORT_BASE)+(port as usize-1)*OP_PORT_STRIDE;
+  let power=io.read32(offset)?&(1<<9);
+  io.write32(offset,power|changes)
+ }
+
  pub fn read_port_status<I:RegisterIo>(&self,io:&I,port:u8)->Result<super::super::controller::PortStatus,XhciError>{
   if self.state!=ControllerState::Running{return Err(XhciError::NotReady)}
   if port==0||port>self.capabilities.max_ports{return Err(XhciError::InvalidCapability)}
