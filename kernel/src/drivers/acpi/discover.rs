@@ -7,6 +7,7 @@
 use super::{
     AcpiError,
     fadt::Fadt,
+    facs::Facs,
     rsdp::{RootTableAddress, Rsdp},
     sdt::{RootTable, Sdt},
 };
@@ -18,6 +19,7 @@ pub struct AcpiTables {
     pub used_xsdt: bool,
     pub madt: Option<u64>,
     pub fadt: Option<u64>,
+    pub facs: Option<u64>,
     pub hpet: Option<u64>,
     pub dsdt: Option<u64>,
 }
@@ -73,6 +75,18 @@ impl AcpiTables {
         if let Some(fadt_address) = found.fadt {
             let fadt_bytes = map_table(fadt_address).ok_or(AcpiError::UnsupportedAddress)?;
             let fadt = Fadt::parse(fadt_bytes)?;
+
+            // FACS is referenced by FADT.FIRMWARE_CTRL / X_FIRMWARE_CTRL,
+            // not listed in the RSDT/XSDT. It is a special structure without
+            // an SDT checksum, so validate it with the dedicated parser.
+            let facs_address = fadt.firmware_control_address();
+            if facs_address != 0 {
+                let facs_bytes = map_table(facs_address)
+                    .ok_or(AcpiError::UnsupportedAddress)?;
+                let _facs = Facs::parse(facs_address, facs_bytes)?;
+                found.facs = Some(facs_address);
+            }
+
             let dsdt_address = fadt.dsdt_address();
             if dsdt_address != 0 {
                 let dsdt_bytes = map_table(dsdt_address)
@@ -147,6 +161,37 @@ mod tests {
         assert!(result.used_xsdt);
         assert_eq!(result.fadt, Some(0x2000));
         assert_eq!(result.dsdt, Some(0x4000));
+    }
+
+    #[test]
+    fn follows_fadt_facs_pointer_without_applying_sdt_checksum() {
+        let root = make_xsdt(0x2000);
+        let mut fadt = make_fadt(0x3000, 0);
+        fadt[36..40].copy_from_slice(&0x5000u32.to_le_bytes());
+        fadt[9] = 0;
+        let checksum = 0u8.wrapping_sub(fadt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        fadt[9] = checksum;
+
+        let mut facs = std::vec![0u8; 64];
+        facs[0..4].copy_from_slice(b"FACS");
+        facs[4..8].copy_from_slice(&64u32.to_le_bytes());
+        facs[9] = 0xA5; // FACS has no checksum field.
+
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(fadt.as_slice()),
+            0x5000 => Some(facs.as_slice()),
+            _ => None,
+        }).unwrap();
+
+        assert_eq!(result.facs, Some(0x5000));
     }
 
     #[test]
