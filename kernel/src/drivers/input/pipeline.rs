@@ -28,6 +28,7 @@ pub struct Ps2InputPipeline<'a, const N: usize> {
     keyboard: Set1Decoder,
     mouse: Ps2MouseDecoder,
     stats: InputPipelineStats,
+    resync_required: bool,
 }
 
 impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
@@ -202,7 +203,7 @@ mod tests {
         pipeline.feed(0, 0x1E);
         pipeline.feed(0, 0x30);
         assert_eq!(pipeline.stats().controller_errors, 1);
-        assert_eq!(pipeline.stats().dropped_events, 1);
-        assert!(consumer.pop().is_some());
+        assert_eq!(pipeline.stats().dropped_events, 2);
+        assert!(matches!(consumer.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(0) })));
     }
 }
