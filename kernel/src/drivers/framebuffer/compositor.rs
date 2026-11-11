@@ -357,6 +357,44 @@ mod tests {
     }
 
     #[test]
+    fn partial_layer_damage_recomposes_only_the_intersection() {
+        use crate::drivers::framebuffer::color::PixelFormat;
+        use crate::drivers::framebuffer::info::FramebufferInfo;
+        use crate::drivers::framebuffer::surface::FramebufferSurface;
+
+        let background_pixels = [Color::opaque(200, 0, 0); 8];
+        let overlay_pixels = [Color::opaque(0, 0, 220)];
+        let background = ImageView::new(&background_pixels, 8, 1, 8).unwrap();
+        let overlay = ImageView::new(&overlay_pixels, 1, 1, 1).unwrap();
+        let mut compositor = Compositor::<4, 8>::new(8, 1, Color::BLACK).unwrap();
+        compositor.add_layer(background, 0, 0, 255).unwrap();
+        let overlay_id = compositor.add_layer(overlay, 3, 0, 255).unwrap();
+
+        let mut memory = [0u8; 8 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 8,
+            height: 1,
+            pitch: 8 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the backing array exactly covers the declared framebuffer.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        compositor.render(&mut target).unwrap();
+        assert_eq!(&memory[3 * 4..3 * 4 + 3], &[0, 0, 220]);
+
+        compositor.set_opacity(overlay_id, 0).unwrap();
+        compositor.render(&mut target).unwrap();
+        drop(target);
+
+        assert_eq!(&memory[3 * 4..3 * 4 + 3], &[200, 0, 0]);
+        assert_eq!(&memory[7 * 4..7 * 4 + 3], &[200, 0, 0]);
+    }
+
+    #[test]
     fn rejects_stale_layer_handle_after_slot_reuse() {
         let pixels = [Color::opaque(1, 2, 3)];
         let image = ImageView::new(&pixels, 1, 1, 1).unwrap();
