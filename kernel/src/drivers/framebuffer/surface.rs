@@ -137,6 +137,77 @@ impl<'a> FramebufferSurface<'a> {
         }
     }
 
+    /// Render one 5x7 ASCII glyph. A background color fills the full cell;
+    /// None leaves unset glyph pixels transparent.
+    pub fn draw_char(
+        &mut self,
+        x: usize,
+        y: usize,
+        character: char,
+        foreground: Color,
+        background: Option<Color>,
+    ) {
+        use super::font::{glyph_rows, FONT_HEIGHT, FONT_WIDTH};
+        let rows = glyph_rows(character);
+        for (row, bits) in rows.iter().enumerate() {
+            for column in 0..FONT_WIDTH {
+                let set = (bits & (1 << (FONT_WIDTH - 1 - column))) != 0;
+                let color = if set { Some(foreground) } else { background };
+                if let Some(pixel_color) = color {
+                    let px = x.saturating_add(column);
+                    let py = y.saturating_add(row);
+                    if px < self.info.width && py < self.info.height {
+                        let _ = self.put_pixel(px, py, pixel_color);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Render ASCII text, handling newlines, tabs, and automatic line wrapping.
+    /// Returns the cursor position immediately after the final character.
+    pub fn draw_text(
+        &mut self,
+        x: usize,
+        y: usize,
+        text: &str,
+        foreground: Color,
+        background: Option<Color>,
+    ) -> (usize, usize) {
+        use super::font::{FONT_ADVANCE, FONT_LINE_HEIGHT};
+        let mut cursor_x = x;
+        let mut cursor_y = y;
+        let origin_x = x;
+
+        for character in text.chars() {
+            match character {
+                '\\n' => {
+                    cursor_x = origin_x;
+                    cursor_y = cursor_y.saturating_add(FONT_LINE_HEIGHT);
+                }
+                '\\r' => cursor_x = origin_x,
+                '\\t' => {
+                    let relative = cursor_x.saturating_sub(origin_x);
+                    let tab_width = FONT_ADVANCE * 4;
+                    let next = (relative / tab_width).saturating_add(1).saturating_mul(tab_width);
+                    cursor_x = origin_x.saturating_add(next);
+                }
+                _ => {
+                    if cursor_x.saturating_add(FONT_ADVANCE) > self.info.width {
+                        cursor_x = origin_x;
+                        cursor_y = cursor_y.saturating_add(FONT_LINE_HEIGHT);
+                    }
+                    if cursor_y.saturating_add(super::font::FONT_HEIGHT) <= self.info.height {
+                        self.draw_char(cursor_x, cursor_y, character, foreground, background);
+                    }
+                    cursor_x = cursor_x.saturating_add(FONT_ADVANCE);
+                }
+            }
+            if cursor_y >= self.info.height { break; }
+        }
+        (cursor_x, cursor_y)
+    }
+
     /// Draw a rectangle clipped to the visible display area.
     pub fn fill_rect(&mut self, x: usize, y: usize, width: usize, height: usize, color: Color) {
         let end_x = x.saturating_add(width).min(self.info.width);
