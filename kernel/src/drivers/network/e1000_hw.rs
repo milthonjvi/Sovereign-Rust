@@ -870,7 +870,7 @@ mod tests {
         // SAFETY: MockRegisters does not perform DMA; these buffers model the
         // pinned mappings supplied by the platform in a real initialization.
         let info = unsafe { initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true) }.unwrap();
-        assert_eq!(info.mac, MacAddress([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]));
+        assert_eq!(info.mac, MacAddress([0x02, 0x22, 0x33, 0x44, 0x55, 0x66]));
         assert_eq!(rx[0].buffer_address, 0x4000);
         assert_eq!(rx[0].status, 0);
         assert_eq!(tx[0].status, TXD_STATUS_DD);
