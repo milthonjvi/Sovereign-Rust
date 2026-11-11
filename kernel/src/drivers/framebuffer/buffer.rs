@@ -273,6 +273,9 @@ impl<'a> DoubleBuffer<'a> {
         target: &mut FramebufferSurface<'_>,
         dirty: &DirtyRegionSet<DIRTY>,
     ) -> Result<(), BufferError> {
+        if dirty.dimensions() != self.dimensions() {
+            return Err(BufferError::DimensionsMismatch);
+        }
         if dirty.is_full() {
             return self.present_and_swap(target);
         }
@@ -372,6 +375,32 @@ mod tests {
         let changed = (1 * 4 + 2) * 4;
         assert_eq!(&memory[changed..changed + 4], &[255, 0, 0, 0]);
         assert_eq!(&memory[0..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn dirty_double_buffer_rejects_tracker_dimension_mismatch() {
+        use super::super::color::PixelFormat;
+        use super::super::dirty::DirtyRegionSet;
+        use super::super::info::FramebufferInfo;
+        use super::super::surface::FramebufferSurface;
+        let mut first = [Color::BLACK; 16];
+        let mut second = [Color::BLACK; 16];
+        let mut memory = [0u8; 4 * 4 * 4];
+        let info = FramebufferInfo {
+            address: 1, width: 4, height: 4, pitch: 16,
+            bits_per_pixel: 32, pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: test storage is valid for the declared framebuffer extent.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        let mut buffers = DoubleBuffer::new(&mut first, &mut second, 4, 4, 4).unwrap();
+        let dirty = DirtyRegionSet::<4>::new(2, 2).unwrap();
+        assert_eq!(
+            buffers.present_dirty_and_swap(&mut target, &dirty),
+            Err(BufferError::DimensionsMismatch),
+        );
+        assert_eq!(buffers.front().dimensions(), (4, 4));
     }
 
     #[test]
