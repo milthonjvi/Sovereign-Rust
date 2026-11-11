@@ -35,7 +35,6 @@ pub const EFI_INVALID_PARAMETER: EfiStatus = EFI_ERROR_BIT | 2;
 pub const EFI_UNSUPPORTED: EfiStatus = EFI_ERROR_BIT | 3;
 pub const EFI_OUT_OF_RESOURCES: EfiStatus = EFI_ERROR_BIT | 9;
 pub const EFI_BUFFER_TOO_SMALL: EfiStatus = EFI_ERROR_BIT | 5;
-pub const EFI_NOT_FOUND: EfiStatus = EFI_ERROR_BIT | 14;
 pub const EFI_COMPROMISED_DATA: EfiStatus = EFI_ERROR_BIT | 33;
 
 /// EFI_SYSTEM_TABLE signature ("IBI SYST" in little-endian byte order).
