@@ -43,7 +43,7 @@ mod tests {
   d.feed(0x18,&mut out); d.feed(0xFF,&mut out);
   assert_eq!(d.feed(0xFF,&mut out),2);
   assert_eq!(out[0],Some(InputEvent::MouseMotion{dx:-1,dy:1}));
-  assert_eq!(d.feed(0x0F,&mut out),1);
-  assert_eq!(out[0],Some(InputEvent::MouseWheel{delta:-1}));
+  assert_eq!(d.feed(0x0F,&mut out),3);
+  assert_eq!(out[2],Some(InputEvent::MouseWheel{delta:-1}));
  }
 }
