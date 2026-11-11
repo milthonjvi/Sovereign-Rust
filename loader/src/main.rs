@@ -109,13 +109,13 @@ pub extern "efiapi" fn efi_main(
 
     // Map the loader image RX and its current stack RW/NX so a later
     // post-ExitBootServices CR3 switch can execute a minimal transition stub.
-    if map_identity_range(
+    if let Err(error) = map_identity_range(
         &mut page_tables,
         loaded_kernel.loader_image_base,
         loaded_kernel.loader_image_size,
         PagePermissions::KERNEL_READ_EXECUTE,
-    ).is_err() {
-        return EFI_COMPROMISED_DATA;
+    ) {
+        return page_table_error_status(error);
     }
     let stack_pointer = current_stack_pointer();
     let stack_start = match stack_pointer.checked_sub(256 * 1024) {
@@ -126,31 +126,32 @@ pub extern "efiapi" fn efi_main(
         Some(value) => value,
         None => return EFI_COMPROMISED_DATA,
     };
-    if map_identity_range(
+    if let Err(error) = map_identity_range(
         &mut page_tables,
         stack_start,
         stack_end - stack_start,
         PagePermissions::KERNEL_READ_WRITE,
-    ).is_err() {
-        return EFI_COMPROMISED_DATA;
+    ) {
+        return page_table_error_status(error);
     }
 
     // The memory-map buffer is writable until capture and then read-only to
     // the kernel. Boot info is populated below, so it is mapped read-only too.
-    if map_identity_range(
+    if let Err(error) = map_identity_range(
         &mut page_tables,
         memory_map_buffer.physical_base(),
         (memory_map_buffer.pages() as u64) * 4096,
         PagePermissions::KERNEL_READ_ONLY,
-    ).is_err()
-        || map_identity_range(
-            &mut page_tables,
-            boot_info_physical,
-            4096,
-            PagePermissions::KERNEL_READ_ONLY,
-        ).is_err()
-    {
-        return EFI_COMPROMISED_DATA;
+    ) {
+        return page_table_error_status(error);
+    }
+    if let Err(error) = map_identity_range(
+        &mut page_tables,
+        boot_info_physical,
+        4096,
+        PagePermissions::KERNEL_READ_ONLY,
+    ) {
+        return page_table_error_status(error);
     }
 
     for segment in loaded_kernel.segments.iter().take(loaded_kernel.segment_count) {
@@ -175,8 +176,8 @@ pub extern "efiapi" fn efi_main(
                 Some(address) => address,
                 None => return EFI_COMPROMISED_DATA,
             };
-            if page_tables.map_4k(virtual_page, physical_page, permissions).is_err() {
-                return EFI_COMPROMISED_DATA;
+            if let Err(error) = page_tables.map_4k(virtual_page, physical_page, permissions) {
+                return page_table_error_status(error);
             }
             virtual_page += 0x1000;
         }
@@ -273,4 +274,11 @@ fn map_identity_range<M: PageTableMemory>(
         page = page.checked_add(0x1000).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
     }
     Ok(())
+}
+
+fn page_table_error_status(error: PageTableError) -> EfiStatus {
+    match error {
+        PageTableError::AllocationFailed => EFI_OUT_OF_RESOURCES,
+        _ => EFI_COMPROMISED_DATA,
+    }
 }
