@@ -59,6 +59,12 @@ pub extern "efiapi" fn efi_main(
         }
     };
 
+    if loaded_kernel.pages as u64 != loaded_kernel.image_size / 4096
+        || loaded_kernel.image_size & 0xfff != 0
+    {
+        return EFI_COMPROMISED_DATA;
+    }
+
     if !console.write_ascii("Kernel PT_LOAD segments copied to reserved physical memory.\r\n") {
         return EFI_INVALID_PARAMETER;
     }
@@ -168,6 +174,19 @@ pub extern "efiapi" fn efi_main(
         Ok(layout) => layout,
         Err(_) => return EFI_COMPROMISED_DATA,
     };
+    let firmware_entry = efi_main as *const () as usize as u64;
+    let expected_firmware_entry = match loaded_kernel.loader_image_base.checked_add(
+        loader_layout.entry_point_rva,
+    ) {
+        Some(address) => address,
+        None => return EFI_COMPROMISED_DATA,
+    };
+    if loader_layout.image_size > loaded_kernel.loader_image_size
+        || expected_firmware_entry != firmware_entry
+    {
+        return EFI_COMPROMISED_DATA;
+    }
+
     if let Err(error) = map_identity_range(
         &mut page_tables,
         loaded_kernel.loader_image_base,
@@ -250,6 +269,9 @@ pub extern "efiapi" fn efi_main(
     }
 
     for segment in loaded_kernel.segments.iter().take(loaded_kernel.segment_count) {
+        if segment.file_size > segment.memory_size {
+            return EFI_COMPROMISED_DATA;
+        }
         let segment_end = match segment.virtual_address.checked_add(segment.memory_size) {
             Some(end) => end,
             None => return EFI_COMPROMISED_DATA,
@@ -329,15 +351,20 @@ pub extern "efiapi" fn efi_main(
     // immediately before each ExitBootServices attempt. The callback performs
     // only bounded memory writes: no firmware calls and no allocations.
     let mut handoff_valid = true;
+    let expected_map_pages = memory_map_buffer.pages();
+    let expected_map_capacity = memory_map_buffer.capacity_bytes();
     // SAFETY: The image handle and Boot Services table remain valid. The
     // callback only mutates the preallocated boot-info page.
     let final_map = unsafe {
         memory_map_buffer.exit_boot_services_with(image_handle, |map| {
+            handoff_valid = map.pages == expected_map_pages
+                && map.capacity_bytes == expected_map_capacity
+                && map.size_bytes <= map.capacity_bytes;
             boot_info.memory_map_physical = map.physical_base;
             boot_info.memory_map_size = map.size_bytes as u64;
             boot_info.memory_descriptor_size = map.descriptor_size as u64;
             boot_info.memory_descriptor_version = map.descriptor_version;
-            handoff_valid = boot_info.is_well_formed();
+            handoff_valid &= boot_info.is_well_formed();
             if handoff_valid {
                 // SAFETY: This page was allocated and mapped before the final map.
                 boot_info_pointer.write(boot_info);
