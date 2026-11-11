@@ -207,7 +207,7 @@ pub fn read_link_state<R: E1000Registers>(
 
 /// Runtime error returned by allocation-free RX/TX queue operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum E1000QueueError<E> {
+pub(crate) enum E1000QueueError<E> {
     Register(E),
     InvalidRing,
     InvalidFrameLength,
