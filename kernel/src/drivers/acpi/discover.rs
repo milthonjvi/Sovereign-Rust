@@ -447,6 +447,34 @@ mod tests {
         assert_eq!(result, Err(AcpiError::InvalidSignature));
     }
 
+
+    #[test]
+    fn rejects_truncated_hardware_reduced_fadt_during_discovery() {
+        let root = make_xsdt(0x2000);
+        let mut fadt = make_fadt(0, 0);
+        fadt[8] = 5;
+        fadt[112..116].copy_from_slice(&(1u32 << 20).to_le_bytes());
+        fadt[9] = 0;
+        fadt[9] = 0u8.wrapping_sub(
+            fadt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+        );
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        // This FADT stops at the ACPI 3.0/4.0 boundary (244 bytes) despite
+        // advertising the ACPI 5.0 Hardware Reduced programming model.
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(fadt.as_slice()),
+            _ => None,
+        });
+        assert_eq!(result, Err(AcpiError::MalformedTable));
+    }
+
     #[test]
     fn rejects_invalid_fadt_metadata_during_discovery() {
         let root = make_xsdt(0x2000);
