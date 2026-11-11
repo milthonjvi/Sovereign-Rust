@@ -340,7 +340,7 @@ pub extern "efiapi" fn efi_main(
             handoff_valid = boot_info.is_well_formed();
             if handoff_valid {
                 // SAFETY: This page was allocated and mapped before the final map.
-                unsafe { boot_info_pointer.write(boot_info) };
+                boot_info_pointer.write(boot_info);
             }
         })
     };
