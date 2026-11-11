@@ -19,6 +19,11 @@ impl Set1Decoder {
   self.pause_remaining = 0;
   self.print_screen_state = 0;
  }
+ /// Clears logical held-key state after the event consumer is explicitly reset.
+ pub fn reset_state(&mut self) {
+  self.reset_stream();
+  self.keys_down = [0; 4];
+ }
  pub fn feed(&mut self, byte: u8) -> Option<InputEvent> {
   if self.pause_remaining != 0 { self.pause_remaining -= 1; return None; }
   if byte == 0xE1 {
