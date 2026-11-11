@@ -267,23 +267,24 @@ impl HidReportDescriptor{
    for i in 0..size{value|=(bytes[offset+i] as u32)<<(i*8);}
    offset+=size;
    let item_type=(prefix>>2)&3;let tag=prefix>>4;
-   if item_type!=1{continue}
-   match tag{
-    7=>state.report_size=value,
-    8=>{
-     if value==0||value>255{return Err(UsbError::MalformedDescriptor)}
-     state.report_id=value as u8;
+   if item_type==1{
+    match tag{
+     7=>state.report_size=value,
+     8=>{
+      if value==0||value>255{return Err(UsbError::MalformedDescriptor)}
+      state.report_id=value as u8;
+     }
+     9=>state.report_count=value,
+     10=>{
+      if depth>=stack.len(){return Err(UsbError::NoResources)}
+      stack[depth]=state;depth+=1;
+     }
+     11=>{
+      if depth==0{return Err(UsbError::MalformedDescriptor)}
+      depth-=1;state=stack[depth];
+     }
+     _=>{}
     }
-    9=>state.report_count=value,
-    10=>{
-     if depth>=stack.len(){return Err(UsbError::NoResources)}
-     stack[depth]=state;depth+=1;
-    }
-    11=>{
-     if depth==0{return Err(UsbError::MalformedDescriptor)}
-     depth-=1;state=stack[depth];
-    }
-    _=>{}
    }
    if item_type==0&&(tag==8||tag==9||tag==11){
     if state.report_size==0||state.report_count==0{return Err(UsbError::MalformedDescriptor)}
