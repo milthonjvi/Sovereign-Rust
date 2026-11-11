@@ -2,9 +2,9 @@
 //!
 //! NIC hardware queues remain separate from protocol implementations
 //! (ARP, IPv4/IPv6, ICMP, UDP, TCP, DNS). This module includes an allocation-free
-//! Intel E1000 datapath, volatile MMIO access, DMA ownership contracts, and
-//! deferred APIC interrupt notification; platform mapping and DMA allocation
-//! remain supplied by kernel services.
+//! Intel E1000 datapath, RTL8139 receive-ring primitives, DMA ownership
+//! contracts, and deferred E1000 APIC notification. Platform mapping and DMA
+//! allocation remain supplied by kernel services.
 
 pub mod device;
 pub mod dma;
