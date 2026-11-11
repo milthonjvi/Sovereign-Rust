@@ -47,8 +47,13 @@ impl<const N: usize> UartRxBuffer<N> {
     /// Adds one byte from the serialized producer context.
     ///
     /// Returns false when full; the dropped-byte counter is incremented.
+    ///
+    /// # Safety
+    /// Exactly one producer may call push for this queue. Calls must not be
+    /// nested or concurrent; normally only one UART IRQ handler owns producer
+    /// access.
     #[inline]
-    pub fn push(&self, byte: u8) -> bool {
+    pub unsafe fn push(&self, byte: u8) -> bool {
         let head = self.head.0.load(Ordering::Relaxed);
         let next = (head + 1) & (N - 1);
         let tail = self.tail.0.load(Ordering::Acquire);
@@ -65,8 +70,12 @@ impl<const N: usize> UartRxBuffer<N> {
     }
 
     /// Removes one byte from the single consumer context.
+    ///
+    /// # Safety
+    /// Exactly one consumer may call pop for this queue. Calls must not be
+    /// concurrent; normally one kernel task owns consumer access.
     #[inline]
-    pub fn pop(&self) -> Option<u8> {
+    pub unsafe fn pop(&self) -> Option<u8> {
         let tail = self.tail.0.load(Ordering::Relaxed);
         let head = self.head.0.load(Ordering::Acquire);
         if tail == head {
@@ -127,32 +136,32 @@ mod tests {
         assert!(!queue.is_full());
         assert_eq!(queue.len(), 0);
         assert_eq!(queue.capacity(), 7);
-        assert_eq!(queue.pop(), None);
+        assert_eq!(unsafe { queue.pop() }, None);
     }
 
     #[test]
     fn preserves_fifo_order() {
         let queue = UartRxBuffer::<8>::new();
-        assert!(queue.push(0x41));
-        assert!(queue.push(0x42));
-        assert!(queue.push(0x43));
+        assert!(unsafe { queue.push(0x41) });
+        assert!(unsafe { queue.push(0x42) });
+        assert!(unsafe { queue.push(0x43) });
         assert_eq!(queue.len(), 3);
-        assert_eq!(queue.pop(), Some(0x41));
-        assert_eq!(queue.pop(), Some(0x42));
-        assert_eq!(queue.pop(), Some(0x43));
+        assert_eq!(unsafe { queue.pop() }, Some(0x41));
+        assert_eq!(unsafe { queue.pop() }, Some(0x42));
+        assert_eq!(unsafe { queue.pop() }, Some(0x43));
         assert_eq!(queue.pop(), None);
     }
 
     #[test]
     fn rejects_new_bytes_when_full_and_counts_drops() {
         let queue = UartRxBuffer::<4>::new();
-        assert!(queue.push(1));
-        assert!(queue.push(2));
-        assert!(queue.push(3));
+        assert!(unsafe { queue.push(1) });
+        assert!(unsafe { queue.push(2) });
+        assert!(unsafe { queue.push(3) });
         assert!(queue.is_full());
-        assert!(!queue.push(4));
+        assert!(!unsafe { queue.push(4) });
         assert_eq!(queue.dropped_bytes(), 1);
-        assert_eq!(queue.pop(), Some(1));
+        assert_eq!(unsafe { queue.pop() }, Some(1));
     }
 
     #[test]
@@ -161,11 +170,11 @@ mod tests {
         assert!(queue.push(1));
         assert!(queue.push(2));
         assert_eq!(queue.pop(), Some(1));
-        assert!(queue.push(3));
-        assert!(queue.push(4));
-        assert_eq!(queue.pop(), Some(2));
-        assert_eq!(queue.pop(), Some(3));
-        assert_eq!(queue.pop(), Some(4));
+        assert!(unsafe { queue.push(3) });
+        assert!(unsafe { queue.push(4) });
+        assert_eq!(unsafe { queue.pop() }, Some(2));
+        assert_eq!(unsafe { queue.pop() }, Some(3));
+        assert_eq!(unsafe { queue.pop() }, Some(4));
         assert!(queue.is_empty());
     }
 
@@ -173,7 +182,7 @@ mod tests {
     fn can_be_const_initialized_for_static_kernel_storage() {
         static QUEUE: UartRxBuffer<16> = UartRxBuffer::new();
         assert!(QUEUE.is_empty());
-        assert!(QUEUE.push(0x5A));
-        assert_eq!(QUEUE.pop(), Some(0x5A));
+        assert!(unsafe { QUEUE.push(0x5A) });
+        assert_eq!(unsafe { QUEUE.pop() }, Some(0x5A));
     }
 }
