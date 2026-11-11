@@ -469,9 +469,9 @@ mod tests {
         let mut tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
         let mut rx_storage = [[0u8; 2048]; 8];
         let mut tx_storage = [[0u8; 2048]; 8];
-        let mut rx_buffers = core::array::from_fn(|i|
+        let mut rx_buffers: [_; 8] = core::array::from_fn(|i|
             DmaBuffer::new(0x10000 + i as u64 * 2048, &mut rx_storage[i]).unwrap());
-        let mut tx_buffers = core::array::from_fn(|i|
+        let mut tx_buffers: [_; 8] = core::array::from_fn(|i|
             DmaBuffer::new(0x20000 + i as u64 * 2048, &mut tx_storage[i]).unwrap());
         for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
             descriptor.buffer_address = buffer.dma_address();
