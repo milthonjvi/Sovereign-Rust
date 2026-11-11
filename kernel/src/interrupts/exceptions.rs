@@ -59,7 +59,7 @@ static LAST_RIP: AtomicU64 = AtomicU64::new(0);
 pub unsafe fn install_exception_gates(idt: &mut Idt) -> Result<(), IdtError> {
     let selector = Idt::current_code_selector();
     for vector in 0..256 {
-        // SAFETY: The assembly object exports exactly 32 pointers in this table.
+        // SAFETY: The assembly object exports exactly 256 pointers in this table.
         let handler = unsafe { sovereign_exception_stub_table[vector] };
         // Dedicated IST stacks prevent catastrophic faults from reusing a
         // potentially corrupted or exhausted kernel stack.
