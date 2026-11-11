@@ -193,14 +193,15 @@ impl Uart16550 {
         Ok(unsafe { io::in8(self.port(LSR)) } & THR_EMPTY != 0)
     }
 
-    /// Enables receive-data-available interrupts only.
+    /// Enables receiver-data and receiver-line-status interrupts.
     ///
     /// Register the matching kernel IRQ handler and keep the PIC line masked
     /// before calling this method. The caller unmasks the PIC line last.
     pub fn enable_receive_interrupt(&mut self) -> Result<(), UartError> {
         self.ensure_initialized()?;
-        // SAFETY: This instance owns the UART; IER bit 0 enables RX-ready IRQ.
-        unsafe { io::out8(self.port(IER), 1); }
+        // SAFETY: This instance owns the UART; IER bits 0 and 2 enable RX-ready
+        // and receiver-line-status IRQs. Modem-status IRQs remain disabled.
+        unsafe { io::out8(self.port(IER), 0x05); }
         Ok(())
     }
 
