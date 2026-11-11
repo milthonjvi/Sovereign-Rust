@@ -143,12 +143,19 @@ impl Facs {
     }
 
     /// Calculate an acquire attempt from the parsed FACS lock snapshot.
+    ///
+    /// This is only a pure state transition, not a lock operation. The caller
+    /// must first verify Fadt::global_lock_supported(); Hardware Reduced ACPI
+    /// explicitly prohibits the Global Lock even if a FACS happens to exist.
     /// The result must be committed to firmware memory with atomic CAS.
     pub const fn global_lock_acquire_transition(&self) -> GlobalLockAcquire {
         GlobalLock::acquire_transition(self.global_lock)
     }
 
     /// Calculate release from the parsed FACS lock snapshot.
+    ///
+    /// This is only a pure state transition, not a lock operation. The caller
+    /// must first verify Fadt::global_lock_supported().
     /// The result must be committed to firmware memory with atomic CAS.
     pub const fn global_lock_release_transition(&self) -> GlobalLockRelease {
         GlobalLock::release_transition(self.global_lock)
