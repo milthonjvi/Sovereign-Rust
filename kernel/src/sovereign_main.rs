@@ -7,6 +7,7 @@ use core::panic::PanicInfo;
 use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt};
 use sovereign_kernel::arch::x86_64::init::initialize_baseline;
 use sovereign_kernel::boot::sovereign::SovereignBootInfo;
+use sovereign_kernel::memory::boot_map::BootMemoryMap;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
@@ -25,15 +26,11 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
     let memory_map = unsafe {
         boot_info.memory_map().unwrap_or_else(|_| fatal_halt())
     };
-    for index in 0..memory_map.len() {
-        let descriptor = memory_map.descriptor(index).unwrap_or_else(|_| fatal_halt());
-        let region_size = descriptor.number_of_pages.checked_mul(4096)
-            .unwrap_or_else(|| fatal_halt());
-        let _region_end = descriptor.physical_start.checked_add(region_size)
-            .unwrap_or_else(|| fatal_halt());
-        if descriptor.number_of_pages == 0 {
-            fatal_halt();
-        }
+    let usable_memory = BootMemoryMap::new(&memory_map)
+        .and_then(|map| map.usable_summary())
+        .unwrap_or_else(|_| fatal_halt());
+    if usable_memory.region_count == 0 || usable_memory.page_count == 0 {
+        fatal_halt();
     }
 
     // Install the kernel's GDT/TSS, IDT, and masked legacy PIC only after the
