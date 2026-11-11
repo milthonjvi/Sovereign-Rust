@@ -527,7 +527,7 @@ mod recovery_status_tests {
     #[test]
     fn snapshot_reports_command_and_link_faults_without_acknowledging() {
         let mut regs = StatusRegisters([0; 64]);
-        regs.0[0x10 / 4] = (1 << 30) | (1 << 29);
+        regs.0[0x10 / 4] = (1 << 30) | (1 << 27);
         regs.0[0x20 / 4] = (1 << 0) | (1 << 5);
         regs.0[0x30 / 4] = 0xA5;
         regs.0[0x38 / 4] = 1 << 3;
@@ -554,8 +554,11 @@ mod recovery_status_tests {
     fn task_file_ready_rejects_busy_and_data_request() {
         let ready = AhciPortSnapshot { interrupt_status: 0, task_file_data: 0, sata_error: 0, command_issue: 0, sata_active: 0 };
         assert!(ready.task_file_ready());
-        assert!(!AhciPortSnapshot { task_file_data: 1 << 7, ..ready }.task_file_ready());
-        assert!(!AhciPortSnapshot { task_file_data: 1 << 3, ..ready }.task_file_ready());
-        assert!(!AhciPortSnapshot { task_file_data: 1, ..ready }.task_file_ready());
+        let busy = AhciPortSnapshot { task_file_data: 1 << 7, ..ready };
+        let data_request = AhciPortSnapshot { task_file_data: 1 << 3, ..ready };
+        let error = AhciPortSnapshot { task_file_data: 1, ..ready };
+        assert!(!busy.task_file_ready());
+        assert!(!data_request.task_file_ready());
+        assert!(!error.task_file_ready());
     }
 }
