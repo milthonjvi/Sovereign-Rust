@@ -7,6 +7,9 @@ const FADT_RESET_REG_SUP: u32 = 1 << 10;
 const FADT_LOW_POWER_S0_IDLE_CAPABLE: u32 = 1 << 21;
 const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
 
+/// Hardware-set wake indication in the HW-reduced Sleep Status Register.
+pub const SLEEP_STATUS_WAK_STS: u8 = 1 << 7;
+
 /// Common FADT fields needed for early platform and power-management setup.
 /// Register access is deliberately left to architecture-specific code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -249,6 +252,24 @@ impl Fadt {
             return Err(AcpiError::MalformedTable);
         }
         Ok((sleep_type << 2) | (1 << 5))
+    }
+
+    /// Test the WAK_STS bit in a value read from SLEEP_STATUS_REG.
+    ///
+    /// This is a pure bitfield helper. The caller must first obtain the
+    /// descriptor through validated_sleep_registers() and perform the
+    /// architecture-specific register read using the GAS access semantics.
+    pub const fn sleep_status_wake_status_set(status: u8) -> bool {
+        status & SLEEP_STATUS_WAK_STS != 0
+    }
+
+    /// Value to write to SLEEP_STATUS_REG to acknowledge WAK_STS.
+    ///
+    /// WAK_STS is write-one-to-clear. Do not read/modify/write this register:
+    /// write this mask directly so ignored or reserved bits are not echoed
+    /// back as ones. This helper does not perform the write.
+    pub const fn sleep_status_wake_status_ack_value() -> u8 {
+        SLEEP_STATUS_WAK_STS
     }
 
     /// Return validated sleep-control/status GAS descriptors for
@@ -1698,6 +1719,18 @@ mod tests {
             legacy.encode_hardware_reduced_sleep_control(3),
             Err(AcpiError::MalformedTable),
         );
+    }
+
+    #[test]
+    fn decodes_and_acknowledges_hardware_reduced_wake_status() {
+        assert!(!Fadt::sleep_status_wake_status_set(0x00));
+        assert!(!Fadt::sleep_status_wake_status_set(0x7F));
+        assert!(Fadt::sleep_status_wake_status_set(SLEEP_STATUS_WAK_STS));
+        assert!(Fadt::sleep_status_wake_status_set(0xFF));
+
+        // WAK_STS is write-one-to-clear; acknowledge only bit 7.
+        assert_eq!(Fadt::sleep_status_wake_status_ack_value(), 0x80);
+        assert_eq!(Fadt::sleep_status_wake_status_ack_value() & 0x7F, 0);
     }
 
     #[test]
