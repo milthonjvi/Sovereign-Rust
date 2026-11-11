@@ -114,9 +114,9 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             }
         }
         validate_cross_pool_disjoint(rx_buffers, tx_buffers)?;
-        let rx_queue = E1000RxQueue::new(rx_descriptors.len() as u16)
+        let rx_queue = E1000RxQueue::new(rx_descriptors.len())
             .map_err(|_| E1000DeviceError::InvalidRing)?;
-        let tx_queue = E1000TxQueue::new(tx_descriptors.len() as u16)
+        let tx_queue = E1000TxQueue::new(tx_descriptors.len())
             .map_err(|_| E1000DeviceError::InvalidRing)?;
         let ral = registers.read32(REG_RAL0).map_err(|_| E1000DeviceError::HardwareFault)?;
         let rah = registers.read32(REG_RAH0).map_err(|_| E1000DeviceError::HardwareFault)?;
