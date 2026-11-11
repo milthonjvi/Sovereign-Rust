@@ -947,6 +947,8 @@ mod tests {
     fn rejects_legacy_io_blocks_outside_the_x86_port_space() {
         for (base, length) in [(0x1_0000u32, 2u8), (0xFFFF, 2)] {
             let mut b = make_fadt(244, 0, None, None);
+            b[56..60].copy_from_slice(&0x100u32.to_le_bytes());
+            b[88] = 4;
             b[64..68].copy_from_slice(&base.to_le_bytes());
             b[89] = length;
             b[9] = 0;
@@ -959,6 +961,8 @@ mod tests {
         }
 
         let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x100u32.to_le_bytes());
+        b[88] = 4;
         b[64..68].copy_from_slice(&0xFFFEu32.to_le_bytes());
         b[89] = 2;
         b[9] = 0;
