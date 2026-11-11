@@ -179,6 +179,16 @@ mod tests{
   s.elapse_ms(1).unwrap();assert_eq!(s.stage(),EnumerationStage::AddressSettle);
   s.elapse_ms(u16::MAX).unwrap();assert_eq!(s.stage(),EnumerationStage::ReadDeviceDescriptor);
  }
+ #[test]fn full_device_descriptor_must_match_initial_ep0_packet_size(){
+  let mut pool=DeviceAddressPool::new();let mut s=EnumerationSession::new();
+  s.complete(&[18,1,0,2,0,0,0,64],&mut pool).unwrap();
+  let address=s.address().unwrap();
+  s.complete(&[],&mut pool).unwrap();
+  s.elapse_ms(2).unwrap();
+  assert_eq!(s.complete(&[18,1,0,2,0,0,0,8,0x34,0x12,0x78,0x56,0,1,0,0,0,1],&mut pool),Err(UsbError::MalformedDescriptor));
+  assert_eq!(s.stage(),EnumerationStage::Failed);
+  assert!(!pool.is_allocated(address));
+ }
  #[test]fn failed_enumeration_releases_allocated_address(){
   let mut pool=DeviceAddressPool::new();let mut s=EnumerationSession::new();
   s.complete(&[18,1,0,2,0,0,0,64],&mut pool).unwrap();
