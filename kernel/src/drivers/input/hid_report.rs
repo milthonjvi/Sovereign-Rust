@@ -424,7 +424,10 @@ impl HidReportDecoder {
                                 device: self.device, button, pressed: value != 0,
                             }, producer, &mut stats);
                         }
-                    } else { pointer_button_seen = true; }
+                    } else if field.application_page == 0x01
+                        && (field.application_usage == 0x01 || field.application_usage == 0x02) {
+                        pointer_button_seen = true;
+                    }
                 } else if field.usage_page == 0x0C {
                     if variable {
                         if usage != 0 && ((!had_old && value != 0) || (had_old && old != value)) {
