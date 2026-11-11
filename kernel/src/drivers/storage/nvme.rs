@@ -199,3 +199,85 @@ mod capability_tests {
         assert!(queue.poll().is_none());
     }
 }
+
+
+pub trait NvmeRegisterIo {
+    fn read32(&mut self, offset:u32)->Result<u32,NvmeError>;
+    fn read64(&mut self, offset:u32)->Result<u64,NvmeError>;
+    fn write32(&mut self, offset:u32, value:u32)->Result<(),NvmeError>;
+    fn write64(&mut self, offset:u32, value:u64)->Result<(),NvmeError>;
+}
+
+pub struct NvmeAdminQueueMemory<'a> {
+    pub submission_phys:u64,
+    pub completion_phys:u64,
+    pub submission:&'a mut [NvmeCommand],
+    pub completion:&'a mut [NvmeCompletion],
+    pub depth:u16,
+}
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct NvmeControllerInfo {
+    pub capabilities:NvmeCapabilities,
+    pub page_size:u32,
+    pub admin_queue_depth:u16,
+    pub doorbell_stride:u32,
+}
+
+/// Initialize an NVMe controller after PCI bus mastering, BAR mapping and DMA
+/// queue allocation have been completed by their owning subsystems.
+pub fn initialize_controller<R: NvmeRegisterIo>(
+    registers:&mut R,
+    queues:&mut NvmeAdminQueueMemory<'_>,
+    poll_limit:u32,
+)->Result<NvmeControllerInfo,NvmeError>{
+    const CAP:u32=0x00; const CC:u32=0x14; const CSTS:u32=0x1C;
+    const AQA:u32=0x24; const ASQ:u32=0x28; const ACQ:u32=0x30;
+    if queues.depth<2 || queues.depth>4096
+        || queues.depth as usize>queues.submission.len()
+        || queues.depth as usize>queues.completion.len()
+        || queues.submission_phys&0xFFF!=0 || queues.completion_phys&0xFFF!=0 {
+        return Err(NvmeError::InvalidQueueDepth);
+    }
+    let mut cc=registers.read32(CC)?;
+    cc &= !1;
+    registers.write32(CC,cc)?;
+    wait_ready(registers,false,poll_limit)?;
+    let capabilities=NvmeCapabilities::parse(registers.read64(CAP)?)?;
+    if capabilities.min_page_size>4096 || capabilities.max_page_size<4096 {
+        return Err(NvmeError::UnsupportedPageSize);
+    }
+    let depth=core::cmp::min(queues.depth as u32,core::cmp::min(capabilities.max_queue_entries,4096)) as u16;
+    if depth<2{return Err(NvmeError::InvalidQueueDepth);}
+    queues.submission[..depth as usize].fill(NvmeCommand::default());
+    let aqa=((depth as u32-1)<<16)|(depth as u32-1);
+    registers.write32(AQA,aqa)?;
+    registers.write64(ASQ,queues.submission_phys)?;
+    registers.write64(ACQ,queues.completion_phys)?;
+    let mps=0u32; // 4 KiB pages, selected from the controller's supported range.
+    let cc=(mps<<7)|(6<<16)|(4<<20)|1;
+    registers.write32(CC,cc)?;
+    wait_ready(registers,true,poll_limit)?;
+    Ok(NvmeControllerInfo{
+        capabilities,page_size:4096,admin_queue_depth:depth,
+        doorbell_stride:capabilities.doorbell_stride_bytes,
+    })
+}
+
+fn wait_ready<R: NvmeRegisterIo>(registers:&mut R,ready:bool,polls:u32)->Result<(),NvmeError>{
+    for _ in 0..polls {
+        let status=registers.read32(0x1C)?;
+        if status&2!=0{return Err(NvmeError::ControllerFatal);}
+        if (status&1!=0)==ready{return Ok(());}
+        core::hint::spin_loop();
+    }
+    Err(NvmeError::Timeout)
+}
+
+pub fn doorbell_offset(queue_id:u16,completion:bool,stride_bytes:u32)->Result<u32,NvmeError>{
+    if !stride_bytes.is_power_of_two() || stride_bytes<4{return Err(NvmeError::InvalidCapabilities);}
+    let index=(queue_id as u32).checked_mul(2).and_then(|v|v.checked_add(if completion{1}else{0}))
+        .ok_or(NvmeError::AddressOverflow)?;
+    0x1000u32.checked_add(index.checked_mul(stride_bytes).ok_or(NvmeError::AddressOverflow)?)
+        .ok_or(NvmeError::AddressOverflow)
+}
