@@ -189,8 +189,8 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
     }
 }
 
-/// Legacy-PIT task timeout fallback for machines without a usable
-/// x2APIC TSC-deadline path. Wakeup precision is bounded by the PIT tick rate.
+/// Legacy-PIT task timeout fallback for systems where the legacy PIC IRQ0
+/// route remains active. Wakeup precision is bounded by the PIT tick rate.
 pub struct PitTaskTimeouts<const N: usize> {
     timers: crate::time::PitTimerService<N>,
 }
