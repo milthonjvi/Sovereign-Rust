@@ -583,10 +583,10 @@ mod tests {
             descriptor.status = RXD_STATUS_DD | RXD_STATUS_EOP;
         }
         let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
-            .map(|(i, bytes)| DmaBuffer::new(0x10000 + i as u64 * 2048, bytes).unwrap())
+            .map(|(i, bytes)| mock_dma_buffer(0x10000 + i as u64 * 2048, bytes))
             .collect::<Vec<_>>().try_into().ok().unwrap();
         let mut tx_buffers: [DmaBuffer<'_>; 8] = tx_storage.iter_mut().enumerate()
-            .map(|(i, bytes)| DmaBuffer::new(0x20000 + i as u64 * 2048, bytes).unwrap())
+            .map(|(i, bytes)| mock_dma_buffer(0x20000 + i as u64 * 2048, bytes))
             .collect::<Vec<_>>().try_into().ok().unwrap();
         // SAFETY: the mock register backend does not perform DMA; backing arrays model
         // the pinned rings and device-visible buffers required by the constructor.
