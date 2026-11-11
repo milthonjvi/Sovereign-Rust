@@ -6,7 +6,7 @@
 use core::ptr::{NonNull, read_volatile, write_volatile};
 
 use crate::drivers::acpi::madt::{InterruptSourceOverride, IoApic};
-use crate::drivers::ioapic_topology::IoApicGsiRange;
+use crate::drivers::ioapic_topology::{IoApicGsiRange, MAX_REDIRECTION_ENTRIES};
 
 const IOREGSEL: usize = 0x00;
 const IOWIN: usize = 0x10;
@@ -88,6 +88,31 @@ impl RedirectionEntry {
     }
 }
 
+/// Return the fixed-size bitmap slot for a hardware redirection index.
+#[inline]
+const fn route_bitmap_slot(index: u32) -> Option<(usize, u64)> {
+    if index >= MAX_REDIRECTION_ENTRIES {
+        None
+    } else {
+        Some(((index / 64) as usize, 1u64 << (index % 64)))
+    }
+}
+
+#[inline]
+fn route_bitmap_contains(bitmap: &[u64; 2], index: u32) -> bool {
+    match route_bitmap_slot(index) {
+        Some((word, mask)) => bitmap[word] & mask != 0,
+        None => false,
+    }
+}
+
+#[inline]
+fn route_bitmap_insert(bitmap: &mut [u64; 2], index: u32) {
+    if let Some((word, mask)) = route_bitmap_slot(index) {
+        bitmap[word] |= mask;
+    }
+}
+
 /// Handle for one mapped I/O APIC register page.
 ///
 /// # Safety
@@ -149,7 +174,7 @@ impl IoApicController {
         controller.id = ((id_version >> 24) & 0x0F) as u8;
         controller.redirection_count = ((version >> 16) & 0xFF) + 1;
         if controller.redirection_count == 0
-            || controller.redirection_count > 120
+            || controller.redirection_count > MAX_REDIRECTION_ENTRIES
             || controller.gsi_base.checked_add(controller.redirection_count).is_none()
         {
             return Err(IoApicError::GsiOutOfRange);
@@ -245,18 +270,12 @@ impl IoApicController {
 
     #[inline]
     fn route_is_configured(&self, index: u32) -> bool {
-        let word = (index / 64) as usize;
-        let bit = 1u64 << (index % 64);
-        self.configured_entries.get(word).is_some_and(|value| value & bit != 0)
+        route_bitmap_contains(&self.configured_entries, index)
     }
 
     #[inline]
     fn mark_route_configured(&mut self, index: u32) {
-        let word = (index / 64) as usize;
-        let bit = 1u64 << (index % 64);
-        if let Some(value) = self.configured_entries.get_mut(word) {
-            *value |= bit;
-        }
+        route_bitmap_insert(&mut self.configured_entries, index);
     }
 
     /// Mask every redirection entry before handing the controller to routing code.
@@ -325,13 +344,14 @@ mod tests {
     fn configured_route_bitmap_covers_all_supported_redirection_entries() {
         let mut configured = [0u64; 2];
         for index in [0u32, 63, 64, 119] {
-            let word = (index / 64) as usize;
-            let bit = 1u64 << (index % 64);
-            configured[word] |= bit;
-            assert_ne!(configured[word] & bit, 0);
+            assert!(!route_bitmap_contains(&configured, index));
+            route_bitmap_insert(&mut configured, index);
+            assert!(route_bitmap_contains(&configured, index));
         }
         assert_eq!(configured[0], (1u64 << 0) | (1u64 << 63));
         assert_eq!(configured[1], (1u64 << 0) | (1u64 << 55));
+        assert_eq!(route_bitmap_slot(MAX_REDIRECTION_ENTRIES), None);
+        assert!(!route_bitmap_contains(&configured, MAX_REDIRECTION_ENTRIES));
     }
 
     #[test]
