@@ -31,9 +31,6 @@ const APIC_BASE_ADDRESS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const LVT_MASKED: u32 = 1 << 16;
 const SVR_SOFTWARE_ENABLE: u32 = 1 << 8;
 const ICR_DELIVERY_PENDING: u64 = 1 << 12;
-const ICR_FIXED_DELIVERY: u64 = 0;
-const ICR_LEVEL_ASSERT: u64 = 1 << 14;
-const ICR_TRIGGER_LEVEL: u64 = 1 << 15;
 const ICR_DESTINATION_SHIFT: u32 = 32;
 const ICR_WAIT_LIMIT: usize = 1_000_000;
 
@@ -44,6 +41,12 @@ pub enum X2ApicError {
     InvalidVector,
     InvalidDestination,
     DeliveryTimeout,
+}
+
+/// Validate vectors accepted by fixed and self-IPI operations.
+#[inline]
+pub const fn valid_ipi_vector(vector: u8) -> bool {
+    vector >= 32 && vector != 0xFF
 }
 
 /// Enable x2APIC mode on the current logical processor.
@@ -185,7 +188,7 @@ impl X2Apic {
         destination_apic_id: u32,
         vector: u8,
     ) -> Result<(), X2ApicError> {
-        if vector < 32 || vector == 0xFF {
+        if !valid_ipi_vector(vector) {
             return Err(X2ApicError::InvalidVector);
         }
 
@@ -227,5 +230,19 @@ impl X2Apic {
     /// Report whether the local APIC software-enable bit is set.
     pub fn is_software_enabled(&self) -> bool {
         self.read_register(REG_SVR) as u32 & SVR_SOFTWARE_ENABLE != 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_ipi_vector;
+
+    #[test]
+    fn reserves_exceptions_and_apic_spurious_vector() {
+        assert!(!valid_ipi_vector(0));
+        assert!(!valid_ipi_vector(31));
+        assert!(valid_ipi_vector(32));
+        assert!(valid_ipi_vector(0xFE));
+        assert!(!valid_ipi_vector(0xFF));
     }
 }
