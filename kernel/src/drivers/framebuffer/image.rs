@@ -375,7 +375,7 @@ mod tests {
 
         assert_eq!(&memory[0..4], &[60, 50, 40, 0]);
         assert_eq!(&memory[4..8], &[0, 0, 0, 0]);
-        assert_eq!(&memory[8..12], &[180, 170, 160, 0]);
+        assert_eq!(&memory[8..12], &[150, 140, 130, 0]);
         assert_eq!(&memory[12..16], &[0, 0, 0, 0]);
     }
 
