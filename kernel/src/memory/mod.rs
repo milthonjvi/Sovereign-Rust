@@ -1,8 +1,8 @@
 //! Physical and virtual memory management.
 //!
-//! Planned layers: boot memory-map validation, physical frame allocator, virtual
-//! address-space/page-table management, kernel heap, and DMA-safe allocation.
-//! Allocators must not be enabled before their backing memory is validated.
+//! The bootstrap layer validates the firmware memory map and provides a
+//! monotonic physical-frame allocator. Runtime frame reclamation, virtual
+//! address spaces, heap allocation, and DMA-safe memory remain separate layers.
 
 pub mod boot_map;
 pub mod frame;
