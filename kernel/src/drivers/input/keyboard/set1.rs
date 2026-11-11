@@ -1,24 +1,74 @@
 //! PS/2 scan-code Set 1 decoder, including E0 extended keys.
 use crate::drivers::input::event::{InputEvent, KeyCode};
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Set1Decoder { extended: bool, pause_remaining: u8, keys_down: [u64; 4] }
+pub struct Set1Decoder {
+ extended: bool,
+ pause_remaining: u8,
+ print_screen_state: u8,
+ keys_down: [u64; 4],
+}
 impl Set1Decoder {
- pub const fn new() -> Self { Self { extended: false, pause_remaining: 0, keys_down: [0; 4] } }
- /// Discards incomplete E0/E1 framing after a controller transport error.
+ pub const fn new() -> Self {
+  Self { extended: false, pause_remaining: 0, print_screen_state: 0, keys_down: [0; 4] }
+ }
+ /// Discards incomplete E0/E1 and Print Screen framing after a transport error.
  /// Key-down state is retained because the corrupt byte may not identify
  /// which physical key transition was lost.
  pub fn reset_stream(&mut self) {
   self.extended = false;
   self.pause_remaining = 0;
+  self.print_screen_state = 0;
  }
  pub fn feed(&mut self, byte: u8) -> Option<InputEvent> {
   if self.pause_remaining != 0 { self.pause_remaining -= 1; return None; }
+  if byte == 0xE1 {
+   self.extended = false;
+   self.print_screen_state = 0;
+   self.pause_remaining = 5;
+   return None;
+  }
+
+  // Set-1 Print Screen is encoded as E0 2A E0 37 (make) and
+  // E0 B7 E0 AA (break). The embedded shift bytes are framing, not keys.
+  if self.print_screen_state != 0 {
+   match (self.print_screen_state, byte) {
+    (1 | 3, 0xE0) => {
+     self.print_screen_state = if self.print_screen_state == 1 { 2 } else { 4 };
+     return None;
+    }
+    (2, 0x37) => {
+     self.print_screen_state = 0;
+     return self.key_transition(0x37, true, true, KeyCode::PrintScreen);
+    }
+    (4, 0xAA) => {
+     self.print_screen_state = 0;
+     return self.key_transition(0x37, false, true, KeyCode::PrintScreen);
+    }
+    _ => self.print_screen_state = 0,
+   }
+  }
+
   if byte == 0xE0 { self.extended = true; return None; }
-  if byte == 0xE1 { self.extended = false; self.pause_remaining = 5; return None; }
   let extended = core::mem::replace(&mut self.extended, false);
-  let pressed = byte & 0x80 == 0; let scan = (byte & 0x7F) as u16;
-  let code = map_scancode(scan, extended); let index = scan as usize + if extended { 128 } else { 0 };
-  let mask = 1u64 << (index % 64); let slot = &mut self.keys_down[index / 64];
+  let pressed = byte & 0x80 == 0;
+  let scan = (byte & 0x7F) as u16;
+  if extended && scan == 0x2A && pressed {
+   self.print_screen_state = 1;
+   return None;
+  }
+  if extended && scan == 0x37 && !pressed {
+   self.print_screen_state = 3;
+   return None;
+  }
+  let code = map_scancode(scan, extended);
+  self.key_transition(scan, pressed, extended, code)
+ }
+ fn key_transition(
+  &mut self, scan: u16, pressed: bool, extended: bool, code: KeyCode,
+ ) -> Option<InputEvent> {
+  let index = scan as usize + if extended { 128 } else { 0 };
+  let mask = 1u64 << (index % 64);
+  let slot = &mut self.keys_down[index / 64];
   let was_down = *slot & mask != 0;
   if pressed { *slot |= mask; } else { *slot &= !mask; }
   Some(InputEvent::Key { code, pressed, repeat: pressed && was_down })
@@ -26,7 +76,8 @@ impl Set1Decoder {
 }
 fn map_scancode(s: u16, e: bool) -> KeyCode {
  if e { return match s {
-  0x1C => KeyCode::KeypadEnter, 0x1D => KeyCode::RightCtrl, 0x35 => KeyCode::Slash, 0x38 => KeyCode::RightAlt,
+  0x1C => KeyCode::KeypadEnter, 0x1D => KeyCode::RightCtrl, 0x35 => KeyCode::KeypadSlash, 0x38 => KeyCode::RightAlt,
+  0x5B => KeyCode::LeftMeta, 0x5C => KeyCode::RightMeta, 0x5D => KeyCode::Menu,
   0x47 => KeyCode::Home, 0x48 => KeyCode::Up, 0x49 => KeyCode::PageUp, 0x4B => KeyCode::Left,
   0x4D => KeyCode::Right, 0x4F => KeyCode::End, 0x50 => KeyCode::Down, 0x51 => KeyCode::PageDown,
   0x52 => KeyCode::Insert, 0x53 => KeyCode::Delete, _ => KeyCode::Unknown(0x100 | s),
@@ -66,6 +117,32 @@ mod tests {
   assert_eq!(d.feed(0xE0),None);
   d.reset_stream();
   assert_eq!(d.feed(0x48),Some(InputEvent::Key{code:KeyCode::Keypad8,pressed:true,repeat:false}));
+ }
+ #[test] fn print_screen_fake_shift_bytes_are_not_exposed_as_keys() {
+  let mut d = Set1Decoder::new();
+  assert_eq!(d.feed(0xE0), None);
+  assert_eq!(d.feed(0x2A), None);
+  assert_eq!(d.feed(0xE0), None);
+  assert_eq!(d.feed(0x37), Some(InputEvent::Key {
+   code: KeyCode::PrintScreen, pressed: true, repeat: false
+  }));
+  assert_eq!(d.feed(0xE0), None);
+  assert_eq!(d.feed(0xB7), None);
+  assert_eq!(d.feed(0xE0), None);
+  assert_eq!(d.feed(0xAA), Some(InputEvent::Key {
+   code: KeyCode::PrintScreen, pressed: false, repeat: false
+  }));
+ }
+ #[test] fn extended_meta_and_keypad_slash_keys_are_distinct() {
+  let mut d = Set1Decoder::new();
+  assert_eq!(d.feed(0xE0), None);
+  assert_eq!(d.feed(0x5B), Some(InputEvent::Key {
+   code: KeyCode::LeftMeta, pressed: true, repeat: false
+  }));
+  assert_eq!(d.feed(0xE0), None);
+  assert_eq!(d.feed(0x35), Some(InputEvent::Key {
+   code: KeyCode::KeypadSlash, pressed: true, repeat: false
+  }));
  }
  #[test] fn extended_navigation() {
   let mut d=Set1Decoder::new(); assert_eq!(d.feed(0xE0),None);
