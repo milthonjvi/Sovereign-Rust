@@ -32,9 +32,10 @@ bounded ELF64 x86_64 `ET_EXEC` images. Its loader currently performs:
    in the final transition, after ExitBootServices. The page-table
    builder creates the matching four- or five-level hierarchy with 4 KiB leaves.
 6. Identity mappings for the EFI image, firmware GDT, emergency IDT, a dedicated
-   256 KiB kernel stack, boot-info page, and 1 MiB memory-map buffer. Kernel
-   segments are mapped at their linked higher-half virtual addresses with
-   ELF-derived permissions.
+   256 KiB kernel stack, boot-info page, 1 MiB memory-map buffer, and all
+   EFI_ACPI_RECLAIM_MEMORY / EFI_ACPI_MEMORY_NVS ranges. ACPI reclaimable
+   pages are RO/NX and NVS pages RW/NX. Kernel segments are mapped at their
+   linked higher-half virtual addresses with ELF-derived permissions.
 7. Discovery and checksum validation of the UEFI ACPI 2.0/1.0 RSDP, followed
    by read-only identity mapping of its complete structure when present.
 8. Population and validation of SovereignBootInfo v1, including the physical
