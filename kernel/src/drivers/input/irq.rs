@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::drivers::input::event::InputEvent;
 use crate::drivers::input::pipeline::Ps2InputPipeline;
-use crate::drivers::input::ps2::Ps2Controller;
+use crate::drivers::input::ps2::{Ps2Controller, Ps2MouseProtocol};
 use crate::drivers::input::queue::{SpscConsumer, SpscQueue};
 
 const KEYBOARD_VECTOR: u8 = 0x21;
@@ -37,6 +37,7 @@ pub enum Ps2IrqError {
     HandlerAlreadyRegistered,
     ControllerNotInitialized,
     InterruptsEnabled,
+    InterruptInfrastructureUnavailable,
 }
 
 /// Owns a permanent IRQ-side pipeline. Once registered, the service remains
@@ -53,6 +54,22 @@ pub struct Ps2IrqService<const N: usize> {
 unsafe impl<const N: usize> Sync for Ps2IrqService<N> {}
 
 impl<const N: usize> Ps2IrqService<N> {
+    /// Creates the IRQ service using the protocol actually negotiated with
+    /// the mouse. This prevents a four-byte decoder from being paired with a
+    /// device that still emits standard three-byte packets.
+    pub fn new_with_protocol(
+        controller: &'static Ps2Controller,
+        queue: &'static mut SpscQueue<InputEvent, N>,
+        mouse_protocol: Ps2MouseProtocol,
+        drain_budget: usize,
+    ) -> Result<(Self, SpscConsumer<'static, InputEvent, N>), Ps2IrqError> {
+        let wheel_enabled = matches!(
+            mouse_protocol,
+            Ps2MouseProtocol::Wheel | Ps2MouseProtocol::FiveButton
+        );
+        Self::new(controller, queue, wheel_enabled, drain_budget)
+    }
+
     /// Creates the IRQ service and its unique task-side event consumer.
     pub fn new(
         controller: &'static Ps2Controller,
@@ -126,19 +143,31 @@ impl<const N: usize> Ps2IrqService<N> {
         // publishing the callback. The caller unmasks only after the i8042
         // and device protocol are configured.
         // SAFETY: IF was verified clear above; service lifetime is static.
-        if unsafe { crate::interrupts::init::register_legacy_irq(1, ps2_irq_handler) }.is_err() {
+        if let Err(error) = unsafe {
+            crate::interrupts::init::register_legacy_irq(1, ps2_irq_handler)
+        } {
             ACTIVE_PS2_CONTEXT.store(ptr::null_mut(), Ordering::Release);
-            return Err(Ps2IrqError::HandlerAlreadyRegistered);
+            return Err(match error {
+                crate::interrupts::init::LegacyIrqError::HandlerAlreadyRegistered =>
+                    Ps2IrqError::HandlerAlreadyRegistered,
+                _ => Ps2IrqError::InterruptInfrastructureUnavailable,
+            });
         }
 
         // SAFETY: Same BSP/IF-clear contract. Roll back IRQ1 if IRQ12 cannot
         // be registered, leaving both device lines masked.
-        if unsafe { crate::interrupts::init::register_legacy_irq(12, ps2_irq_handler) }.is_err() {
+        if let Err(error) = unsafe {
+            crate::interrupts::init::register_legacy_irq(12, ps2_irq_handler)
+        } {
             let _ = unsafe {
                 crate::interrupts::init::unregister_legacy_irq(1, ps2_irq_handler)
             };
             ACTIVE_PS2_CONTEXT.store(ptr::null_mut(), Ordering::Release);
-            return Err(Ps2IrqError::HandlerAlreadyRegistered);
+            return Err(match error {
+                crate::interrupts::init::LegacyIrqError::HandlerAlreadyRegistered =>
+                    Ps2IrqError::HandlerAlreadyRegistered,
+                _ => Ps2IrqError::InterruptInfrastructureUnavailable,
+            });
         }
 
         Ok(())
