@@ -273,6 +273,31 @@ impl<S: ClockSource, const N: usize> ApicCountdownTaskTimeouts<S, N> {
         self.timers.now_ns()
     }
 
+    /// Initialize the x2APIC countdown backend using an invariant TSC as
+    /// the calibration reference instead of HPET.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, after x2APIC bootstrap. The supplied TSC
+    /// frequency must be accurate and invariant for the current CPU.
+    pub unsafe fn initialize_bootstrap_tsc(
+        vector: u8,
+        divide: crate::drivers::timer::ApicDivide,
+        source: S,
+        initial_time_ns: u64,
+        tsc_frequency_hz: u64,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Result<Self, ApicCountdownInitError> {
+        // SAFETY: Forwarded from the APIC/TSC bootstrap contract.
+        let timers = unsafe {
+            ApicCountdownQueue::initialize_bootstrap_tsc(
+                vector, divide, source, initial_time_ns, tsc_frequency_hz,
+                sample_ms, max_spin_iterations,
+            )?
+        };
+        Ok(Self { timers })
+    }
+
     /// Register an absolute task sleep deadline.
     ///
     /// # Safety
