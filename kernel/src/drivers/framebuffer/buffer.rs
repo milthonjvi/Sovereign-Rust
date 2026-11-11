@@ -339,6 +339,42 @@ mod tests {
     }
 
     #[test]
+    fn dirty_double_buffer_presents_only_tracked_region() {
+        use super::super::color::PixelFormat;
+        use super::super::dirty::{DirtyRegionSet, Rect};
+        use super::super::info::FramebufferInfo;
+        use super::super::surface::FramebufferSurface;
+
+        let mut first = [Color::BLACK; 8];
+        let mut second = [Color::BLACK; 8];
+        let mut memory = [0u8; 4 * 2 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 4,
+            height: 2,
+            pitch: 4 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the backing array is writable, correctly sized, and exclusively borrowed.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        let mut buffers = DoubleBuffer::new(&mut first, &mut second, 4, 2, 4).unwrap();
+        let mut dirty = DirtyRegionSet::<4>::new(4, 2).unwrap();
+        buffers.back_mut().put_pixel(2, 1, Color::RED);
+        dirty.mark(Rect { x: 2, y: 1, width: 1, height: 1 });
+        buffers.present_dirty_and_swap(&mut target, &dirty).unwrap();
+        dirty.reset();
+        drop(buffers);
+        drop(target);
+
+        let changed = (1 * 4 + 2) * 4;
+        assert_eq!(&memory[changed..changed + 4], &[255, 0, 0, 0]);
+        assert_eq!(&memory[0..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
     fn double_buffer_keeps_dimensions_and_initializes_back_baseline() {
         let mut first = [Color::RED; 16];
         let mut second = [Color::BLUE; 16];
