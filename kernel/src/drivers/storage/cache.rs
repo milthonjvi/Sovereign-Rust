@@ -115,6 +115,7 @@ impl<D: BlockDevice, const N: usize> BlockDevice for BlockCache<'_, D, N> {
         Ok(())
     }
     fn flush(&mut self) -> Result<(), BlockError> { self.inner.flush() }
+    fn max_transfer_blocks(&self) -> u64 { self.inner.max_transfer_blocks() }
 }
 
 #[cfg(test)]
@@ -137,6 +138,7 @@ mod tests {
             Ok(())
         }
         fn flush(&mut self) -> Result<(), BlockError> { Ok(()) }
+        fn max_transfer_blocks(&self) -> u64 { 2 }
     }
     #[test]
     fn read_hit_avoids_second_device_read() {
@@ -149,6 +151,7 @@ mod tests {
         assert_eq!(cache.inner().reads, 1);
         assert_eq!(cache.stats().hits, 1);
         assert_eq!(cache.stats().misses, 1);
+        assert_eq!(cache.max_transfer_blocks(), 2);
     }
     #[test]
     fn write_through_updates_cached_copy() {
