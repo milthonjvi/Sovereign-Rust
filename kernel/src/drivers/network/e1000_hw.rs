@@ -43,8 +43,6 @@ pub enum E1000InitError<E> {
     BusMasterDisabled,
     MissingMacAddress,
     InvalidDescriptorBuffers,
-    InvalidFrameLength,
-    TxRingFull,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,8 +81,9 @@ pub struct E1000InitInfo {
 ///
 /// Safety is delegated to the platform accessor and caller: the MMIO window
 /// must refer to this device, RX descriptors must contain valid DMA buffer
-/// addresses, TX descriptors must start with DD set, all rings and buffers
-/// must be DMA-mapped and pinned, and PCI bus mastering must already be enabled.
+/// addresses, RX buffers must each provide at least 2048 writable bytes,
+/// all rings and buffers must be DMA-mapped and pinned, and PCI bus mastering
+/// must already be enabled.
 /// No DMA memory is dereferenced here.
 pub fn initialize<R: E1000Registers>(
     registers: &mut R,
@@ -221,25 +220,37 @@ impl E1000TxQueue {
         Ok(index as u16)
     }
 
-    /// Count and release completed descriptors in order. The caller may free
-    /// the associated DMA buffers only after this reports their completion.
+    /// Return the next completed descriptor index in submission order.
+    /// The caller can use this index to release the matching DMA buffer.
+    pub fn reap_one<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &[TxDescriptor],
+    ) -> Result<Option<u16>, E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        if self.pending == 0 {
+            return Ok(None);
+        }
+        let index = self.clean.index() as usize;
+        registers.dma_read_barrier();
+        if descriptors[index].status & TXD_STATUS_DD == 0 {
+            return Ok(None);
+        }
+        self.clean.advance();
+        self.pending -= 1;
+        Ok(Some(index as u16))
+    }
+
+    /// Reclaim all currently completed descriptors, preserving submission order.
     pub fn reap<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &[TxDescriptor],
     ) -> Result<usize, E1000QueueError<R::Error>> {
-        if descriptors.len() != self.cursor_count() {
-            return Err(E1000QueueError::InvalidRing);
-        }
         let mut completed = 0;
-        while self.pending > 0 {
-            let index = self.clean.index() as usize;
-            registers.dma_read_barrier();
-            if descriptors[index].status & TXD_STATUS_DD == 0 {
-                break;
-            }
-            self.clean.advance();
-            self.pending -= 1;
+        while self.reap_one(registers, descriptors)?.is_some() {
             completed += 1;
         }
         Ok(completed)
@@ -396,7 +407,8 @@ mod tests {
         assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x8000, 128), Ok(0));
         assert_eq!(queue.reap(&mut regs, &descriptors), Ok(0));
         descriptors[0].status = TXD_STATUS_DD;
-        assert_eq!(queue.reap(&mut regs, &descriptors), Ok(1));
+        assert_eq!(queue.reap_one(&mut regs, &descriptors), Ok(Some(0)));
+        assert_eq!(queue.reap(&mut regs, &descriptors), Ok(0));
         assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x9000, 256), Ok(1));
     }
 
