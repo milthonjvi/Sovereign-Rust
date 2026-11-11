@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    apic_deadline::{BootstrapTimerInitError, TimerCancelReport, TimerProcessReport},
+    apic_deadline::{TimerCancelReport, TimerProcessReport},
     clock::ClockSource,
     deadline::Deadline,
     interrupt::TimerInterruptError,
