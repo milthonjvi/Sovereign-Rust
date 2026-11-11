@@ -90,7 +90,7 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         if !rsdp_in_firmware_memory {
             fatal_halt();
         }
-        if !validate_identity_nx_range(rsdp_physical, rsdp_length) {
+        if !validate_identity_nx_range(rsdp_physical, rsdp_length, false) {
             fatal_halt();
         }
         // SAFETY: The loader mapped the complete validated RSDP range read-only.
@@ -191,6 +191,13 @@ fn validate_boot_mappings(
     {
         return false;
     }
+    if !validate_identity_nx_range(
+        boot_info.memory_map_physical,
+        boot_info.memory_map_size,
+        true,
+    ) {
+        return false;
+    }
 
     if boot_info.flags & sovereign_kernel::boot::sovereign::BOOT_INFO_FLAG_ACPI_VALID != 0 {
         // SAFETY: The loader mapped the RSDP identity page read-only and NX.
@@ -238,7 +245,11 @@ fn validate_boot_mappings(
         && !stack_mapping.user_accessible
 }
 
-fn validate_identity_nx_range(physical: u64, byte_len: u64) -> bool {
+fn validate_identity_nx_range(
+    physical: u64,
+    byte_len: u64,
+    require_read_only: bool,
+) -> bool {
     if byte_len == 0 {
         return false;
     }
@@ -267,6 +278,7 @@ fn validate_identity_nx_range(physical: u64, byte_len: u64) -> bool {
         if mapping.physical_address != page
             || mapping.executable
             || mapping.user_accessible
+            || (require_read_only && mapping.writable)
         {
             return false;
         }
