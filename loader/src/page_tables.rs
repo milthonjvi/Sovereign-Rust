@@ -85,6 +85,11 @@ impl<M: PageTableMemory> PageTableBuilder<M> {
                 table_virtual = next_virtual;
             } else {
                 if entry & HUGE_PAGE != 0 { return Err(PageTableError::CorruptIntermediateEntry); }
+                if permissions.user_accessible && entry & USER == 0 {
+                    // Promote ancestor permissions when adding a user mapping.
+                    // SAFETY: This entry belongs to the exclusively owned table.
+                    unsafe { table_virtual.add(index).write_volatile(entry | USER); }
+                }
                 let next_physical = entry & ADDRESS_MASK;
                 if next_physical == 0 { return Err(PageTableError::CorruptIntermediateEntry); }
                 // SAFETY: Provider resolves only table pages in its allocation domain.
