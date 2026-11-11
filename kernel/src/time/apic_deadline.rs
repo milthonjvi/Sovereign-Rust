@@ -194,6 +194,8 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
     /// Call from deferred/task context after consuming the timer IRQ signal.
     /// If the output buffer is smaller than the expired batch, the next
     /// reprogrammed deadline remains expired and causes another prompt IRQ.
+    /// An empty buffer is not drained or re-armed; deferred work is signaled
+    /// again so the caller can retry with usable storage.
     ///
     /// # Safety
     /// Must be called on the CPU that owns this timer instance.
