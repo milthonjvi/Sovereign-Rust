@@ -94,3 +94,15 @@ mod tests {
         assert_eq!(logger.into_inner().as_str(), "[ERROR] fault\r\n");
     }
 }
+
+
+/// Logger backed directly by the polling 16550 UART driver.
+pub type SerialLogger = Logger<crate::drivers::serial::Uart16550>;
+
+/// Creates a serial logger. The UART must already have been initialized.
+pub fn serial_logger(
+    uart: crate::drivers::serial::Uart16550,
+    minimum_level: LogLevel,
+) -> SerialLogger {
+    Logger::new(uart, minimum_level)
+}
