@@ -129,6 +129,7 @@ impl RingCursor {
         Ok(Self { index: 0, mask: descriptor_count - 1 })
     }
     pub const fn index(self) -> u16 { self.index }
+    pub const fn mask(self) -> u16 { self.mask }
     pub fn advance(&mut self) -> u16 {
         self.index = self.index.wrapping_add(1) & self.mask;
         self.index
