@@ -20,6 +20,7 @@ impl NxeEnabled {
 pub enum CpuFeatureError {
     ExtendedCpuidUnavailable,
     NxUnsupported,
+    NxeEnableFailed,
 }
 
 /// Enable EFER.NXE so page-table NX bits are architecturally active.
@@ -66,6 +67,23 @@ pub unsafe fn enable_nxe() -> Result<NxeEnabled, CpuFeatureError> {
             );
         }
     }
+    let verified_low: u32;
+    let verified_high: u32;
+    // SAFETY: Read back the architectural EFER MSR after the update.
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") EFER_MSR,
+            out("eax") verified_low,
+            out("edx") verified_high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    let verified_efer = ((verified_high as u64) << 32) | verified_low as u64;
+    if verified_efer & EFER_NXE == 0 {
+        return Err(CpuFeatureError::NxeEnableFailed);
+    }
+
     // CR0.WP is deferred until after ExitBootServices. Enabling it while
     // firmware is still running can expose firmware assumptions about its
     // supervisor mappings; the final transition enables it with our CR3.
