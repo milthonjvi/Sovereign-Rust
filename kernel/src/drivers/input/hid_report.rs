@@ -201,8 +201,8 @@ impl HidReportMap {
                                 || global.logical_max < global.logical_min {
                                 return Err(HidReportError::InvalidField);
                             }
-                            if local.usage_min.zip(local.usage_max).is_some_and(|(min, max)| max < min) {
-                                return Err(HidReportError::InvalidField);
+                            if let (Some(min), Some(max)) = (local.usage_min, local.usage_max) {
+                                if max < min { return Err(HidReportError::InvalidField); }
                             }
                             let count = global.report_count as usize;
                             let slots_end = map.value_count as usize + count;
