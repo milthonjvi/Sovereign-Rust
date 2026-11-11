@@ -4,7 +4,7 @@
 //! supplies a complete crystal ratio. Frequency is never guessed from nominal
 //! CPU MHz because that value is not a reliable TSC calibration source.
 
-use crate::arch::x86_64::cpuid::cpuid;
+use crate::{arch::x86_64::cpuid::cpuid, drivers::timer::Hpet};
 use super::clock::ClockSource;
 
 /// Architectural invariant-TSC capability bit in CPUID 0x80000007:EDX.
@@ -16,19 +16,81 @@ pub struct TscClockSource {
 }
 
 impl TscClockSource {
+    /// Calibrate invariant TSC against an enabled HPET main counter.
+    ///
+    /// This is the fallback when CPUID leaf 0x15 does not provide a complete
+    /// crystal ratio. The bounded spin limit prevents a broken/stopped HPET
+    /// from hanging bootstrap forever.
+    ///
+    /// `sample_ms` controls the measurement interval; 20-100 ms is generally
+    /// a useful balance between bootstrap latency and measurement precision.
+    pub fn calibrate_with_hpet(
+        hpet: &Hpet,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Option<Self> {
+        if !invariant_tsc_supported() || !hpet.is_enabled()
+            || sample_ms == 0 || max_spin_iterations == 0
+        {
+            return None;
+        }
+
+        let capabilities = hpet.capabilities();
+        let period_fs = capabilities.period_fs;
+        if period_fs == 0 {
+            return None;
+        }
+        let mask = if capabilities.counter_64_bit { u64::MAX } else { u32::MAX as u64 };
+        let target_ticks = ((sample_ms as u128)
+            .checked_mul(1_000_000_000_000)?
+            .checked_add(period_fs as u128 - 1)?)
+            / period_fs as u128;
+        if target_ticks == 0 || target_ticks > u64::MAX as u128 {
+            return None;
+        }
+
+        // Bracket each HPET sample with TSC reads and use their midpoint to
+        // reduce the fixed ordering error between the two independent counters.
+        let tsc_before_start = Self::read_tsc();
+        let hpet_start = hpet.read_counter() & mask;
+        let tsc_after_start = Self::read_tsc();
+        let tsc_start = midpoint(tsc_before_start, tsc_after_start);
+
+        let mut elapsed_hpet = 0u64;
+        let mut hpet_end = hpet_start;
+        for _ in 0..max_spin_iterations {
+            hpet_end = hpet.read_counter() & mask;
+            elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
+            if elapsed_hpet as u128 >= target_ticks {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        if elapsed_hpet as u128 < target_ticks {
+            return None;
+        }
+
+        let tsc_before_end = Self::read_tsc();
+        let _hpet_end_sample = hpet.read_counter() & mask;
+        let tsc_after_end = Self::read_tsc();
+        let tsc_end = midpoint(tsc_before_end, tsc_after_end);
+        let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
+        if elapsed_tsc == 0 {
+            return None;
+        }
+
+        Some(Self {
+            frequency_hz: calibrated_frequency(elapsed_tsc, elapsed_hpet, period_fs)?,
+        })
+    }
+
     /// Discover a stable TSC frequency from CPUID leaf 0x15.
     ///
     /// Returns None when the CPU does not advertise invariant TSC, does not
     /// implement the frequency-ratio leaf, or omits its crystal frequency.
     pub fn detect() -> Option<Self> {
         let max_basic = cpuid(0, 0).eax;
-        let max_extended = cpuid(0x8000_0000, 0).eax;
-        if max_basic < 0x15 || max_extended < 0x8000_0007 {
-            return None;
-        }
-
-        let invariant = cpuid(0x8000_0007, 0).edx & INVARIANT_TSC != 0;
-        if !invariant {
+        if max_basic < 0x15 || !invariant_tsc_supported() {
             return None;
         }
 
@@ -76,6 +138,32 @@ impl TscClockSource {
         }
         ((high as u64) << 32) | low as u64
     }
+}
+
+
+/// Whether CPUID advertises an invariant TSC.
+#[inline]
+fn invariant_tsc_supported() -> bool {
+    cpuid(0x8000_0000, 0).eax >= 0x8000_0007
+        && cpuid(0x8000_0007, 0).edx & INVARIANT_TSC != 0
+}
+
+/// Midpoint of two adjacent samples, avoiding overflow.
+#[inline]
+fn midpoint(a: u64, b: u64) -> u64 {
+    a.wrapping_add(b.wrapping_sub(a) / 2)
+}
+
+/// Convert paired HPET/TSC deltas into an integer TSC frequency.
+fn calibrated_frequency(tsc_ticks: u64, hpet_ticks: u64, period_fs: u32) -> Option<u64> {
+    if tsc_ticks == 0 || hpet_ticks == 0 || period_fs == 0 {
+        return None;
+    }
+    let elapsed_fs = (hpet_ticks as u128).checked_mul(period_fs as u128)?;
+    let frequency = (tsc_ticks as u128)
+        .checked_mul(1_000_000_000_000_000u128)?
+        / elapsed_fs;
+    if frequency == 0 || frequency > u64::MAX as u128 { None } else { Some(frequency as u64) }
 }
 
 impl ClockSource for TscClockSource {
@@ -138,5 +226,24 @@ mod deadline_conversion_tests {
     fn infinite_or_unrepresentable_deadlines_are_rejected() {
         assert_eq!(monotonic_deadline_to_tsc(u64::MAX, 0, 1, 1_000_000_000), None);
         assert_eq!(monotonic_deadline_to_tsc(1, 0, u64::MAX, 1_000_000_000), None);
+    }
+}
+
+#[cfg(test)]
+mod calibration_tests {
+    use super::*;
+
+    #[test]
+    fn converts_hpet_tsc_sample_to_frequency() {
+        assert_eq!(calibrated_frequency(2_500_000, 10_000, 100_000_000), Some(2_500_000_000));
+        assert_eq!(calibrated_frequency(0, 10_000, 100_000_000), None);
+        assert_eq!(calibrated_frequency(2_500_000, 0, 100_000_000), None);
+        assert_eq!(calibrated_frequency(2_500_000, 10_000, 0), None);
+    }
+
+    #[test]
+    fn midpoint_handles_counter_wrap_without_overflow() {
+        assert_eq!(midpoint(u64::MAX - 3, 4), 0);
+        assert_eq!(midpoint(10, 20), 15);
     }
 }
