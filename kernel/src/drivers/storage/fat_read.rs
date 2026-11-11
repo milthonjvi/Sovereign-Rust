@@ -324,6 +324,7 @@ pub fn read_file_range<D: BlockDevice>(
 #[cfg(test)]
 mod range_tests {
     use super::*;
+    use super::super::block::BlockGeometry;
     struct MemoryDisk([u8; 3072]);
     impl BlockDevice for MemoryDisk {
         fn geometry(&self) -> BlockGeometry { BlockGeometry { block_count: 6, block_size: 512 } }
@@ -339,19 +340,18 @@ mod range_tests {
     #[test]
     fn reads_range_across_cluster_boundary() {
         let bpb = FatBpb {
-            kind: FatKind::Fat16, bytes_per_sector: 512, sectors_per_cluster: 1,
-            reserved_sectors: 1, fat_count: 1, root_entry_count: 0,
-            total_sectors: 6, sectors_per_fat: 1, root_directory_sectors: 0,
-            first_data_sector: 2, data_sectors: 4, cluster_count: 4,
+            kind: FatKind::Fat12, bytes_per_sector: 512, sectors_per_cluster: 1,
+            reserved_sectors: 1, fat_count: 1, root_entry_count: 16,
+            total_sectors: 6, sectors_per_fat: 1, root_directory_sectors: 1,
+            first_data_sector: 3, data_sectors: 3, cluster_count: 3,
             root_cluster: None, fs_info_sector: None, backup_boot_sector: None,
             volume_id: 0, fat_mirroring_enabled: true, active_fat: 0,
         };
         let volume = FatVolume::new(bpb, BlockGeometry { block_count: 6, block_size: 512 }).unwrap();
         let mut disk = MemoryDisk([0;3072]);
-        disk.0[512+4..512+6].copy_from_slice(&3u16.to_le_bytes());
-        disk.0[512+6..512+8].copy_from_slice(&0xFFFFu16.to_le_bytes());
-        disk.0[2*512..3*512].fill(0x11);
-        disk.0[3*512..4*512].fill(0x22);
+        disk.0[512+3]=0x03; disk.0[512+4]=0xF0; disk.0[512+5]=0xFF;
+        disk.0[3*512..4*512].fill(0x11);
+        disk.0[4*512..5*512].fill(0x22);
         let entry = FatDirEntry { short_name: *b"FILE    BIN", attributes: 0x20, first_cluster: 2, file_size: 700 };
         let mut cluster = [0u8;512];
         let mut fat = [0u8;1024];
