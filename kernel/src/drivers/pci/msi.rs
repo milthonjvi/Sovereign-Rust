@@ -37,6 +37,15 @@ impl MsiCapability {
         address: PciAddress,
         capability: Capability,
     ) -> Result<Self, ConfigError> {
+        Self::read_internal(io, address, capability, true)
+    }
+
+    fn read_internal<A: ConfigAccess>(
+        io: &A,
+        address: PciAddress,
+        capability: Capability,
+        validate_message_address: bool,
+    ) -> Result<Self, ConfigError> {
         if capability.id != MSI_CAPABILITY_ID {
             return Err(ConfigError::OutOfRange);
         }
@@ -53,7 +62,9 @@ impl MsiCapability {
         let mme = ((control >> 4) & 0x7) as u8;
         // PCI MSI defines MMC encodings 0..=5 (1..=32 messages); 6 and 7
         // are reserved and cannot be represented by the 32-bit mask register.
-        if mmc > 5 || mme > mmc { return Err(ConfigError::OutOfRange); }
+        if mmc > 5 || mme > mmc {
+            return Err(ConfigError::OutOfRange);
+        }
         let address_low = read_standard(io, address, offset + 4)?;
         let (message_address, data_register) = if is_64 {
             let address_high = read_standard(io, address, offset + 8)?;
@@ -61,7 +72,7 @@ impl MsiCapability {
         } else {
             (address_low as u64, offset + 8)
         };
-        if message_address & 0x3 != 0 {
+        if validate_message_address && message_address & 0x3 != 0 {
             return Err(ConfigError::OutOfRange);
         }
         let message_data = read_standard(io, address, data_register)? as u16;
@@ -236,7 +247,7 @@ pub unsafe fn configure_msi<A: ConfigAccess>(
     message_data: u16,
     vectors: u8,
 ) -> Result<(), MsiConfigError> {
-    let current = MsiCapability::read(io, address, capability)
+    let current = MsiCapability::read_internal(io, address, capability, false)
         .map_err(MsiConfigError::Access)?;
     if vectors == 0 || !vectors.is_power_of_two() || vectors > current.maximum_vectors {
         return Err(MsiConfigError::InvalidVectorCount);
