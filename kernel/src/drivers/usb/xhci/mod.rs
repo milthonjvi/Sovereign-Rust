@@ -311,10 +311,12 @@ impl XhciController{
   let interrupter=self.runtime_base+0x20;
   io.write32(interrupter+0x04,0)?;
   io.write32(interrupter+0x08,1)?;
-  io.write32(interrupter+0x10,(erst_physical>>32)as u32)?;
-  io.write32(interrupter+0x0c,erst_physical as u32)?;
-  io.write32(interrupter+0x18,(event_ring_physical>>32)as u32)?;
-  io.write32(interrupter+0x14,event_ring_physical as u32)?;
+  // ERSTBA and ERDP are 64-bit registers: low dword first,
+  // followed by the high dword at +4.
+  io.write32(interrupter+0x14,(erst_physical>>32)as u32)?;
+  io.write32(interrupter+0x10,erst_physical as u32)?;
+  io.write32(interrupter+0x1c,(event_ring_physical>>32)as u32)?;
+  io.write32(interrupter+0x18,event_ring_physical as u32)?;
   io.write32(interrupter,(1<<1)|1)?;
   self.event_ring_configured=true;Ok(())
  }
