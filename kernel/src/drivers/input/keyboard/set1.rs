@@ -1,12 +1,13 @@
 //! PS/2 scan-code Set 1 decoder, including E0 extended keys.
 use crate::drivers::input::event::{InputEvent, KeyCode};
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Set1Decoder { extended: bool, keys_down: [u64; 4] }
+pub struct Set1Decoder { extended: bool, pause_remaining: u8, keys_down: [u64; 4] }
 impl Set1Decoder {
- pub const fn new() -> Self { Self { extended: false, keys_down: [0; 4] } }
+ pub const fn new() -> Self { Self { extended: false, pause_remaining: 0, keys_down: [0; 4] } }
  pub fn feed(&mut self, byte: u8) -> Option<InputEvent> {
+  if self.pause_remaining != 0 { self.pause_remaining -= 1; return None; }
   if byte == 0xE0 { self.extended = true; return None; }
-  if byte == 0xE1 { self.extended = false; return None; }
+  if byte == 0xE1 { self.extended = false; self.pause_remaining = 5; return None; }
   let extended = core::mem::replace(&mut self.extended, false);
   let pressed = byte & 0x80 == 0; let scan = (byte & 0x7F) as u16;
   let code = map_scancode(scan, extended); let index = scan as usize + if extended { 128 } else { 0 };
