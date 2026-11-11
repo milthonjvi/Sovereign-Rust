@@ -220,6 +220,15 @@ mod fat_policy_tests {
         assert_eq!(parsed.active_fat, 1);
     }
     #[test]
+    fn fat32_accepts_absent_fsinfo_and_backup_sentinels() {
+        let mut b = fat32_boot(0);
+        b[48..50].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        b[50..52].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        let parsed = parse_bpb(&b, 512).unwrap();
+        assert_eq!(parsed.fs_info_sector, None);
+        assert_eq!(parsed.backup_boot_sector, None);
+    }
+    #[test]
     fn fat32_mirroring_uses_primary_copy() {
         let parsed = parse_bpb(&fat32_boot(0), 512).unwrap();
         assert!(parsed.fat_mirroring_enabled);
