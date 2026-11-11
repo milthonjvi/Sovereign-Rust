@@ -165,6 +165,7 @@ mod tests {
         assert_eq!(ring.base_registers(), (0x1000, 0));
         assert_eq!(RingConfig::new(0x1001, 32), Err(E1000Error::MisalignedDmaAddress));
         assert_eq!(RingConfig::new(0x1000, 12), Err(E1000Error::InvalidRingSize));
+        assert_eq!(RingConfig::new(u64::MAX - 0xf, 8), Err(E1000Error::DmaAddressTooWide));
     }
 
     #[test]
