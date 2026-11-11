@@ -25,11 +25,11 @@ pub enum HidInputError { MalformedReport }
 
 /// One adapter per configured USB boot-keyboard interface/collection.
 pub struct UsbBootKeyboardAdapter {
-    device: InputDeviceId, previous: Option<BootKeyboardReport>, pub dropped_events: u64,
+    device: InputDeviceId, previous: Option<BootKeyboardReport>, resync_required: bool, pub dropped_events: u64,
 }
 impl UsbBootKeyboardAdapter {
     pub const fn new(device: InputDeviceId) -> Self {
-        Self { device, previous: None, dropped_events: 0 }
+        Self { device, previous: None, resync_required: false, dropped_events: 0 }
     }
     pub const fn device_id(&self) -> InputDeviceId { self.device }
 
@@ -39,8 +39,18 @@ impl UsbBootKeyboardAdapter {
         &mut self, bytes: &[u8], producer: &mut SpscProducer<'_, InputEvent, N>,
     ) -> Result<HidPublishStats, HidInputError> {
         let now = BootKeyboardReport::parse(bytes).map_err(|_| HidInputError::MalformedReport)?;
-        let old = self.previous.unwrap_or(BootKeyboardReport { modifiers: 0, keys: [0; 6] });
         let mut stats = HidPublishStats::default();
+        if self.resync_required {
+            if producer.push(InputEvent::DeviceStateReset { device: self.device }).is_err() {
+                stats.dropped = 1;
+                self.dropped_events = self.dropped_events.saturating_add(1);
+                return Ok(stats);
+            }
+            stats.published = 1;
+            self.previous = None;
+            self.resync_required = false;
+        }
+        let old = self.previous.unwrap_or(BootKeyboardReport { modifiers: 0, keys: [0; 6] });
         for i in 0..6 {
             let key = now.keys[i];
             if key != 0 && !now.keys[..i].contains(&key) && !old.keys.contains(&key) {
@@ -78,6 +88,7 @@ impl UsbBootKeyboardAdapter {
         &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
     ) -> HidPublishStats {
         self.previous = None;
+        self.resync_required = false;
         let mut s = HidPublishStats::default();
         self.emit(InputEvent::DeviceDisconnected { device: self.device }, p, &mut s); s
     }
@@ -85,30 +96,49 @@ impl UsbBootKeyboardAdapter {
         &mut self, e: InputEvent, p: &mut SpscProducer<'_, InputEvent, N>, s: &mut HidPublishStats,
     ) {
         if p.push(e).is_ok() { s.published = s.published.saturating_add(1); }
-        else { s.dropped = s.dropped.saturating_add(1); self.dropped_events = self.dropped_events.saturating_add(1); }
+        else {
+            s.dropped = s.dropped.saturating_add(1);
+            self.dropped_events = self.dropped_events.saturating_add(1);
+            self.resync_required = true;
+        }
     }
 }
 
 /// One adapter per configured USB boot-mouse interface/collection.
 pub struct UsbBootMouseAdapter {
-    device: InputDeviceId, previous_buttons: Option<u32>, pub dropped_events: u64,
+    device: InputDeviceId, previous_buttons: Option<u32>, resync_required: bool, pub dropped_events: u64,
 }
 impl UsbBootMouseAdapter {
     pub const fn new(device: InputDeviceId) -> Self {
-        Self { device, previous_buttons: None, dropped_events: 0 }
+        Self { device, previous_buttons: None, resync_required: false, dropped_events: 0 }
     }
     pub const fn device_id(&self) -> InputDeviceId { self.device }
     pub fn publish_report<const N: usize>(
         &mut self, bytes: &[u8], p: &mut SpscProducer<'_, InputEvent, N>,
     ) -> Result<HidPublishStats, HidInputError> {
         let r = BootMouseReport::parse(bytes).map_err(|_| HidInputError::MalformedReport)?;
+        self.recover_if_needed(p)?;
         self.pointer(r.x as i32, r.y as i32, 0, r.buttons as u32, p)
     }
     pub fn publish_wheel_report<const N: usize>(
         &mut self, bytes: &[u8], p: &mut SpscProducer<'_, InputEvent, N>,
     ) -> Result<HidPublishStats, HidInputError> {
         let r = BootMouseReportWheel::parse(bytes).map_err(|_| HidInputError::MalformedReport)?;
+        self.recover_if_needed(p)?;
         self.pointer(r.base.x as i32, r.base.y as i32, r.wheel as i16, r.base.buttons as u32, p)
+    }
+    fn recover_if_needed<const N: usize>(
+        &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
+    ) -> Result<(), HidInputError> {
+        if self.resync_required {
+            if p.push(InputEvent::DeviceStateReset { device: self.device }).is_err() {
+                self.dropped_events = self.dropped_events.saturating_add(1);
+                return Err(HidInputError::MalformedReport);
+            }
+            self.previous_buttons = None;
+            self.resync_required = false;
+        }
+        Ok(())
     }
     pub fn publish_connected<const N: usize>(
         &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
@@ -120,6 +150,7 @@ impl UsbBootMouseAdapter {
         &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
     ) -> HidPublishStats {
         self.previous_buttons = None;
+        self.resync_required = false;
         let mut s = HidPublishStats::default();
         self.emit(InputEvent::DeviceDisconnected { device: self.device }, p, &mut s); s
     }
@@ -139,7 +170,11 @@ impl UsbBootMouseAdapter {
         &mut self, e: InputEvent, p: &mut SpscProducer<'_, InputEvent, N>, s: &mut HidPublishStats,
     ) {
         if p.push(e).is_ok() { s.published = s.published.saturating_add(1); }
-        else { s.dropped = s.dropped.saturating_add(1); self.dropped_events = self.dropped_events.saturating_add(1); }
+        else {
+            s.dropped = s.dropped.saturating_add(1);
+            self.dropped_events = self.dropped_events.saturating_add(1);
+            self.resync_required = true;
+        }
     }
 }
 
