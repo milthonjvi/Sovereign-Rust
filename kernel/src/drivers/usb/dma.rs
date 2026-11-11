@@ -90,3 +90,29 @@ mod tests{
   assert_eq!(DmaConstraints::xhci_64bit(16).validate(0xffff_ffff_ffff_fff0,17,true),Err(UsbError::InvalidAddress));
  }
 }
+
+#[cfg(test)]
+mod allocator_contract_tests{
+ use super::*;
+ struct MockBuffer{bytes:[u8;128],address:u64,coherent:bool}
+ unsafe impl UsbDmaBuffer for MockBuffer{
+  fn dma_address(&self)->u64{self.address}
+  fn len(&self)->usize{self.bytes.len()}
+  fn is_coherent(&self)->bool{self.coherent}
+  fn as_mut_slice(&mut self)->&mut[u8]{&mut self.bytes}
+ }
+ struct MockAllocator{address:u64,coherent:bool}
+ impl UsbDmaAllocator for MockAllocator{
+  type Buffer=MockBuffer;
+  fn allocate(&mut self,_:usize,_:DmaConstraints)->Result<Self::Buffer,UsbError>{
+   Ok(MockBuffer{bytes:[0;128],address:self.address,coherent:self.coherent})
+  }
+ }
+ #[test]fn validates_allocator_output_before_exposing_dma_buffer(){
+  let mut allocator=MockAllocator{address:0x2000,coherent:true};
+  let mut buffer=allocate_validated(&mut allocator,64,DmaConstraints::legacy_32bit(64)).unwrap();
+  buffer.as_mut_slice()[0]=0x5a;assert_eq!(buffer.as_mut_slice()[0],0x5a);
+  let mut invalid=MockAllocator{address:0x1_0000_0000,coherent:true};
+  assert!(matches!(allocate_validated(&mut invalid,64,DmaConstraints::legacy_32bit(64)),Err(UsbError::InvalidAddress)));
+ }
+}
