@@ -78,10 +78,14 @@ impl SovereignBootInfo {
             && self.memory_map_size != 0
             && self.memory_map_size % self.memory_descriptor_size == 0
             && self.memory_map_physical != 0
+            && self.memory_map_physical & 0xfff == 0
             && self.memory_map_physical.checked_add(self.memory_map_size).is_some()
             && self.kernel_physical_base != 0
+            && self.kernel_physical_base & 0xfff == 0
             && self.kernel_virtual_base != 0
+            && self.kernel_virtual_base & 0xfff == 0
             && self.kernel_image_size != 0
+            && self.kernel_image_size & 0xfff == 0
             && self.kernel_physical_base.checked_add(self.kernel_image_size).is_some()
             && self.kernel_virtual_base.checked_add(self.kernel_image_size).is_some()
             && self.kernel_entry >= self.kernel_virtual_base
