@@ -7,7 +7,7 @@ use super::idt::{Idt, IdtEntry, IdtError, INTERRUPT_GATE};
 core::arch::global_asm!(include_str!("../arch/x86_64/exceptions.S"));
 
 unsafe extern "C" {
-    static sovereign_exception_stub_table: [u64; 32];
+    static sovereign_exception_stub_table: [u64; 256];
 }
 
 /// Register snapshot and processor frame captured on exception entry.
@@ -51,14 +51,14 @@ static LAST_VECTOR: AtomicU64 = AtomicU64::new(u64::MAX);
 static LAST_ERROR: AtomicU64 = AtomicU64::new(0);
 static LAST_RIP: AtomicU64 = AtomicU64::new(0);
 
-/// Installs the 32 architectural exception gates into an IDT.
+/// Installs a valid fatal fallback gate for every architectural vector.\n/// PIC IRQ gates may subsequently replace vectors 0x20..=0x2F.
 ///
 /// # Safety
 /// The caller must ensure the current CS selector names a valid 64-bit code
 /// segment in the active GDT. The IDT must remain mapped and stable after load.
 pub unsafe fn install_exception_gates(idt: &mut Idt) -> Result<(), IdtError> {
     let selector = Idt::current_code_selector();
-    for vector in 0..32 {
+    for vector in 0..256 {
         // SAFETY: The assembly object exports exactly 32 pointers in this table.
         let handler = unsafe { sovereign_exception_stub_table[vector] };
         // Dedicated IST stacks prevent catastrophic faults from reusing a
