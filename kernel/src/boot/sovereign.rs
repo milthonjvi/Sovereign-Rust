@@ -241,3 +241,32 @@ const _: [(); 8] = [(); core::mem::align_of::<SovereignBootInfo>()];
 
 // UEFI descriptor prefix is 40 bytes; firmware may provide a larger stride.
 const _: [(); 40] = [(); core::mem::size_of::<EfiMemoryDescriptor>()];
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn physical_range_must_fit_one_descriptor_of_requested_type() {
+        let descriptors = [
+            EfiMemoryDescriptor::new(2, 0x1000, 0, 4, 0),
+            EfiMemoryDescriptor::new(7, 0x5000, 0, 8, 0),
+        ];
+        let map = EfiMemoryMap::from_descriptors(&descriptors);
+        assert_eq!(map.contains_range_with_type(0x2000, 0x2000, 2), Ok(true));
+        assert_eq!(map.contains_range_with_type(0x1000, 0x1000, 7), Ok(false));
+        assert_eq!(map.contains_range_with_type(0x4000, 0x2000, 2), Ok(false));
+        assert_eq!(map.contains_range_with_type(0x1000, 0, 2), Ok(false));
+    }
+
+    #[test]
+    fn physical_range_rejects_overflow() {
+        let descriptors = [EfiMemoryDescriptor::new(2, 0x1000, 0, 4, 0)];
+        let map = EfiMemoryMap::from_descriptors(&descriptors);
+        assert_eq!(
+            map.contains_range_with_type(u64::MAX - 7, 16, 2),
+            Err(SovereignBootError::InvalidMemoryMap),
+        );
+    }
+}
