@@ -51,8 +51,9 @@ physical/virtual addresses, and writable+executable leaves. A private NX
 proof token ensures EFER.NXE was enabled before installing NX entries.
 CR0.WP is enabled immediately before the CR3 switch so supervisor writes
 respect read-only mappings without changing firmware behavior during Boot Services.
-The transition also invalidates global TLB entries when CR4.PGE is set; a CR3
-reload alone does not guarantee that those translations are discarded. The
+The transition invalidates global TLB entries before changing CR3 when
+CR4.PGE is set; doing this first avoids fetching the next loader instruction
+through a stale global translation. A CR3 reload alone does not discard them. The
 four-/five-level choice follows the firmware's active CR4.LA57 setting.
 
 The handoff contract is defined in `loader/src/boot_info.rs`. Its kernel-side
