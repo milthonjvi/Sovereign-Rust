@@ -94,8 +94,8 @@ pub fn is_failed() -> bool {
 /// Register a legacy PIC IRQ callback while keeping its source masked.
 ///
 /// The callback receives the remapped vector (0x20..=0x2F), must be bounded,
-/// nonblocking, must not unwind, and must call `end_legacy_irq` for genuine
-/// interrupts before returning.
+/// nonblocking, and must not unwind. The common IRQ dispatcher sends the EOI
+/// automatically after the callback returns.
 ///
 /// # Safety
 /// Call with IF clear and while no other CPU or code path mutates the PIC or
@@ -180,17 +180,12 @@ pub unsafe fn unregister_legacy_irq(
         .map_err(|_| LegacyIrqError::HandlerNotRegistered)
 }
 
-/// Send the 8259 EOI from a registered IRQ callback.
-///
-/// # Safety
-/// Must be called exactly once for each genuine, acknowledged IRQ callback,
-/// from the callback running on the BSP. Spurious IRQ7/IRQ15 are filtered by
-/// the common dispatcher and must not call this function.
-pub unsafe fn end_legacy_irq(irq_line: u8) -> Result<(), LegacyIrqError> {
+/// Send the 8259 EOI after a genuine IRQ callback returns.
+pub(super) unsafe fn end_legacy_irq(irq_line: u8) -> Result<(), LegacyIrqError> {
     if !is_initialized() {
         return Err(LegacyIrqError::NotInitialized);
     }
-    // SAFETY: IRQ callbacks execute on the BSP and the PIC was initialized.
+    // SAFETY: The common dispatcher runs on the BSP with the PIC initialized.
     let pic = unsafe { &*core::ptr::addr_of!(LEGACY_PIC) };
     pic.end_of_interrupt(irq_line).map_err(|_| LegacyIrqError::PicFailure)
 }
