@@ -5,8 +5,9 @@ mod uefi;
 
 use core::{mem, panic::PanicInfo};
 use uefi::{
-    Console, EfiHandle, EfiStatus, EfiSystemTable, EFI_COMPROMISED_DATA,
-    EFI_INVALID_PARAMETER, EFI_SUCCESS, EFI_SYSTEM_TABLE_SIGNATURE,
+    inspect_kernel_file, Console, EfiHandle, EfiStatus, EfiSystemTable,
+    EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_SUCCESS,
+    EFI_SYSTEM_TABLE_SIGNATURE,
 };
 
 /// UEFI application entry point.
@@ -16,10 +17,10 @@ use uefi::{
 /// valid image handle and system table for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "efiapi" fn efi_main(
-    _image_handle: EfiHandle,
+    image_handle: EfiHandle,
     system_table: *mut EfiSystemTable,
 ) -> EfiStatus {
-    if system_table.is_null() {
+    if system_table.is_null() || image_handle.is_null() {
         return EFI_INVALID_PARAMETER;
     }
 
@@ -39,8 +40,18 @@ pub extern "efiapi" fn efi_main(
     // SAFETY: The firmware console remains valid while Boot Services are active.
     let mut console = unsafe { Console::from_ptr(system_table.con_out) };
     if !console.write_ascii("Sovereign Boot [UEFI x86_64]\r\n")
-        || !console.write_ascii("Firmware entry established.\r\n")
+        || !console.write_ascii("Locating boot volume...\r\n")
     {
+        return EFI_INVALID_PARAMETER;
+    }
+
+    let status = inspect_kernel_file(image_handle, system_table);
+    if status != EFI_SUCCESS {
+        let _ = console.write_ascii("Kernel file lookup or ELF validation failed.\r\n");
+        return status;
+    }
+
+    if !console.write_ascii("Kernel ELF64 header validated.\r\n") {
         return EFI_INVALID_PARAMETER;
     }
 
