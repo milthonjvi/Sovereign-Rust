@@ -205,74 +205,54 @@ impl LocalApicTimer {
 
 /// IA32_TSC_DEADLINE model-specific register.
 pub const IA32_TSC_DEADLINE: u32 = 0x6E0;
-/// IA32_X2APIC_LVT_TIMER model-specific register.
-pub const IA32_X2APIC_LVT_TIMER: u32 = 0x832;
-const LVT_TSC_DEADLINE: u64 = 1 << 18;
-const LVT_MASK: u64 = 1 << 16;
 
-/// x2APIC TSC-deadline timer control.
+/// x86 TSC-deadline MSR control.
 ///
-/// The interrupt vector must already have an installed IDT gate and registered
-/// handler before the timer is unmasked. EOI remains owned by the common APIC
-/// dispatcher.
-pub struct TscDeadlineTimer {
-    vector: u8,
+/// The local APIC LVT vector/mode is configured separately through
+/// `LocalApicTimer::configure(..., ApicTimerMode::TscDeadline, ...)`.
+/// This object only arms/disarms the per-CPU absolute TSC deadline, and works
+/// with either xAPIC MMIO or x2APIC mode.
+pub struct TscDeadline {
     configured: bool,
 }
 
-impl TscDeadlineTimer {
-    /// Create a timer handle after x2APIC has been enabled on this CPU.
+impl TscDeadline {
+    /// Create a TSC-deadline controller after verifying CPU support.
     ///
     /// # Safety
-    /// Requires CPL 0, x2APIC mode, and a CPU advertising TSC-deadline support.
-    pub unsafe fn new() -> Self {
-        Self { vector: 0, configured: false }
-    }
-
-    /// Configure the LVT in TSC-deadline mode, initially masked.
-    ///
-    /// # Safety
-    /// Must run at CPL 0 on the CPU whose local x2APIC is being configured.
-    pub unsafe fn configure(&mut self, vector: u8) -> Result<(), DriverError> {
-        if vector < 32 || vector == 0xFF {
-            return Err(DriverError::InvalidConfiguration);
+    /// Requires CPL 0, a CPU advertising TSC-deadline support, and an already
+    /// configured local APIC LVT in TSC-deadline mode on this CPU.
+    pub unsafe fn new() -> Result<Self, DriverError> {
+        let features = crate::arch::x86_64::cpuid::cpuid(1, 0).ecx;
+        if features & (1 << 24) == 0 {
+            return Err(DriverError::Unsupported);
         }
-        let value = vector as u64 | LVT_TSC_DEADLINE | LVT_MASK;
-        // SAFETY: Caller guarantees a valid x2APIC MSR context.
-        unsafe { crate::arch::x86_64::msr::write(IA32_X2APIC_LVT_TIMER, value) };
-        self.vector = vector;
-        self.configured = true;
-        Ok(())
+        Ok(Self { configured: true })
     }
 
-    /// Arm an absolute TSC deadline. Zero disarms the timer.
+    /// Arm an absolute TSC deadline. A value of zero disarms the timer.
     ///
     /// # Safety
-    /// Must execute at CPL 0 on the configured local CPU. The deadline must be
-    /// expressed in the same TSC domain and frequency used for conversion.
-    pub unsafe fn arm(&mut self, deadline_tsc: u64) -> Result<(), DriverError> {
+    /// Must execute at CPL 0 on the target CPU. The deadline must be expressed
+    /// in that CPU's TSC domain and synchronized with the selected clocksource.
+    pub unsafe fn arm(&self, deadline_tsc: u64) -> Result<(), DriverError> {
         if !self.configured {
             return Err(DriverError::NotReady);
         }
-        // SAFETY: Caller guarantees IA32_TSC_DEADLINE is supported and writable.
+        // SAFETY: Constructor checked architectural support; caller guarantees
+        // the local APIC LVT has already been configured for deadline mode.
         unsafe { crate::arch::x86_64::msr::write(IA32_TSC_DEADLINE, deadline_tsc) };
-        let lvt = self.vector as u64 | LVT_TSC_DEADLINE;
-        // SAFETY: Same x2APIC MSR preconditions as configure().
-        unsafe { crate::arch::x86_64::msr::write(IA32_X2APIC_LVT_TIMER, lvt) };
         Ok(())
     }
 
-    /// Mask delivery and clear the outstanding TSC deadline.
+    /// Clear the currently armed deadline.
     ///
     /// # Safety
-    /// Must execute at CPL 0 on the configured local CPU.
-    pub unsafe fn stop(&mut self) {
-        if !self.configured { return; }
-        // SAFETY: Caller guarantees valid x2APIC MSR access.
-        unsafe {
-            crate::arch::x86_64::msr::write(IA32_X2APIC_LVT_TIMER,
-                self.vector as u64 | LVT_TSC_DEADLINE | LVT_MASK);
-            crate::arch::x86_64::msr::write(IA32_TSC_DEADLINE, 0);
+    /// Must execute at CPL 0 on the same CPU used to construct this handle.
+    pub unsafe fn stop(&self) {
+        if self.configured {
+            // SAFETY: IA32_TSC_DEADLINE support was checked in new().
+            unsafe { crate::arch::x86_64::msr::write(IA32_TSC_DEADLINE, 0) };
         }
     }
 }
