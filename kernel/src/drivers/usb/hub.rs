@@ -240,3 +240,14 @@ mod superspeed_hub_reset_tests{
   assert_eq!(request.request,HUB_SET_FEATURE);assert_eq!(request.value,28);
  }
 }
+
+#[cfg(test)]
+mod hub_speed_semantics_tests{
+ use super::*;
+ #[test]fn decodes_usb2_and_superspeed_fields_separately(){
+  let usb2=HubPortStatus{status:HubPortStatus::CONNECTION|HubPortStatus::HIGH_SPEED,change:0};
+  assert_eq!(usb2.speed_usb2(),Some(UsbSpeed::High));
+  let ss=HubPortStatus{status:HubPortStatus::CONNECTION|(4<<10)|(3<<5),change:0};
+  assert_eq!(ss.speed_superspeed(),Some(UsbSpeed::Super));assert_eq!(ss.superspeed_link_state(),3);
+ }
+}
