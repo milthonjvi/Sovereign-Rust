@@ -39,9 +39,11 @@ pub unsafe trait E1000Registers {
     fn read32(&mut self, offset: u32) -> Result<u32, Self::Error>;
     fn write32(&mut self, offset: u32, value: u32) -> Result<(), Self::Error>;
 
-    /// Order descriptor and buffer writes before notifying the device.
+    /// Order CPU writes to packet buffers and descriptors before notifying the device.
     fn dma_write_barrier(&mut self);
-    /// Order device descriptor write-back before the CPU inspects it.
+    /// After the CPU observes a device-written DD ownership bit, make all
+    /// preceding device writes to descriptor metadata and packet buffers visible
+    /// before the CPU reads that metadata or reuses the completed buffer.
     fn dma_read_barrier(&mut self);
 }
 
