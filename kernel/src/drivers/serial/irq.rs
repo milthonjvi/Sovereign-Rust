@@ -250,7 +250,9 @@ pub unsafe fn detach_interrupts(uart: &mut Uart16550) -> Result<(), UartIrqError
 /// Returns the accepted prefix length; the caller must retry any suffix.
 ///
 /// # Safety
-/// Call with IF clear and exactly one serialized producer per UART queue.
+/// Call on the CPU that services this legacy PIC IRQ, with IF clear, and with
+/// exactly one serialized producer per UART queue. Pinning producer and IRQ to
+/// the same CPU prevents a lost wakeup while the handler disables THRE.
 /// The UART must already be attached through `attach_interrupts`.
 pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, UartIrqError> {
     uart.ensure_initialized().map_err(UartIrqError::Uart)?;
