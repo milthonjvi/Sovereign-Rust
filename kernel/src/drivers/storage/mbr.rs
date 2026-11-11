@@ -8,7 +8,9 @@ const PARTITION_COUNT: usize = 4;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MbrError {
     BufferTooSmall, InvalidSignature, InvalidBlockGeometry, InvalidBootIndicator,
-    InvalidPartitionRange, OverlappingPartitions, AddressOverflow,
+    InvalidPartitionRange, OverlappingPartitions, AddressOverflow, InvalidExtendedPartition,
+    InvalidEbrEntry, InvalidEbrLink, EbrCycle, EbrTraversalLimit, LogicalPartitionOutputFull,
+    DeviceReadFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +98,103 @@ impl MbrTable {
     pub fn iter(&self) -> impl Iterator<Item = &MbrPartition> {
         self.partitions.iter().filter_map(Option::as_ref)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LogicalPartition {
+    pub bootable: bool,
+    pub partition_type: u8,
+    pub start_lba: u64,
+    pub sector_count: u32,
+}
+impl LogicalPartition {
+    pub const fn end_lba_exclusive(self) -> Result<u64, MbrError> {
+        match self.start_lba.checked_add(self.sector_count as u64) {
+            Some(end) => Ok(end), None => Err(MbrError::AddressOverflow),
+        }
+    }
+}
+
+/// Follow an extended partition EBR chain without allocation.
+/// scratch must be exactly one logical block. The caller supplies cycle-detection
+/// storage and output capacity; traversal fails rather than silently truncating.
+pub fn enumerate_logical_partitions<D: super::block::BlockDevice>(
+    device: &mut D, extended: MbrPartition, scratch: &mut [u8],
+    visited_ebr_lbas: &mut [u64], output: &mut [Option<LogicalPartition>],
+) -> Result<usize, MbrError> {
+    use super::block::{BlockRange, validate_buffer};
+    if !extended.is_extended() || extended.sector_count == 0 || extended.start_lba == 0 {
+        return Err(MbrError::InvalidExtendedPartition);
+    }
+    let geometry = device.geometry().validate().map_err(|_| MbrError::InvalidBlockGeometry)?;
+    if scratch.len() != geometry.block_size as usize { return Err(MbrError::BufferTooSmall); }
+    let base = extended.start_lba as u64;
+    let limit = extended.end_lba_exclusive()?;
+    if limit > geometry.block_count { return Err(MbrError::InvalidPartitionRange); }
+
+    let mut current = base;
+    let mut visited_count = 0usize;
+    let mut output_count = 0usize;
+    loop {
+        if current < base || current >= limit { return Err(MbrError::InvalidEbrLink); }
+        if visited_ebr_lbas[..visited_count].contains(&current) { return Err(MbrError::EbrCycle); }
+        if visited_count == visited_ebr_lbas.len() { return Err(MbrError::EbrTraversalLimit); }
+        visited_ebr_lbas[visited_count] = current;
+        visited_count += 1;
+
+        let range = BlockRange::new(current, 1);
+        validate_buffer(geometry, range, scratch.len()).map_err(|_| MbrError::InvalidPartitionRange)?;
+        device.read_blocks(range, scratch).map_err(|_| MbrError::DeviceReadFailed)?;
+        if scratch[510..512] != MBR_SIGNATURE { return Err(MbrError::InvalidSignature); }
+
+        let first = parse_ebr_entry(scratch, PARTITION_TABLE_OFFSET)?;
+        let link = parse_ebr_entry(scratch, PARTITION_TABLE_OFFSET + PARTITION_ENTRY_SIZE)?;
+        for index in 2..PARTITION_COUNT {
+            if parse_ebr_entry(scratch, PARTITION_TABLE_OFFSET + index * PARTITION_ENTRY_SIZE)?.is_some() {
+                return Err(MbrError::InvalidEbrEntry);
+            }
+        }
+
+        if let Some((bootable, kind, relative, count)) = first {
+            if kind == 0 || count == 0 || relative == 0 { return Err(MbrError::InvalidEbrEntry); }
+            let start = current.checked_add(relative as u64).ok_or(MbrError::AddressOverflow)?;
+            let partition = LogicalPartition { bootable, partition_type: kind, start_lba: start, sector_count: count };
+            let end = partition.end_lba_exclusive()?;
+            if start < base || end > limit || start == current { return Err(MbrError::InvalidPartitionRange); }
+            if output_count == output.len() { return Err(MbrError::LogicalPartitionOutputFull); }
+            for previous in output[..output_count].iter().flatten() {
+                if start < previous.end_lba_exclusive()? && previous.start_lba < end {
+                    return Err(MbrError::OverlappingPartitions);
+                }
+            }
+            output[output_count] = Some(partition);
+            output_count += 1;
+        }
+
+        match link {
+            None => break,
+            Some((bootable, kind, relative, count)) => {
+                if bootable || count == 0 || relative == 0 { return Err(MbrError::InvalidEbrLink); }
+                let target = base.checked_add(relative as u64).ok_or(MbrError::AddressOverflow)?;
+                let link_end = target.checked_add(count as u64).ok_or(MbrError::AddressOverflow)?;
+                if !matches!(kind, 0x05 | 0x0F | 0x85) || target < base || target >= limit || link_end > limit {
+                    return Err(MbrError::InvalidEbrLink);
+                }
+                current = target;
+            }
+        }
+    }
+    Ok(output_count)
+}
+
+fn parse_ebr_entry(sector: &[u8], offset: usize) -> Result<Option<(bool, u8, u32, u32)>, MbrError> {
+    let boot = *sector.get(offset).ok_or(MbrError::BufferTooSmall)?;
+    let kind = *sector.get(offset + 4).ok_or(MbrError::BufferTooSmall)?;
+    let start = read_u32(sector, offset + 8)?;
+    let count = read_u32(sector, offset + 12)?;
+    if boot == 0 && kind == 0 && start == 0 && count == 0 { return Ok(None); }
+    if boot != 0 && boot != 0x80 { return Err(MbrError::InvalidBootIndicator); }
+    Ok(Some((boot == 0x80, kind, start, count)))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, MbrError> {
