@@ -81,8 +81,11 @@ pub extern "efiapi" fn efi_main(
             &mut boot_info_physical,
         )
     };
-    if allocation_status != EFI_SUCCESS || boot_info_physical == 0 {
+    if allocation_status != EFI_SUCCESS {
         return allocation_status;
+    }
+    if boot_info_physical == 0 {
+        return EFI_COMPROMISED_DATA;
     }
 
     // NX must be enabled before any PTE with the NX bit is installed.
