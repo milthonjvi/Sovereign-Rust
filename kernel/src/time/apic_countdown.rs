@@ -43,6 +43,64 @@ pub struct ApicCountdownQueue<S: ClockSource, const N: usize> {
 }
 
 impl<S: ClockSource, const N: usize> ApicCountdownQueue<S, N> {
+    /// Initialize the BSP countdown backend, calibrating it against an invariant TSC.
+    ///
+    /// This path does not require HPET when the caller already has a trusted
+    /// invariant-TSC frequency.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, after x2APIC bootstrap. The TSC frequency
+    /// must be accurate and invariant on this CPU; the vector must be reserved.
+    pub unsafe fn initialize_bootstrap_tsc(
+        vector: u8,
+        divide: ApicDivide,
+        source: S,
+        initial_time_ns: u64,
+        tsc_frequency_hz: u64,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Result<Self, ApicCountdownInitError> {
+        // SAFETY: Forwarded from this method's BSP/CPL0/IF-clear contract.
+        unsafe { super::interrupt::register_countdown_timer_interrupt(vector, divide) }
+            .map_err(ApicCountdownInitError::Interrupt)?;
+
+        // SAFETY: x2APIC was initialized and the countdown LVT is masked.
+        let timer = match unsafe {
+            X2ApicTimer::calibrate_with_tsc(
+                vector, divide, tsc_frequency_hz, sample_ms, max_spin_iterations,
+            )
+        } {
+            Ok(timer) => timer,
+            Err(error) => {
+                // SAFETY: Same serialized bootstrap context.
+                let _ = unsafe { super::interrupt::unregister_timer_interrupt() };
+                return Err(ApicCountdownInitError::Queue(
+                    ApicCountdownQueueError::Hardware(error),
+                ));
+            }
+        };
+
+        let service = match TimerService::new(source, initial_time_ns) {
+            Ok(service) => service,
+            Err(error) => {
+                // SAFETY: Same serialized bootstrap context.
+                let _ = unsafe { super::interrupt::unregister_timer_interrupt() };
+                return Err(ApicCountdownInitError::Queue(
+                    ApicCountdownQueueError::Service(error),
+                ));
+            }
+        };
+
+        let queue = Self { service, timer, _cpu_local: PhantomData };
+        // SAFETY: Handler, calibrated timer and software queue are ready.
+        if let Err(error) = unsafe { super::interrupt::unmask_timer_interrupt() } {
+            // SAFETY: IF is clear and no timer IRQ can be in flight.
+            let _ = unsafe { super::interrupt::unregister_timer_interrupt() };
+            return Err(ApicCountdownInitError::Interrupt(error));
+        }
+        Ok(queue)
+    }
+
     /// Initialize the BSP countdown backend, calibrating it against HPET.
     ///
     /// The LVT is configured masked and the handler registered before
