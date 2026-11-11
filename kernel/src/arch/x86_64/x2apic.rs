@@ -32,6 +32,8 @@ const APIC_BASE_X2APIC: u64 = 1 << 10;
 const APIC_BASE_GLOBAL_ENABLE: u64 = 1 << 11;
 const APIC_BASE_ADDRESS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const LVT_MASKED: u32 = 1 << 16;
+const LVT_TIMER_TSC_DEADLINE: u32 = 1 << 18;
+const LVT_TIMER_VECTOR_MASK: u32 = 0xFF;
 const SVR_SOFTWARE_ENABLE: u32 = 1 << 8;
 const ICR_DELIVERY_PENDING: u64 = 1 << 12;
 const ICR_DESTINATION_SHIFT: u32 = 32;
@@ -155,6 +157,42 @@ impl X2Apic {
             (svr & !0x1FF) | spurious_vector as u64 | SVR_SOFTWARE_ENABLE as u64,
         );
         Ok(())
+    }
+
+    /// Configure the local timer LVT for TSC-deadline mode, initially masked.
+    ///
+    /// The timer vector must already have an IDT gate installed and its
+    /// dispatcher callback registered before the caller unmasks this source.
+    pub fn configure_tsc_deadline_timer(&mut self, vector: u8) -> Result<(), X2ApicError> {
+        // Keep the architectural syscall vector and spurious vector reserved.
+        if !(0x30..=0xFE).contains(&vector) || vector == 0x80 {
+            return Err(X2ApicError::InvalidVector);
+        }
+        self.write_register(REG_LVT_TIMER, (vector as u32 | LVT_TIMER_TSC_DEADLINE | LVT_MASKED) as u64);
+        Ok(())
+    }
+
+    /// Unmask a previously configured TSC-deadline local timer.
+    ///
+    /// This does not arm a deadline. Program IA32_TSC_DEADLINE first, then
+    /// unmask the LVT so no interrupt can be delivered from stale state.
+    pub fn unmask_tsc_deadline_timer(&mut self) -> Result<(), X2ApicError> {
+        let value = self.read_register(REG_LVT_TIMER) as u32;
+        if value & LVT_TIMER_TSC_DEADLINE == 0
+            || value & LVT_MASKED == 0
+            || !(0x30..=0xFE).contains(&((value & LVT_TIMER_VECTOR_MASK) as u8))
+            || (value & LVT_TIMER_VECTOR_MASK) as u8 == 0x80
+        {
+            return Err(X2ApicError::InvalidVector);
+        }
+        self.write_register(REG_LVT_TIMER, (value & !LVT_MASKED) as u64);
+        Ok(())
+    }
+
+    /// Mask the local timer without changing its vector or operating mode.
+    pub fn mask_timer(&mut self) {
+        let value = self.read_register(REG_LVT_TIMER);
+        self.write_register(REG_LVT_TIMER, value | LVT_MASKED as u64);
     }
 
     /// Mask every implemented local-vector source without disabling x2APIC.
