@@ -5,7 +5,7 @@ mod protocols;
 mod system_table;
 
 pub use console::Console;
-pub use system_table::{EfiHandle, EfiSystemTable};
+pub use system_table::{EfiHandle, EfiSystemTable, EfiTableHeader};
 
 pub use kernel_file::inspect_kernel_file;
 
