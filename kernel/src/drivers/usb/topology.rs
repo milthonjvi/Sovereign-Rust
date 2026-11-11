@@ -67,12 +67,21 @@ impl UsbTopology{
    }
    if !changed{break}
   }
+  // Validate every address before mutating either structure. This keeps
+  // topology and allocator state consistent if the caller supplied a stale pool.
+  for i in 1..128{
+   if removed[i]{
+    if let Some(node)=self.nodes[i]{
+     if !pool.is_allocated(node.device.address){return Err(UsbError::InvalidAddress)}
+    }
+   }
+  }
   let mut count=0;
   for i in 1..128{
    if removed[i]{
     if let Some(mut node)=self.nodes[i].take(){
+     pool.release(node.device.address)?;
      node.device.state=DeviceState::Disconnected;
-     let _=pool.release(node.device.address);
      self.len-=1;count+=1;
     }
    }
