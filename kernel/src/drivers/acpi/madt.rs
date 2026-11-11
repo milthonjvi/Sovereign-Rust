@@ -245,3 +245,44 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, AcpiError> {
     let data = bytes.get(offset..offset + 4).ok_or(AcpiError::BufferTooSmall)?;
     Ok(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_xapic_and_x2apic_processors() {
+        let records = [
+            0, 8, 3, 7, 1, 0, 0, 0,
+            9, 16, 0, 0, 0x34, 0x12, 0, 0, 2, 0, 0, 0, 9, 0, 0, 0,
+        ];
+        let mut processors = MadtProcessors {
+            records: MadtRecords { bytes: &records, offset: 0 },
+        };
+
+        let legacy = processors.next().unwrap().unwrap();
+        assert_eq!(legacy.processor_uid, 3);
+        assert_eq!(legacy.apic_id, ProcessorApicId::XApic(7));
+        assert!(legacy.enabled());
+        assert!(legacy.usable());
+
+        let extended = processors.next().unwrap().unwrap();
+        assert_eq!(extended.processor_uid, 9);
+        assert_eq!(extended.apic_id, ProcessorApicId::X2Apic(0x1234));
+        assert!(!extended.enabled());
+        assert!(extended.online_capable());
+        assert!(extended.usable());
+        assert!(processors.next().is_none());
+    }
+
+    #[test]
+    fn malformed_record_is_reported_once() {
+        let records = [0, 0];
+        let mut processors = MadtProcessors {
+            records: MadtRecords { bytes: &records, offset: 0 },
+        };
+        assert_eq!(processors.next(), Some(Err(AcpiError::MalformedTable)));
+        assert!(processors.next().is_none());
+    }
+}
