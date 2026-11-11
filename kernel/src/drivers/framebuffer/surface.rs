@@ -223,6 +223,80 @@ impl<'a> FramebufferSurface<'a> {
         }
     }
 
+    /// Fill a rectangle with an integer-interpolated vertical color gradient.
+    pub fn fill_gradient_vertical(
+        &mut self,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        top: Color,
+        bottom: Color,
+    ) {
+        if width == 0 || height == 0 { return; }
+        let visible_top = y.min(self.info.height);
+        let visible_bottom = y.saturating_add(height).min(self.info.height);
+        let denominator = height.saturating_sub(1).max(1) as u64;
+        for row in visible_top..visible_bottom {
+            let step = row.saturating_sub(y).min(height - 1) as u64;
+            let interpolate = |a: u8, b: u8| -> u8 {
+                ((a as u64 * (denominator - step) + b as u64 * step + denominator / 2)
+                    / denominator) as u8
+            };
+            self.fill_rect(x, row, width, 1, Color::new(
+                interpolate(top.red, bottom.red),
+                interpolate(top.green, bottom.green),
+                interpolate(top.blue, bottom.blue),
+            ));
+        }
+    }
+
+    /// Fill a rounded rectangle using clipped integer scanlines.
+    pub fn fill_rounded_rect(
+        &mut self,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        radius: usize,
+        color: Color,
+    ) {
+        if width == 0 || height == 0 { return; }
+        let radius = radius.min(width / 2).min(height / 2);
+        if radius == 0 {
+            self.fill_rect(x, y, width, height, color);
+            return;
+        }
+        let visible_top = y.min(self.info.height);
+        let visible_bottom = y.saturating_add(height).min(self.info.height);
+        let radius_squared = (radius as u128) * (radius as u128);
+        for row in visible_top..visible_bottom {
+            let local_y = row.saturating_sub(y);
+            let edge_distance = if local_y < radius {
+                radius - local_y
+            } else if local_y >= height - radius {
+                local_y - (height - radius - 1)
+            } else {
+                0
+            };
+            let inset = if edge_distance == 0 {
+                0
+            } else {
+                let dy = edge_distance.saturating_sub(1) as u128;
+                radius.saturating_sub(integer_sqrt(radius_squared - dy * dy) as usize)
+            };
+            if inset.saturating_mul(2) < width {
+                self.fill_rect(
+                    x.saturating_add(inset),
+                    row,
+                    width.saturating_sub(inset.saturating_mul(2)),
+                    1,
+                    color,
+                );
+            }
+        }
+    }
+
     /// Draw the outline of a circle using integer scan conversion.
     /// Work is bounded by the visible framebuffer height.
     pub fn stroke_circle(&mut self, center_x: i64, center_y: i64, radius: usize, color: Color) {
