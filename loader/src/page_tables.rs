@@ -13,6 +13,7 @@ const USER: u64 = 1 << 2;
 const HUGE_PAGE: u64 = 1 << 7;
 const NO_EXECUTE: u64 = 1 << 63;
 const ADDRESS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+pub const RECURSIVE_SLOT: usize = 510;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PagePermissions {
@@ -32,6 +33,7 @@ pub enum PageTableError {
     MisalignedAddress, NonCanonicalAddress, PhysicalAddressOutOfRange,
     AllocationFailed, InvalidTablePointer, AlreadyMapped, CorruptIntermediateEntry,
     WritableExecutableMapping,
+    RecursiveSlotReserved,
 }
 
 /// Supplies unique, zeroed, page-aligned table pages and their writable mapping.
@@ -58,6 +60,16 @@ impl<M: PageTableMemory> PageTableBuilder<M> {
         let (physical, virtual_ptr) = memory.allocate_zeroed_table()?;
         validate_table_page(physical, virtual_ptr)?;
         let paging_levels = _nxe.paging_levels();
+        if paging_levels != 4 && paging_levels != 5 {
+            return Err(PageTableError::CorruptIntermediateEntry);
+        }
+        // The recursive window exposes page-table pages to the kernel without
+        // assuming a physical direct map. NXE is proven active by NxeEnabled.
+        unsafe {
+            virtual_ptr.add(RECURSIVE_SLOT).write_volatile(
+                (physical & ADDRESS_MASK) | PRESENT | WRITABLE | NO_EXECUTE,
+            );
+        }
         Ok(Self { memory, root_physical: physical, root_virtual: virtual_ptr, paging_levels })
     }
 
@@ -78,6 +90,9 @@ impl<M: PageTableMemory> PageTableBuilder<M> {
         for depth in 0..self.paging_levels as usize {
             let shift = 12 + 9 * (self.paging_levels as usize - depth - 1);
             indices[depth] = ((virtual_address >> shift) & 0x1ff) as usize;
+        }
+        if indices[0] == RECURSIVE_SLOT {
+            return Err(PageTableError::RecursiveSlotReserved);
         }
         let mut table_virtual = self.root_virtual;
         for &index in &indices[..self.paging_levels as usize - 1] {
