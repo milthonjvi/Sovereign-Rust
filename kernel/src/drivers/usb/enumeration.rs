@@ -2,7 +2,7 @@
 //! The caller executes each setup packet through a HostController and feeds the
 //! returned data/status stage to complete(). Timing and port reset remain the
 //! responsibility of the host-controller/port manager.
-use super::{descriptors::{ConfigurationDescriptor,DeviceDescriptor},transfer::{DeviceAddress,SetupPacket},UsbError};
+use super::{descriptors::{ConfigurationDescriptor,DeviceDescriptor,ParsedConfiguration},transfer::{DeviceAddress,SetupPacket},UsbError};
 
 pub const GET_DESCRIPTOR:u8=6;
 pub const SET_ADDRESS:u8=5;
@@ -41,15 +41,16 @@ pub enum EnumerationStage{
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct EnumerationSession{
  stage:EnumerationStage,address:Option<DeviceAddress>,configuration_value:u8,
- configuration_length:u16,device:Option<DeviceDescriptor>,
+ configuration_length:u16,device:Option<DeviceDescriptor>,configuration:Option<ParsedConfiguration>,
 }
 impl EnumerationSession{
  pub const fn new()->Self{Self{stage:EnumerationStage::ReadInitialDeviceDescriptor,
-  address:None,configuration_value:0,configuration_length:0,device:None}}
+  address:None,configuration_value:0,configuration_length:0,device:None,configuration:None}}
  pub const fn stage(&self)->EnumerationStage{self.stage}
  pub const fn address(&self)->Option<DeviceAddress>{self.address}
  pub const fn device_descriptor(&self)->Option<DeviceDescriptor>{self.device}
  pub const fn configuration_length(&self)->u16{self.configuration_length}
+ pub const fn configuration(&self)->Option<ParsedConfiguration>{self.configuration}
  /// Returns the next control request. None means enumeration has completed or failed.
  pub fn request(&self)->Option<SetupPacket>{
   match self.stage{
@@ -69,7 +70,7 @@ impl EnumerationSession{
   let result=(||{
    match self.stage{
     EnumerationStage::ReadInitialDeviceDescriptor=>{
-     if data.len()<8||data[0]!=18||data[1]!=DESC_DEVICE||data[7]==0{return Err(UsbError::MalformedDescriptor)}
+     if data.len()<8||data[0]!=18||data[1]!=DESC_DEVICE||!matches!(data[7],8|16|32|64|9){return Err(UsbError::MalformedDescriptor)}
      self.address=Some(pool.allocate()?);self.stage=EnumerationStage::SetAddress;
     }
     EnumerationStage::SetAddress=>{
@@ -87,10 +88,12 @@ impl EnumerationSession{
     }
     EnumerationStage::ReadConfiguration=>{
      if data.len()<self.configuration_length as usize{return Err(UsbError::BufferTooShort)}
-     let d=ConfigurationDescriptor::parse(data)?;
+     let parsed=ParsedConfiguration::parse(data)?;
+     let d=parsed.descriptor;
      if d.configuration_value!=self.configuration_value||d.total_length!=self.configuration_length{
       return Err(UsbError::MalformedDescriptor)
      }
+     self.configuration=Some(parsed);
      self.stage=EnumerationStage::SetConfiguration;
     }
     EnumerationStage::SetConfiguration=>{
