@@ -12,5 +12,5 @@ pub use apic::{
     ApicDivide, ApicTimerMode, LocalApicTimer, calibrated_periodic_initial_count,
     calibrate_bus_clock_hz, periodic_initial_count,
 };
-pub use hpet::{Hpet, HpetCapabilities};
+pub use hpet::{counter_delta, route_is_supported, Hpet, HpetCapabilities};
 pub use pit::{Pit, PitConfig};
