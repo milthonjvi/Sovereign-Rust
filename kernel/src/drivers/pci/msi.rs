@@ -249,6 +249,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nonzero_reserved_msi_address_bits() {
+        let mut registers = [0u32; 1024];
+        registers[0x50 / 4] = 0x0081_0005;
+        registers[0x54 / 4] = 0xfee0_0003;
+        registers[0x58 / 4] = 0;
+        let io = MockConfig { registers };
+        assert_eq!(
+            MsiCapability::read(&io, address(), Capability { id: MSI_CAPABILITY_ID, offset: 0x50 }),
+            Err(ConfigError::OutOfRange)
+        );
+    }
+
+    #[test]
     fn decodes_msix_table_and_pending_array() {
         let mut registers = [0u32; 1024];
         registers[0x60 / 4] = 0xc007_0000; // Enabled, function masked, 8 vectors.
