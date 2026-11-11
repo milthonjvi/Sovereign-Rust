@@ -656,45 +656,10 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
         if frame.is_empty() || frame.len() > E1000_MAX_FRAME_SIZE {
             return Err(DriverError::InvalidConfiguration);
         }
-
-        let mut available = [u16::MAX; 1];
-        let available_count = match self.tx_queue.reclaim_and_available_slots(
-            self.registers,
-            self.tx_descriptors,
-            &mut available,
-        ) {
-            Ok(count) => count,
-            Err(error) => {
-                if queue_error_is_fatal(&error) {
-                    self.ready = false;
-                    self.faulted = true;
-                }
-                return Err(map_queue_error(error));
-            }
-        };
-        if available_count == 0 {
-            return Err(DriverError::ResourceUnavailable);
-        }
-        let index = available[0] as usize;
-        let buffer = &mut self.tx_buffers[index];
-        if frame.len() > buffer.len() {
-            return Err(DriverError::InvalidConfiguration);
-        }
-        buffer.as_mut_slice()[..frame.len()].copy_from_slice(frame);
-
-        if let Err(error) = self.tx_queue.submit(
-            self.registers,
-            self.tx_descriptors,
-            buffer.dma_address(),
-            frame.len(),
-        ) {
-            if queue_error_is_fatal(&error) {
-                self.ready = false;
-                self.faulted = true;
-            }
-            return Err(map_queue_error(error));
-        }
-        Ok(())
+        self.transmit_with(|buffer| {
+            buffer[..frame.len()].copy_from_slice(frame);
+            frame.len()
+        })
     }
 
     fn interface_info(&self) -> NetworkInterfaceInfo {
