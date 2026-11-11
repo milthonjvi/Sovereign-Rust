@@ -4,10 +4,11 @@
 //! Sovereign Boot entry point, built separately from the Limine-compatible image.
 
 use core::panic::PanicInfo;
-use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt};
+use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt, read_cr4};
 use sovereign_kernel::arch::x86_64::init::initialize_baseline;
 use sovereign_kernel::boot::sovereign::SovereignBootInfo;
 use sovereign_kernel::memory::boot_map::BootMemoryMap;
+use sovereign_kernel::memory::paging::{RecursivePageTable, RECURSIVE_SLOT};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
@@ -33,6 +34,12 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         fatal_halt();
     }
 
+    // Verify the recursive page-table window and the critical mappings before
+    // installing interrupt state or allowing any subsystem to use memory.
+    if !validate_boot_mappings(boot_info_pointer as u64, &boot_info) {
+        fatal_halt();
+    }
+
     // Install the kernel's GDT/TSS, IDT, and masked legacy PIC only after the
     // Sovereign handoff and every memory descriptor have passed validation.
     // SAFETY: BSP at CPL 0 with interrupts disabled and a validated stack.
@@ -48,6 +55,78 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         // SAFETY: IF remains clear; HLT is valid at CPL 0.
         unsafe { halt() };
     }
+}
+
+fn validate_boot_mappings(
+    boot_info_virtual: u64,
+    boot_info: &SovereignBootInfo,
+) -> bool {
+    // LA57 is the architectural selector for five-level paging.
+    // SAFETY: The kernel is executing at CPL 0 with interrupts disabled.
+    let levels = if unsafe { read_cr4() } & (1 << 12) != 0 { 5 } else { 4 };
+    // SAFETY: Sovereign Boot installs the recursive root reference at slot 510.
+    let page_tables = match unsafe { RecursivePageTable::new(levels, RECURSIVE_SLOT) } {
+        Ok(tables) => tables,
+        Err(_) => return false,
+    };
+
+    // SAFETY: The recursive window was installed by the loader and remains
+    // active; interrupts are disabled and the BSP is the only running CPU.
+    let boot_info_mapping = match unsafe { page_tables.translate(boot_info_virtual) } {
+        Ok(mapping) => mapping,
+        Err(_) => return false,
+    };
+    if boot_info_mapping.physical_address != boot_info_virtual
+        || boot_info_mapping.writable
+        || boot_info_mapping.executable
+        || boot_info_mapping.user_accessible
+    {
+        return false;
+    }
+
+    // SAFETY: Same active, immutable bootstrap page-table state.
+    let memory_map_mapping = match unsafe {
+        page_tables.translate(boot_info.memory_map_physical)
+    } {
+        Ok(mapping) => mapping,
+        Err(_) => return false,
+    };
+    if memory_map_mapping.physical_address != boot_info.memory_map_physical
+        || memory_map_mapping.writable
+        || memory_map_mapping.executable
+        || memory_map_mapping.user_accessible
+    {
+        return false;
+    }
+
+    // The kernel entry must be supervisor RX, never writable or user-accessible.
+    // SAFETY: The loader mapped every kernel PT_LOAD segment before handoff.
+    let entry_mapping = match unsafe { page_tables.translate(boot_info.kernel_entry) } {
+        Ok(mapping) => mapping,
+        Err(_) => return false,
+    };
+    if !entry_mapping.executable || entry_mapping.writable || entry_mapping.user_accessible {
+        return false;
+    }
+
+    // Confirm that execution is using the dedicated writable, NX bootstrap stack.
+    let stack_pointer: u64;
+    // SAFETY: Reading RSP has no side effects and is valid in long mode.
+    unsafe {
+        core::arch::asm!(
+            "mov {}, rsp",
+            out(reg) stack_pointer,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: The stack mapping must remain present while this function runs.
+    let stack_mapping = match unsafe { page_tables.translate(stack_pointer) } {
+        Ok(mapping) => mapping,
+        Err(_) => return false,
+    };
+    stack_mapping.writable
+        && !stack_mapping.executable
+        && !stack_mapping.user_accessible
 }
 
 #[panic_handler]
