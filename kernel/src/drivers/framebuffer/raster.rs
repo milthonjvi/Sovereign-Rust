@@ -334,6 +334,30 @@ pub fn fill_ellipse(
     let first_y = (cy - ry as i128).max(0);
     let last_y = (cy + ry as i128).min(info.height.saturating_sub(1) as i128);
     if first_y > last_y { return Ok(()); }
+
+    // Scan along the major radius. Keeping the computed span on the minor
+    // axis avoids magnifying integer-square-root truncation for very wide
+    // ellipses (where rx / ry could otherwise be arbitrarily large).
+    if rx > ry {
+        let first_x = (cx - rx as i128).max(0);
+        let last_x = (cx + rx as i128).min(info.width.saturating_sub(1) as i128);
+        if first_x > last_x { return Ok(()); }
+        let rx_squared = rx * rx;
+        for x in first_x..=last_x {
+            let dx = (x - cx).unsigned_abs();
+            if dx > rx { continue; }
+            let vertical = (ry * integer_sqrt(rx_squared - dx * dx)) / rx;
+            let top = (cy - vertical as i128).max(0);
+            let bottom = (cy + vertical as i128).min(info.height.saturating_sub(1) as i128);
+            if top <= bottom {
+                let height = usize::try_from(bottom - top + 1)
+                    .map_err(|_| FramebufferError::SizeOverflow)?;
+                target.fill_rect(x as usize, top as usize, 1, height, color);
+            }
+        }
+        return Ok(());
+    }
+
     let ry_squared = ry * ry;
     for y in first_y..=last_y {
         let dy = (y - cy).unsigned_abs();
@@ -393,6 +417,30 @@ pub fn stroke_ellipse(
     let first_y = (cy - ry as i128).max(0);
     let last_y = (cy + ry as i128).min(info.height.saturating_sub(1) as i128);
     if first_y > last_y { return Ok(()); }
+
+    // As in fill_ellipse, rasterize along the larger radius so integer sqrt
+    // truncation affects only the smaller span, by less than one pixel.
+    if rx > ry {
+        let first_x = (cx - rx as i128).max(0);
+        let last_x = (cx + rx as i128).min(info.width.saturating_sub(1) as i128);
+        if first_x > last_x { return Ok(()); }
+        let rx_squared = rx * rx;
+        for x in first_x..=last_x {
+            let dx = (x - cx).unsigned_abs();
+            if dx > rx { continue; }
+            let vertical = (ry * integer_sqrt(rx_squared - dx * dx)) / rx;
+            let top = cy - vertical as i128;
+            let bottom = cy + vertical as i128;
+            if top >= 0 && top < info.height as i128 {
+                target.put_pixel(x as usize, top as usize, color)?;
+            }
+            if bottom != top && bottom >= 0 && bottom < info.height as i128 {
+                target.put_pixel(x as usize, bottom as usize, color)?;
+            }
+        }
+        return Ok(());
+    }
+
     let ry_squared = ry * ry;
     for y in first_y..=last_y {
         let dy = (y - cy).unsigned_abs();
