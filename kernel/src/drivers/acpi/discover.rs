@@ -28,9 +28,9 @@ impl AcpiTables {
     /// requested physical address. The slice must remain valid for this call.
     /// Every returned SDT is checked for length and checksum before its
     /// signature is inspected.
-    pub fn discover<F>(rsdp: &Rsdp, mut map_table: F) -> Result<Self, AcpiError>
+    pub fn discover<'a, F>(rsdp: &Rsdp, mut map_table: F) -> Result<Self, AcpiError>
     where
-        F: FnMut(u64) -> Option<&'static [u8]>,
+        F: FnMut(u64) -> Option<&'a [u8]>,
     {
         let root = rsdp.root_table_address()?;
         let (root_address, root_table) = match root {
