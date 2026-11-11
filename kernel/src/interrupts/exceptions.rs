@@ -45,11 +45,45 @@ pub struct ExceptionRecord {
     pub vector: u64,
     pub error_code: u64,
     pub instruction_pointer: u64,
+    pub rflags: u64,
+    pub page_fault: Option<PageFaultInfo>,
+}
+
+/// Decoded x86 page-fault error code and CR2 linear address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PageFaultInfo {
+    pub linear_address: u64,
+    pub protection_violation: bool,
+    pub write: bool,
+    pub user: bool,
+    pub reserved_bit_violation: bool,
+    pub instruction_fetch: bool,
+    pub protection_key_violation: bool,
+    pub shadow_stack_access: bool,
+    pub sgx_violation: bool,
+}
+
+impl PageFaultInfo {
+    fn decode(linear_address: u64, error_code: u64) -> Self {
+        Self {
+            linear_address,
+            protection_violation: error_code & (1 << 0) != 0,
+            write: error_code & (1 << 1) != 0,
+            user: error_code & (1 << 2) != 0,
+            reserved_bit_violation: error_code & (1 << 3) != 0,
+            instruction_fetch: error_code & (1 << 4) != 0,
+            protection_key_violation: error_code & (1 << 5) != 0,
+            shadow_stack_access: error_code & (1 << 6) != 0,
+            sgx_violation: error_code & (1 << 15) != 0,
+        }
+    }
 }
 
 static LAST_VECTOR: AtomicU64 = AtomicU64::new(u64::MAX);
 static LAST_ERROR: AtomicU64 = AtomicU64::new(0);
 static LAST_RIP: AtomicU64 = AtomicU64::new(0);
+static LAST_RFLAGS: AtomicU64 = AtomicU64::new(0);
+static LAST_CR2: AtomicU64 = AtomicU64::new(0);
 
 /// Installs a valid fatal fallback gate for every architectural vector.\n/// PIC IRQ gates may subsequently replace vectors 0x20..=0x2F.
 ///
@@ -85,6 +119,15 @@ pub fn last_exception() -> Option<ExceptionRecord> {
         vector,
         error_code: LAST_ERROR.load(Ordering::Relaxed),
         instruction_pointer: LAST_RIP.load(Ordering::Relaxed),
+        rflags: LAST_RFLAGS.load(Ordering::Relaxed),
+        page_fault: if vector == 14 {
+            Some(PageFaultInfo::decode(
+                LAST_CR2.load(Ordering::Relaxed),
+                LAST_ERROR.load(Ordering::Relaxed),
+            ))
+        } else {
+            None
+        },
     })
 }
 
@@ -96,6 +139,12 @@ pub extern "C" fn sovereign_exception_dispatch(frame: *const ExceptionFrame) -> 
     let snapshot = unsafe { *frame };
     LAST_ERROR.store(snapshot.error_code, Ordering::Relaxed);
     LAST_RIP.store(snapshot.rip, Ordering::Relaxed);
+    LAST_RFLAGS.store(snapshot.rflags, Ordering::Relaxed);
+    if snapshot.vector == 14 {
+        // SAFETY: Exception entry runs at CPL 0; CR2 is meaningful for #PF.
+        let address = unsafe { crate::arch::x86_64::control::read_cr2() };
+        LAST_CR2.store(address, Ordering::Relaxed);
+    }
     LAST_VECTOR.store(snapshot.vector, Ordering::Release);
 
     // Until a diagnostic console and recovery policy exist, stop deterministically.
