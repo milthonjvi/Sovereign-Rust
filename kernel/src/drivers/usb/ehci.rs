@@ -16,7 +16,7 @@ pub const QTD_STATUS_BABBLE:u32=1<<4;
 pub const QTD_STATUS_TRANSACTION_ERROR:u32=1<<3;
 pub const QTD_STATUS_MISSED_MICROFRAME:u32=1<<2;
 pub const QTD_STATUS_SPLIT_STATE:u32=1<<1;
-pub const QTD_STATUS_PING_STATE:u32=1;
+pub const QTD_STATUS_PING_STATE:u32=1;\npub const QTD_PID_OUT:u8=0;\npub const QTD_PID_IN:u8=1;\npub const QTD_PID_SETUP:u8=2;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum EhciSpeed{Full,Low,High}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -28,7 +28,7 @@ pub struct EhciQueueHead{
 }
 impl EhciQueueHead{
  pub fn new(address:u8,endpoint:u8,speed:EhciSpeed,max_packet:u16,data_toggle_control:bool,head:bool,hub_address:u8,port_number:u8,multiplier:u8)->Result<Self,UsbError>{
-  if address>127||endpoint>15||max_packet==0||max_packet>1024||hub_address>127||port_number>127||!(1..=3).contains(&multiplier){return Err(UsbError::MalformedDescriptor)}
+  let packet_valid=match speed{EhciSpeed::Low=>max_packet<=8,EhciSpeed::Full=>max_packet<=1023,EhciSpeed::High=>max_packet<=1024};\n  if address>127||endpoint>15||max_packet==0||!packet_valid||hub_address>127||port_number>127||!(1..=3).contains(&multiplier){return Err(UsbError::MalformedDescriptor)}
   if speed!=EhciSpeed::High&&multiplier!=1{return Err(UsbError::MalformedDescriptor)}
   let speed_bits=match speed{EhciSpeed::Full=>0,EhciSpeed::Low=>1,EhciSpeed::High=>2};
   let characteristics=address as u32|((endpoint as u32)<<8)|(speed_bits<<12)|
@@ -37,6 +37,9 @@ impl EhciQueueHead{
   Ok(Self{horizontal_link:LINK_TERMINATE,endpoint_characteristics:characteristics,
    endpoint_capabilities:capabilities,current_qtd:0,overlay_next_qtd:LINK_TERMINATE,
    overlay_alternate_qtd:LINK_TERMINATE,overlay_token:0,overlay_buffer:[0;5]})
+ }
+ pub fn set_periodic_masks(&mut self,start_mask:u8,complete_mask:u8){
+  self.endpoint_capabilities=(self.endpoint_capabilities&!0xffff)|(start_mask as u32)|((complete_mask as u32)<<8);
  }
  pub fn set_horizontal_qh(&mut self,physical:u64)->Result<(),UsbError>{
   if physical>u32::MAX as u64||physical&0x1f!=0{return Err(UsbError::InvalidAddress)}
