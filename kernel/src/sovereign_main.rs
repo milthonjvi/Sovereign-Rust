@@ -3,7 +3,7 @@
 
 //! Sovereign Boot entry point, built separately from the Limine-compatible image.
 
-use core::panic::PanicInfo;
+use core::{panic::PanicInfo, ptr, slice};
 use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt, read_cr4};
 use sovereign_kernel::arch::x86_64::init::initialize_baseline;
 use sovereign_kernel::boot::sovereign::SovereignBootInfo;
@@ -56,6 +56,41 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         ).unwrap_or(false);
     if !ownership_valid {
         fatal_halt();
+    }
+
+    // Validate the firmware RSDP before exposing it to ACPI table discovery.
+    // UEFI normally places it in ACPI reclaimable memory; reserved and NVS
+    // descriptors are also valid firmware-owned locations.
+    if boot_info.flags & sovereign_kernel::boot::sovereign::BOOT_INFO_FLAG_ACPI_VALID != 0 {
+        let rsdp_physical = boot_info.acpi_rsdp_physical;
+        let revision = unsafe { (rsdp_physical as *const u8).add(15).read() };
+        let rsdp_length = if revision == 0 {
+            20u64
+        } else if revision >= 2 {
+            let length = unsafe {
+                ptr::read_unaligned((rsdp_physical as *const u8).add(20).cast::<u32>())
+            } as u64;
+            if !(36..=4096).contains(&length) {
+                fatal_halt();
+            }
+            length
+        } else {
+            fatal_halt();
+        };
+        let rsdp_in_firmware_memory =
+            memory_map.contains_range_with_type(rsdp_physical, rsdp_length, 0).unwrap_or(false)
+            || memory_map.contains_range_with_type(rsdp_physical, rsdp_length, 9).unwrap_or(false)
+            || memory_map.contains_range_with_type(rsdp_physical, rsdp_length, 10).unwrap_or(false);
+        if !rsdp_in_firmware_memory {
+            fatal_halt();
+        }
+        // SAFETY: The loader mapped the complete validated RSDP range read-only.
+        let rsdp_bytes = unsafe {
+            slice::from_raw_parts(rsdp_physical as *const u8, rsdp_length as usize)
+        };
+        let rsdp = sovereign_kernel::drivers::acpi::rsdp::Rsdp::parse(rsdp_bytes)
+            .unwrap_or_else(|_| fatal_halt());
+        let _root_table = rsdp.root_table_address().unwrap_or_else(|_| fatal_halt());
     }
 
     // Verify the recursive page-table window and the critical mappings before
@@ -121,6 +156,23 @@ fn validate_boot_mappings(
         || memory_map_mapping.user_accessible
     {
         return false;
+    }
+
+    if boot_info.flags & sovereign_kernel::boot::sovereign::BOOT_INFO_FLAG_ACPI_VALID != 0 {
+        // SAFETY: The loader mapped the RSDP identity page read-only and NX.
+        let rsdp_mapping = match unsafe {
+            page_tables.translate(boot_info.acpi_rsdp_physical)
+        } {
+            Ok(mapping) => mapping,
+            Err(_) => return false,
+        };
+        if rsdp_mapping.physical_address != boot_info.acpi_rsdp_physical
+            || rsdp_mapping.writable
+            || rsdp_mapping.executable
+            || rsdp_mapping.user_accessible
+        {
+            return false;
+        }
     }
 
     // The kernel entry must be supervisor RX, never writable or user-accessible.
