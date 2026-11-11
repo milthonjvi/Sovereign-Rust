@@ -189,6 +189,38 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
     }
 }
 
+/// Errors while discovering a TSC clocksource and initializing its deadline backend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DetectedTaskTimeoutInitError {
+    ClockSourceUnavailable,
+    Timer(BootstrapTimerInitError),
+}
+
+impl<const N: usize> TaskTimeouts<crate::time::TscClockSource, N> {
+    /// Discover an invariant TSC frequency (using HPET calibration if needed)
+    /// and initialize the BSP TSC-deadline task timeout backend.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, after x2APIC bootstrap. If CPUID leaf 0x15
+    /// lacks a complete ratio, an enabled HPET must be supplied for calibration.
+    pub unsafe fn initialize_bootstrap_detected(
+        vector: u8,
+        hpet: Option<&crate::drivers::timer::Hpet>,
+        initial_time_ns: u64,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Result<Self, DetectedTaskTimeoutInitError> {
+        let source = crate::time::TscClockSource::detect_or_calibrate(
+            hpet, sample_ms, max_spin_iterations,
+        ).ok_or(DetectedTaskTimeoutInitError::ClockSourceUnavailable)?;
+        let frequency_hz = source.frequency_hz();
+        // SAFETY: Forwarded from this method's BSP/x2APIC bootstrap contract.
+        unsafe {
+            Self::initialize_bootstrap(vector, source, initial_time_ns, frequency_hz)
+        }.map_err(DetectedTaskTimeoutInitError::Timer)
+    }
+}
+
 /// x2APIC countdown task timeout backend for CPUs without TSC-deadline
 /// support. Its precision depends on HPET calibration and the APIC divider.
 pub struct ApicCountdownTaskTimeouts<S: ClockSource, const N: usize> {
