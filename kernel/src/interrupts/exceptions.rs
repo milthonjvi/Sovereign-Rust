@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::idt::{Idt, IdtEntry, IdtError, INTERRUPT_GATE};
 
-core::arch::global_asm!(include_str!("exceptions.S"));
+core::arch::global_asm!(include_str!("../arch/x86_64/exceptions.S"));
 
 unsafe extern "C" {
     static sovereign_exception_stub_table: [u64; 32];
