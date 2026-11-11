@@ -87,7 +87,10 @@ impl ParsedEndpoint{
   let raw=u16::from_le_bytes([b[4],b[5]]);
   let packet=raw&0x07ff;
   let mult=((raw>>11)&3) as u8;
-  if packet==0||mult==3||b[2]&0x0f==0||b[2]&0x70!=0||((b[3]&3!=1)&&(b[3]&3!=3)&&mult!=0){return Err(UsbError::MalformedDescriptor)}
+  let transfer=b[3]&3;
+  if packet==0||raw&0xe000!=0||mult==3||b[2]&0x0f==0||b[2]&0x70!=0
+   ||transfer==0||(transfer!=1&&b[3]&0xfc!=0)
+   ||((transfer!=1&&transfer!=3)&&mult!=0){return Err(UsbError::MalformedDescriptor)}
   Ok(Self{address:b[2],attributes:b[3],max_packet_size:packet,interval:b[6],
    transactions_per_microframe:mult+1,max_burst:0,companion_attributes:0,
    bytes_per_interval:0,has_ss_companion:false})
@@ -119,9 +122,16 @@ impl ParsedConfiguration{
   if bytes.len()<total{return Err(UsbError::BufferTooShort)}
   let mut out=Self{descriptor,interfaces:[None;MAX_INTERFACES],endpoints:[None;MAX_ENDPOINTS],interface_len:0,endpoint_len:0};
   let mut current:Option<usize>=None;
+  let mut first=true;
   for item in DescriptorIter::new(&bytes[..total]){
    let item=item?;
+   if first{
+    if item.descriptor_type!=CONFIGURATION_DESCRIPTOR||item.bytes[0]<9{return Err(UsbError::MalformedDescriptor)}
+    first=false;
+    continue
+   }
    match item.descriptor_type{
+    CONFIGURATION_DESCRIPTOR=>return Err(UsbError::MalformedDescriptor),
     INTERFACE_DESCRIPTOR=>{
      if out.interface_len as usize>=MAX_INTERFACES{return Err(UsbError::NoResources)}
      let d=InterfaceDescriptor::parse(item.bytes)?;
@@ -155,6 +165,26 @@ impl ParsedConfiguration{
   }
   // bNumInterfaces counts distinct interface numbers, not alternate settings.
   if unique_count!=descriptor.interface_count{return Err(UsbError::MalformedDescriptor)}
+  // Alternate-setting numbers and endpoint addresses must be unique within
+  // each interface alternate setting.
+  for i in 0..out.interface_len as usize{
+   let a=out.interfaces[i].ok_or(UsbError::MalformedDescriptor)?;
+   for j in i+1..out.interface_len as usize{
+    let b=out.interfaces[j].ok_or(UsbError::MalformedDescriptor)?;
+    if a.descriptor.number==b.descriptor.number&&a.descriptor.alternate_setting==b.descriptor.alternate_setting{
+     return Err(UsbError::MalformedDescriptor)
+    }
+   }
+   let start=a.first_endpoint as usize;
+   let end=start+a.endpoint_count as usize;
+   for x in start..end{
+    let ex=out.endpoints[x].ok_or(UsbError::MalformedDescriptor)?;
+    for y in x+1..end{
+     let ey=out.endpoints[y].ok_or(UsbError::MalformedDescriptor)?;
+     if ex.address==ey.address{return Err(UsbError::MalformedDescriptor)}
+    }
+   }
+  }
   Ok(out)
  }
 }
