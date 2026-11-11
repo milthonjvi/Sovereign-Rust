@@ -12,6 +12,9 @@ const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
 pub struct Fadt {
     /// FADT revision from the common SDT header.
     pub revision: u8,
+    /// Declared FADT table length. Length is more reliable than Revision on
+    /// firmware with known version-field bugs.
+    pub table_length: u32,
     /// Legacy interrupt model byte at offset 44. ACPI 2.0 reserved this field,
     /// while permitting zero and legacy value one for compatibility.
     pub legacy_int_model: u8,
@@ -131,6 +134,7 @@ impl Fadt {
 
         Ok(Self {
             revision: table.header.revision,
+            table_length: table.header.length,
             legacy_int_model: b[44],
             firmware_ctrl: read_u32(b, 36)?,
             dsdt: read_u32(b, 40)?,
@@ -367,9 +371,15 @@ impl Fadt {
         Ok(())
     }
 
-    /// Validate reserved bits in the IA-PC and ARM boot-architecture fields.
-    /// This is explicit so callers can inspect older or non-x86 firmware data.
+    /// Validate reserved bits in boot-architecture fields only when the
+    /// declared table is long enough to contain the ACPI 2.0+ boot flags.
+    /// The original 1.0 FADT used these bytes as reserved space; some firmware
+    /// populated them despite the older layout. Table length takes precedence
+    /// over the unreliable revision byte for this compatibility decision.
     pub fn validate_boot_architecture_flags(&self) -> Result<(), AcpiError> {
+        if self.table_length < 132 {
+            return Ok(());
+        }
         if self.iapc_boot_architecture & !0x003F != 0 {
             return Err(AcpiError::MalformedTable);
         }
@@ -381,12 +391,17 @@ impl Fadt {
         Ok(())
     }
 
-    pub const fn has_legacy_devices(&self) -> bool { self.iapc_boot_architecture & (1 << 0) != 0 }
-    pub const fn has_8042_controller(&self) -> bool { self.iapc_boot_architecture & (1 << 1) != 0 }
-    pub const fn vga_hardware_not_present(&self) -> bool { self.iapc_boot_architecture & (1 << 2) != 0 }
-    pub const fn msi_not_supported(&self) -> bool { self.iapc_boot_architecture & (1 << 3) != 0 }
-    pub const fn pcie_aspm_controls_not_supported(&self) -> bool { self.iapc_boot_architecture & (1 << 4) != 0 }
-    pub const fn cmos_rtc_not_present(&self) -> bool { self.iapc_boot_architecture & (1 << 5) != 0 }
+    /// Whether the FADT actually contains the IA-PC boot architecture field.
+    pub const fn has_boot_architecture_metadata(&self) -> bool {
+        self.table_length >= 132
+    }
+
+    pub const fn has_legacy_devices(&self) -> bool { self.has_boot_architecture_metadata() && self.iapc_boot_architecture & (1 << 0) != 0 }
+    pub const fn has_8042_controller(&self) -> bool { self.has_boot_architecture_metadata() && self.iapc_boot_architecture & (1 << 1) != 0 }
+    pub const fn vga_hardware_not_present(&self) -> bool { self.has_boot_architecture_metadata() && self.iapc_boot_architecture & (1 << 2) != 0 }
+    pub const fn msi_not_supported(&self) -> bool { self.has_boot_architecture_metadata() && self.iapc_boot_architecture & (1 << 3) != 0 }
+    pub const fn pcie_aspm_controls_not_supported(&self) -> bool { self.has_boot_architecture_metadata() && self.iapc_boot_architecture & (1 << 4) != 0 }
+    pub const fn cmos_rtc_not_present(&self) -> bool { self.has_boot_architecture_metadata() && self.iapc_boot_architecture & (1 << 5) != 0 }
 
     /// Whether firmware advertises a usable ACPI reset register.
     pub const fn reset_supported(&self) -> bool {
@@ -805,6 +820,32 @@ mod tests {
             let fadt = Fadt::parse(&malformed).unwrap();
             assert_eq!(fadt.validate_fixed_feature_flags(), Err(AcpiError::MalformedTable));
         }
+    }
+
+
+    #[test]
+    fn boot_architecture_flags_are_length_gated_not_revision_gated() {
+        // In the 1.0-sized FADT, offsets 109..110 are reserved. Do not
+        // reinterpret firmware garbage there as boot-architecture flags.
+        let mut old = make_fadt(116, 0, None, None);
+        old[8] = 6; // Revision alone must not make the field present.
+        old[109..111].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        old[9] = 0;
+        old[9] = 0u8.wrapping_sub(old.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let old = Fadt::parse(&old).unwrap();
+        assert!(!old.has_boot_architecture_metadata());
+        assert!(!old.has_legacy_devices());
+        assert_eq!(old.validate_boot_architecture_flags(), Ok(()));
+
+        // Once the extended layout is present, reserved bits are enforced.
+        let mut modern = make_fadt(132, 0, None, None);
+        modern[8] = 1; // Length is authoritative even if revision is stale.
+        modern[109..111].copy_from_slice(&0x0040u16.to_le_bytes());
+        modern[9] = 0;
+        modern[9] = 0u8.wrapping_sub(modern.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let modern = Fadt::parse(&modern).unwrap();
+        assert!(modern.has_boot_architecture_metadata());
+        assert_eq!(modern.validate_boot_architecture_flags(), Err(AcpiError::MalformedTable));
     }
 
     #[test]
