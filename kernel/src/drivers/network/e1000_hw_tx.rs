@@ -6,7 +6,7 @@ use super::{
 };
 
 impl E1000TxQueue {
-    pub(crate) fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
+    pub(crate) fn new(descriptor_count: usize) -> Result<Self, E1000Error> {
         Ok(Self { cursor: RingCursor::new(descriptor_count)?, clean: RingCursor::new(descriptor_count)?, pending: 0 })
     }
 
