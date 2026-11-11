@@ -241,8 +241,10 @@ impl E1000TxQueue {
         Ok(index)
     }
 
-    /// Submit a batch with one DMA barrier and one TDT write.
-    /// This amortizes MMIO and ordering overhead under sustained traffic.
+    /// Submit a batch with one DMA write barrier and one TDT write.
+    /// Before calling, the producer must have established CPU ownership of all
+    /// target slots and executed dma_read_barrier() after observing DD. The
+    /// internal E1000Device path obtains that ownership through slot discovery.
     pub fn submit_batch<R: E1000Registers>(
         &mut self,
         registers: &mut R,
@@ -275,10 +277,8 @@ impl E1000TxQueue {
                 return Err(E1000QueueError::TxRingFull);
             }
         }
-        // The DD observations above establish completion; acquire all device
-        // writes before the caller's buffers/descriptors are reused.
-        registers.dma_read_barrier();
-
+        // Slot discovery already acquired device writes before the caller
+        // copied packet bytes into these buffers. Recheck DD before staging.
         for (offset, &(buffer_dma, length)) in frames.iter().enumerate() {
             let index = (start + offset) & (count - 1);
             let descriptor = super::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
