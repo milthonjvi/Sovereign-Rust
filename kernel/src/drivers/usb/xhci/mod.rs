@@ -10,7 +10,7 @@ impl Trb{
  pub const fn with_cycle(mut self,cycle:bool)->Self{if cycle{self.control|=1}else{self.control&=!1}self}
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum ControllerState{Detached,Discovered,Reset,Running,Halted,Failed}
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum XhciError{InvalidCapability,UnsupportedVersion,NotReady,HardwareFault}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum XhciError{InvalidCapability,UnsupportedVersion,NotReady,HardwareFault,InvalidRing,RingFull}
 /// Bounds-checked access to an already mapped xHCI MMIO region.
 pub trait RegisterIo{fn read32(&self,offset:usize)->Result<u32,XhciError>;fn write32(&mut self,offset:usize,value:u32)->Result<(),XhciError>;}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -21,5 +21,95 @@ impl CapabilityRegisters{
   if len<0x20{return Err(XhciError::InvalidCapability)}
   if version<0x0100{return Err(XhciError::UnsupportedVersion)}
   Ok(Self{capability_length:len,interface_version:version,max_device_slots:(hcs1&255)as u8,max_interrupters:((hcs1>>8)&0x7ff)as u16,max_ports:(hcs1>>24)as u8})
+ }
+}
+
+
+/// DMA-backed producer ring. The caller must provide physically contiguous,
+/// DMA-coherent storage mapped at physical_base and keep it alive while in use.
+/// One TRB slot is reserved for the Link TRB; in-flight accounting prevents
+/// software from overwriting commands not yet retired by completion events.
+pub struct XhciProducerRing<'a,const N:usize>{entries:&'a mut[Trb;N],physical_base:u64,enqueue:usize,cycle:bool,in_flight:usize}
+impl<'a,const N:usize>XhciProducerRing<'a,N>{
+ pub fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
+  if N<2||physical_base&0x3f!=0{return Err(XhciError::InvalidRing)}
+  for entry in entries.iter_mut(){*entry=Trb::EMPTY;}
+  let mut ring=Self{entries,physical_base,enqueue:0,cycle:true,in_flight:0};
+  ring.write_link();Ok(ring)
+ }
+ fn write_link(&mut self){
+  let control=(6u32<<10)|(1<<1)|(self.cycle as u32);
+  self.entries[N-1]=Trb{parameter:self.physical_base,status:0,control};
+ }
+ pub fn push(&mut self,mut trb:Trb)->Result<usize,XhciError>{
+  if self.in_flight>=N-1{return Err(XhciError::RingFull)}
+  let index=self.enqueue;
+  trb=trb.with_cycle(self.cycle);
+  self.entries[index]=trb;
+  core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+  self.in_flight+=1;self.enqueue+=1;
+  if self.enqueue==N-1{
+   self.write_link();
+   core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+   self.enqueue=0;self.cycle=!self.cycle;
+  }
+  Ok(index)
+ }
+ /// Retires completed TRBs. The caller must only retire work confirmed by
+ /// command/transfer completion events.
+ pub fn retire(&mut self,count:usize)->Result<(),XhciError>{
+  if count>self.in_flight{return Err(XhciError::InvalidRing)}
+  self.in_flight-=count;Ok(())
+ }
+ pub const fn in_flight(&self)->usize{self.in_flight}
+ pub const fn producer_cycle(&self)->bool{self.cycle}
+ pub const fn physical_base(&self)->u64{self.physical_base}
+}
+
+/// Consumer for an already configured DMA event ring. Event TRBs are returned
+/// only when their Cycle bit matches the consumer cycle state.
+pub struct XhciEventRing<'a,const N:usize>{entries:&'a[Trb;N],dequeue:usize,cycle:bool}
+impl<'a,const N:usize>XhciEventRing<'a,N>{
+ pub fn new(entries:&'a[Trb;N])->Result<Self,XhciError>{
+  if N==0{return Err(XhciError::InvalidRing)}
+  Ok(Self{entries,dequeue:0,cycle:true})
+ }
+ pub fn pop(&mut self)->Option<Trb>{
+  let trb=self.entries[self.dequeue];
+  core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+  if trb.cycle_bit()!=self.cycle{return None}
+  self.dequeue+=1;
+  if self.dequeue==N{self.dequeue=0;self.cycle=!self.cycle;}
+  Some(trb)
+ }
+ pub const fn dequeue_index(&self)->usize{self.dequeue}
+ pub const fn consumer_cycle(&self)->bool{self.cycle}
+}
+
+#[cfg(test)]
+mod ring_tests{
+ use super::*;
+ #[test]fn producer_ring_wraps_with_link_trb_and_cycle_toggle(){
+  let mut entries=[Trb::EMPTY;4];
+  let mut ring=XhciProducerRing::new(&mut entries,0x1000).unwrap();
+  assert_eq!(ring.push(Trb{parameter:1,status:0,control:1}).unwrap(),0);
+  assert_eq!(ring.push(Trb{parameter:2,status:0,control:1}).unwrap(),1);
+  assert_eq!(ring.push(Trb{parameter:3,status:0,control:1}).unwrap(),2);
+  assert!(!ring.producer_cycle());assert_eq!(ring.in_flight(),3);
+  assert_eq!(ring.push(Trb::EMPTY),Err(XhciError::RingFull));
+  ring.retire(2).unwrap();assert_eq!(ring.push(Trb::EMPTY).unwrap(),0);
+  assert_eq!(ring.in_flight(),2);
+ }
+ #[test]fn producer_requires_dma_alignment(){
+  let mut entries=[Trb::EMPTY;4];
+  assert!(matches!(XhciProducerRing::new(&mut entries,0x1001),Err(XhciError::InvalidRing)));
+ }
+ #[test]fn event_ring_consumes_only_matching_cycle(){
+  let mut entries=[Trb::EMPTY;2];
+  entries[0]=Trb{parameter:7,status:0,control:1};
+  entries[1]=Trb{parameter:8,status:0,control:1};
+  let mut ring=XhciEventRing::new(&entries).unwrap();
+  assert_eq!(ring.pop().unwrap().parameter,7);assert_eq!(ring.pop().unwrap().parameter,8);
+  assert_eq!(ring.pop(),None);assert_eq!(ring.dequeue_index(),0);assert!(!ring.consumer_cycle());
  }
 }
