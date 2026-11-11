@@ -83,11 +83,14 @@ impl FatLongName {
             self.reset();
             return Err(LfnError::InvalidSequence);
         }
-        for unit in &self.units[..end] {
-            if *unit < 0x20 || matches!(*unit, 0x22 | 0x2A | 0x2F | 0x3A | 0x3C | 0x3E | 0x3F | 0x5C | 0x7C) {
+        let mut check = 0usize;
+        while check < end {
+            let unit = self.units[check];
+            if unit < 0x20 || matches!(unit, 0x22 | 0x2A | 0x2F | 0x3A | 0x3C | 0x3E | 0x3F | 0x5C | 0x7C) {
                 self.reset();
                 return Err(LfnError::InvalidSequence);
             }
+            check += 1;
         }
         let mut index = 0usize;
         while index < end {
