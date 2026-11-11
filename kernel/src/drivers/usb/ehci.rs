@@ -190,9 +190,12 @@ impl EhciController{
  }
  pub fn clear_port_changes<I:EhciRegisterIo>(&self,io:&mut I,port:u8,changes:u32)->Result<(),UsbError>{
   const MASK:u32=(1<<1)|(1<<3)|(1<<5)|(1<<19);
+  if self.state!=EhciState::Running{return Err(UsbError::ControllerUnavailable)}
   if port==0||port>self.port_count||changes&!MASK!=0{return Err(UsbError::InvalidAddress)}
   let offset=self.op(PORTSC_BASE)+(port as usize-1)*4;
-  let power=io.read32(offset)?&(1<<12);io.write32(offset,power|changes)
+  let current=io.read32(offset)?;
+  const PRESERVE:u32=(1<<2)|(1<<6)|(1<<7)|(1<<8)|(1<<12)|(1<<13)|(3<<14)|(7<<16)|(7<<24);
+  io.write32(offset,(current&PRESERVE)|changes)
  }
 }
 
