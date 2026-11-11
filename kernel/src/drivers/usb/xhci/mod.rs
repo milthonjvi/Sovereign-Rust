@@ -84,7 +84,7 @@ impl<'a,const N:usize>XhciProducerRing<'a,N>{
 
 /// Consumer for an already configured DMA event ring. Event TRBs are returned
 /// only when their Cycle bit matches the consumer cycle state.
-pub struct XhciEventRing<'a,const N:usize>{entries:&'a mut[Trb;N],dequeue:usize,cycle:bool}
+pub struct XhciEventRing<'a,const N:usize>{entries:&'a mut[Trb;N],physical_base:u64,dequeue:usize,cycle:bool}
 impl<'a,const N:usize>XhciEventRing<'a,N>{
  pub fn new(entries:&'a[Trb;N])->Result<Self,XhciError>{
   if N==0{return Err(XhciError::InvalidRing)}
@@ -100,7 +100,7 @@ impl<'a,const N:usize>XhciEventRing<'a,N>{
   if self.dequeue==N{self.dequeue=0;self.cycle=!self.cycle;}
   Some(trb)
  }
- pub const fn dequeue_index(&self)->usize{self.dequeue}
+ pub const fn dequeue_index(&self)->usize{self.dequeue}\n pub const fn dequeue_physical(&self)->u64{self.physical_base+(self.dequeue as u64*TRB_SIZE as u64)}
  pub const fn consumer_cycle(&self)->bool{self.cycle}
 }
 
@@ -124,7 +124,7 @@ mod ring_tests{
  }
  #[test]fn event_ring_consumes_only_matching_cycle(){
   let mut entries=[Trb::EMPTY;2];
-  let mut ring=unsafe{XhciEventRing::new(&mut entries)}.unwrap();
+  let mut ring=unsafe{XhciEventRing::new(&mut entries,0x6000)}.unwrap();
   unsafe{
    core::ptr::write_volatile(&mut ring.entries[0],Trb{parameter:7,status:0,control:1});
    core::ptr::write_volatile(&mut ring.entries[1],Trb{parameter:8,status:0,control:1});
@@ -291,6 +291,12 @@ impl XhciController{
   io.write32(interrupter+0x14,event_ring_physical as u32)?;
   io.write32(interrupter,1<<1)?;
   self.event_ring_configured=true;Ok(())
+ }
+ pub fn update_event_ring_dequeue<I:RegisterIo>(&self,io:&mut I,dequeue_physical:u64)->Result<(),XhciError>{
+  if self.state!=ControllerState::Running||dequeue_physical&0x0f!=0{return Err(XhciError::InvalidState)}
+  let erdp=self.runtime_base+0x20+0x18;
+  io.write32(erdp+4,(dequeue_physical>>32)as u32)?;
+  io.write32(erdp,(dequeue_physical as u32)|(1<<3))
  }
  pub fn ring_doorbell<I:RegisterIo>(&self,io:&mut I,slot_id:u8,target:u8)->Result<(),XhciError>{
   if self.state!=ControllerState::Running||slot_id>self.enabled_slots||target>31{return Err(XhciError::InvalidState)}
