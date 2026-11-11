@@ -16,21 +16,19 @@ pub struct Console<'a> {
     protocol: &'a mut EfiSimpleTextOutputProtocol,
 }
 
-impl Console<'static> {
+impl<'a> Console<'a> {
     /// Construct a console wrapper from the firmware protocol pointer.
     ///
     /// # Safety
     /// The pointer must reference a valid UEFI protocol instance that remains
-    /// valid for the returned lifetime. The caller must ensure exclusive use.
+    /// valid for lifetime 'a. The caller must ensure exclusive use.
     pub unsafe fn from_ptr(protocol: *mut EfiSimpleTextOutputProtocol) -> Self {
         // SAFETY: The caller guarantees validity and exclusive access.
         Self {
             protocol: unsafe { &mut *protocol },
         }
     }
-}
 
-impl Console<'_> {
     /// Write ASCII as null-terminated UTF-16 without allocating.
     pub fn write_ascii(&mut self, text: &str) -> bool {
         let Some(output_string) = self.protocol.output_string else {
