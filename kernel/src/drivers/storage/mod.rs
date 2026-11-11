@@ -34,7 +34,7 @@ pub mod cache;
 pub use cache::{BlockCache, CacheStats};
 
 pub mod nvme;
-pub use nvme::{build_prps, identify_command, read_command, write_command, NvmeCapabilities, NvmeCommand, NvmeCompletion, NvmeCompletionQueue, NvmeError, NvmeNamespace, NvmePrpMapping, NvmeSubmissionQueue};
+pub use nvme::{build_prps, doorbell_offset, initialize_controller, ring_completion_doorbell, ring_submission_doorbell, identify_command, read_command, write_command, NvmeAdminQueueMemory, NvmeControllerInfo, NvmeRegisterIo, NvmeCapabilities, NvmeCommand, NvmeCompletion, NvmeCompletionQueue, NvmeError, NvmeNamespace, NvmePrpMapping, NvmeSubmissionQueue};
 
 pub mod ahci;
 pub use ahci::{build_prdt, command_header, AhciCapabilities, AhciCommandHeader, AhciError, AhciIdentify, AhciPrdtEntry, RegisterFisH2d};
