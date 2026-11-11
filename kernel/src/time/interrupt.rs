@@ -106,6 +106,12 @@ pub unsafe fn unregister_timer_interrupt() -> Result<(), TimerInterruptError> {
     Ok(())
 }
 
+/// Reassert deferred timer work after a failed comparator reprogramming.
+#[inline]
+pub(crate) fn signal_timer_work_pending() {
+    TIMER_WORK_PENDING.store(true, Ordering::Release);
+}
+
 /// Atomically consume the deferred-work signal.
 #[inline]
 pub fn take_timer_work_pending() -> bool {
