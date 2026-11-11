@@ -36,7 +36,9 @@ to a separate `sovereign-kernel-uefi` entry point. The kernel validates the
 handoff and memory descriptors before installing its bootstrap descriptor
 tables. The Limine-compatible `sovereign-kernel` target remains available.
 
-**Build and firmware validation have not yet been run.** The UEFI image
+**CI has successfully built the standalone UEFI loader.** The complete kernel
+build is currently blocked by compile errors in parallel driver/subsystem work;
+no kernel image or bootable EFI disk has yet been validated. The UEFI image
 packaging pipeline and QEMU/physical-machine validation remain outstanding.
 
 ## Build
