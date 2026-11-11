@@ -1,4 +1,4 @@
-//! x86_64 four-level page-table construction for Sovereign Boot.
+//! x86_64 four-/five-level page-table construction for Sovereign Boot.
 //!
 //! This module builds tables but deliberately does not load CR3. The caller
 //! must keep the active loader mappings, stack, firmware call path, and all
