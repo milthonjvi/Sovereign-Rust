@@ -8,7 +8,7 @@ use core::{ffi::c_void, mem};
 
 use super::{
     boot_services::{allocate_loader_pages, EfiBootServices, EfiMemoryDescriptor},
-    EfiStatus, EFI_BUFFER_TOO_SMALL, EFI_COMPROMISED_DATA, EFI_SUCCESS, EFI_UNSUPPORTED,
+    EfiHandle, EfiStatus, EFI_BUFFER_TOO_SMALL, EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_SUCCESS, EFI_UNSUPPORTED,
 };
 
 pub const DEFAULT_MEMORY_MAP_PAGES: usize = 128;
@@ -86,6 +86,38 @@ impl EfiMemoryMapBuffer {
             physical_base: self.physical_base, capacity_bytes: capacity, size_bytes: size,
             descriptor_size, descriptor_version, map_key, pages: self.pages,
         })
+    }
+
+    /// Refresh the map and call ExitBootServices, retrying stale map keys.
+    ///
+    /// No allocation or other firmware service is called between each map
+    /// capture and its corresponding ExitBootServices attempt.
+    ///
+    /// # Safety
+    /// The image handle and Boot Services table must be valid. On success,
+    /// Boot Services are no longer available and this object must not be used
+    /// again except as inert metadata.
+    pub unsafe fn exit_boot_services(
+        &mut self,
+        image_handle: EfiHandle,
+    ) -> Result<CapturedMemoryMap, EfiStatus> {
+        const MAX_ATTEMPTS: usize = 4;
+        for _ in 0..MAX_ATTEMPTS {
+            let captured = self.capture()?;
+            // SAFETY: This provider retains the live table until successful exit.
+            let boot = unsafe { self.boot_services.as_mut() }.ok_or(EFI_UNSUPPORTED)?;
+            let exit = boot.exit_boot_services.ok_or(EFI_UNSUPPORTED)?;
+            // SAFETY: The map key was captured immediately above; no firmware
+            // call or allocation occurs between capture and this invocation.
+            let status = unsafe { exit(image_handle, captured.map_key) };
+            if status == EFI_SUCCESS {
+                return Ok(captured);
+            }
+            if status != EFI_INVALID_PARAMETER {
+                return Err(status);
+            }
+        }
+        Err(EFI_INVALID_PARAMETER)
     }
 
     /// Return the buffer as an untyped pointer for byte-wise ABI consumers.
