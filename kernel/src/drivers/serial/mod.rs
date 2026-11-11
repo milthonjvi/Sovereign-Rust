@@ -1,6 +1,9 @@
 //! Polling driver for 16550-compatible UART serial ports.
 //! Allocation-free COM1–COM4 support; IRQ delivery is owned by the interrupt subsystem.
 
+mod rx;
+pub use rx::UartRxBuffer;
+
 use crate::arch::x86_64::io;
 use crate::drivers::api::{BusAddress, DeviceClass, DeviceInfo, Driver, DriverError};
 
