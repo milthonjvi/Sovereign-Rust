@@ -193,8 +193,9 @@ impl Hpet {
         {
             return Err(DriverError::InvalidConfiguration);
         }
+        // Keep delivery disabled while the comparator's two-stage periodic
+        // programming sequence is in progress.
         let config = (current & !TIMER_WRITABLE_CONTROL)
-            | TIMER_INTERRUPT_ENABLE
             | TIMER_PERIODIC_MODE
             | ((route as u64) << 9);
         self.write_register(config_offset, config);
@@ -202,6 +203,10 @@ impl Hpet {
         let comparator_offset = TIMER_COMPARATOR_BASE + timer as usize * TIMER_STRIDE;
         self.write_register(comparator_offset, first_deadline);
         self.write_register(comparator_offset, period_ticks);
+
+        // Discard stale status before enabling delivery for the new schedule.
+        self.write_register(GENERAL_INTERRUPT_STATUS, 1u64 << timer);
+        self.write_register(config_offset, config | TIMER_INTERRUPT_ENABLE);
         Ok(())
     }
 
