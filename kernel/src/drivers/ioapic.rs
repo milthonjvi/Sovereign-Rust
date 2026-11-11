@@ -22,6 +22,7 @@ pub enum IoApicError {
     InvalidMapping,
     InvalidVector,
     RouteNotConfigured,
+    DuplicateOverride,
     GsiOutOfRange,
     InvalidPolarity,
     InvalidTriggerMode,
@@ -288,15 +289,23 @@ impl IoApicController {
     }
 }
 
-/// Resolve an ISA IRQ to its GSI and electrical mode using MADT overrides.
-/// Non-ISA buses are deliberately rejected by this helper.
+/// Resolve an ISA IRQ to its GSI and electrical mode using bus-0 MADT
+/// overrides. Overrides for other buses are unrelated and are ignored.
 pub fn resolve_isa_irq(
     irq: u8,
     overrides: &[InterruptSourceOverride],
 ) -> Result<(u32, InterruptMode), IoApicError> {
-    let override_entry = overrides.iter().find(|entry| entry.source == irq);
-    match override_entry {
-        Some(entry) if entry.bus != 0 => Err(IoApicError::UnsupportedBus),
+    let mut matched = None;
+    for entry in overrides {
+        if entry.bus == 0 && entry.source == irq {
+            if matched.is_some() {
+                return Err(IoApicError::DuplicateOverride);
+            }
+            matched = Some(*entry);
+        }
+    }
+
+    match matched {
         Some(entry) => Ok((
             entry.global_system_interrupt,
             InterruptMode::from_acpi_flags(entry.flags)?,
@@ -391,6 +400,44 @@ mod tests {
             bus: 1, source: 4, global_system_interrupt: 9, flags: 0,
         }];
         assert_eq!(resolve_isa_irq(4, &unsupported), Err(IoApicError::UnsupportedBus));
+    }
+
+    #[test]
+    fn isa_resolution_ignores_other_buses_and_rejects_duplicate_isa_overrides() {
+        let overrides = [
+            InterruptSourceOverride {
+                bus: 1,
+                source: 4,
+                global_system_interrupt: 99,
+                flags: 0,
+            },
+            InterruptSourceOverride {
+                bus: 0,
+                source: 4,
+                global_system_interrupt: 20,
+                flags: 0b1111,
+            },
+        ];
+        let (gsi, mode) = resolve_isa_irq(4, &overrides).unwrap();
+        assert_eq!(gsi, 20);
+        assert_eq!(mode, InterruptMode { active_low: true, level_triggered: true });
+
+        let non_isa_only = [InterruptSourceOverride {
+            bus: 1,
+            source: 4,
+            global_system_interrupt: 99,
+            flags: 0,
+        }];
+        assert_eq!(
+            resolve_isa_irq(4, &non_isa_only).unwrap().0,
+            4,
+        );
+
+        let duplicate = [
+            InterruptSourceOverride { bus: 0, source: 4, global_system_interrupt: 20, flags: 0 },
+            InterruptSourceOverride { bus: 0, source: 4, global_system_interrupt: 21, flags: 0 },
+        ];
+        assert_eq!(resolve_isa_irq(4, &duplicate), Err(IoApicError::DuplicateOverride));
     }
 
     #[test]
