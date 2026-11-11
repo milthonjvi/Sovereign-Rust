@@ -29,9 +29,9 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         let descriptor = memory_map.descriptor(index).unwrap_or_else(|_| fatal_halt());
         let region_size = descriptor.number_of_pages.checked_mul(4096)
             .unwrap_or_else(|| fatal_halt());
-        let region_end = descriptor.physical_start.checked_add(region_size)
+        let _region_end = descriptor.physical_start.checked_add(region_size)
             .unwrap_or_else(|| fatal_halt());
-        if descriptor.number_of_pages == 0 || region_end < descriptor.physical_start {
+        if descriptor.number_of_pages == 0 {
             fatal_halt();
         }
     }
