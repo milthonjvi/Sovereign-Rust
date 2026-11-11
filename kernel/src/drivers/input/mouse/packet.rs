@@ -13,7 +13,10 @@ impl Ps2MouseDecoder {
   self.packet[self.index as usize]=byte; self.index+=1;
   if self.index<self.packet_len { return 0; }
   self.index=0; let flags=self.packet[0];
-  let dx=axis(self.packet[1],flags&0x10!=0); let dy=-axis(self.packet[2],flags&0x20!=0);
+  // Overflow means the corresponding signed delta is not representable; do not
+  // synthesize a large movement from the saturated data byte.
+  let dx=if flags&0x40!=0 {0} else {axis(self.packet[1],flags&0x10!=0)};
+  let dy=if flags&0x80!=0 {0} else {-axis(self.packet[2],flags&0x20!=0)};
   let extra=if self.packet_len==4 {(self.packet[3]&0x30)>>1} else {0};
   let buttons=MouseButtons::from_bits((flags&7)|extra); let mut count=0;
   if dx!=0 || dy!=0 { out[count]=Some(InputEvent::MouseMotion{dx,dy}); count+=1; }
