@@ -237,10 +237,16 @@ impl IoApicController {
         Ok(controller)
     }
 
-    /// Construct and read the controller's ID/version registers.
+    /// Construct and read the controller's ID/version registers without
+    /// changing any existing redirection entry.
+    ///
+    /// Prefer `new_masked` during kernel initialization. This constructor is
+    /// only appropriate when the caller has independently guaranteed that
+    /// every existing delivery source is masked and will remain quiescent.
     ///
     /// # Safety
-    /// Caller must uphold the MMIO and serialization contract on this type.
+    /// Caller must uphold the MMIO and serialization contract on this type,
+    /// and must guarantee that preserving firmware routing state is safe.
     pub unsafe fn new(
         base: NonNull<u8>,
         descriptor: IoApic,
