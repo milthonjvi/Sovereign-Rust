@@ -72,6 +72,14 @@ pub enum InputEvent {
     ConsumerControl {
         device: InputDeviceId, usage_page: u16, usage: u16, pressed: bool,
     },
+    /// Unclassified standard/vendor HID value preserved for higher-level
+    /// drivers and applications. `value` is sign-extended according
+    /// to the descriptor; logical bounds and collection identity are retained.
+    HidUsage {
+        device: InputDeviceId, usage_page: u16, usage: u16, value: i32,
+        logical_min: i32, logical_max: i32,
+        application_page: u16, application_usage: u16, relative: bool,
+    },
     /// Device remains connected, but consumers must clear all held keys,
     /// buttons and contacts before applying the next complete report snapshot.
     DeviceStateReset { device: InputDeviceId },
