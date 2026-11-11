@@ -64,19 +64,22 @@ impl UsbBootKeyboardAdapter {
         Ok(stats)
     }
 
+    /// Lifecycle events are lossless at the API boundary: callers retain and
+    /// retry the returned event if the queue is full.
     pub fn publish_connected<const N: usize>(
         &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
-    ) -> HidPublishStats {
-        let mut s = HidPublishStats::default();
-        self.emit(InputEvent::DeviceConnected { device: self.device }, p, &mut s); s
+    ) -> Result<(), InputEvent> {
+        p.push(InputEvent::DeviceConnected { device: self.device })
     }
+    /// Do not clear held-key history until the disconnect event is committed.
+    /// Otherwise a full queue could permanently strand pressed keys downstream.
     pub fn publish_disconnected<const N: usize>(
         &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
-    ) -> HidPublishStats {
+    ) -> Result<(), InputEvent> {
+        p.push(InputEvent::DeviceDisconnected { device: self.device })?;
         self.previous = None;
         self.resync_required = false;
-        let mut s = HidPublishStats::default();
-        self.emit(InputEvent::DeviceDisconnected { device: self.device }, p, &mut s); s
+        Ok(())
     }
     fn emit<const N: usize>(
         &mut self, e: InputEvent, p: &mut SpscProducer<'_, InputEvent, N>, s: &mut HidPublishStats,
@@ -126,19 +129,20 @@ impl UsbBootMouseAdapter {
         }
         Ok(())
     }
+    /// Lifecycle events must be retried when the bounded queue is full.
     pub fn publish_connected<const N: usize>(
         &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
-    ) -> HidPublishStats {
-        let mut s = HidPublishStats::default();
-        self.emit(InputEvent::DeviceConnected { device: self.device }, p, &mut s); s
+    ) -> Result<(), InputEvent> {
+        p.push(InputEvent::DeviceConnected { device: self.device })
     }
+    /// Preserve button history until consumers are guaranteed to receive unplug.
     pub fn publish_disconnected<const N: usize>(
         &mut self, p: &mut SpscProducer<'_, InputEvent, N>,
-    ) -> HidPublishStats {
+    ) -> Result<(), InputEvent> {
+        p.push(InputEvent::DeviceDisconnected { device: self.device })?;
         self.previous_buttons = None;
         self.resync_required = false;
-        let mut s = HidPublishStats::default();
-        self.emit(InputEvent::DeviceDisconnected { device: self.device }, p, &mut s); s
+        Ok(())
     }
     fn pointer<const N: usize>(
         &mut self, dx: i32, dy: i32, wheel_y: i16, buttons: u32,
@@ -218,6 +222,42 @@ mod tests {
         a.publish_report(&[1,1,0], &mut p).unwrap();
         assert!(matches!(c.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(71) })));
         assert!(matches!(c.pop(), Some(InputEvent::PointerMotion { buttons: 1, .. })));
+    }
+
+    #[test]
+    fn keyboard_disconnect_is_retryable_when_queue_is_full() {
+        let mut q = SpscQueue::<InputEvent, 2>::new();
+        let (mut p, mut c) = q.split();
+        let mut adapter = UsbBootKeyboardAdapter::new(InputDeviceId(90));
+        adapter.publish_report(&[0, 0, 4, 0, 0, 0, 0, 0], &mut p).unwrap();
+        assert!(matches!(c.pop(), Some(InputEvent::HidKey { usage: 4, pressed: true, .. })));
+
+        p.push(InputEvent::DeviceConnected { device: InputDeviceId(91) }).unwrap();
+        assert_eq!(
+            adapter.publish_disconnected(&mut p),
+            Err(InputEvent::DeviceDisconnected { device: InputDeviceId(90) }),
+        );
+        assert!(matches!(c.pop(), Some(InputEvent::DeviceConnected { device: InputDeviceId(91) })));
+        assert_eq!(adapter.publish_disconnected(&mut p), Ok(()));
+        assert!(matches!(c.pop(), Some(InputEvent::DeviceDisconnected { device: InputDeviceId(90) })));
+    }
+
+    #[test]
+    fn mouse_disconnect_is_retryable_when_queue_is_full() {
+        let mut q = SpscQueue::<InputEvent, 2>::new();
+        let (mut p, mut c) = q.split();
+        let mut adapter = UsbBootMouseAdapter::new(InputDeviceId(92));
+        adapter.publish_report(&[1, 0, 0], &mut p).unwrap();
+        assert!(matches!(c.pop(), Some(InputEvent::PointerMotion { buttons: 1, .. })));
+
+        p.push(InputEvent::DeviceConnected { device: InputDeviceId(93) }).unwrap();
+        assert_eq!(
+            adapter.publish_disconnected(&mut p),
+            Err(InputEvent::DeviceDisconnected { device: InputDeviceId(92) }),
+        );
+        assert!(matches!(c.pop(), Some(InputEvent::DeviceConnected { device: InputDeviceId(93) })));
+        assert_eq!(adapter.publish_disconnected(&mut p), Ok(()));
+        assert!(matches!(c.pop(), Some(InputEvent::DeviceDisconnected { device: InputDeviceId(92) })));
     }
 
     #[test]
