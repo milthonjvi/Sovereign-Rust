@@ -6,7 +6,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::interrupts::dispatch::{self, HandlerError};
+use crate::interrupts::dispatch;
 
 /// One timer interrupt has arrived and deferred expiration processing is due.
 static TIMER_WORK_PENDING: AtomicBool = AtomicBool::new(false);
@@ -33,7 +33,7 @@ pub fn register_timer_interrupt(vector: u8) -> Result<(), TimerInterruptError> {
         return Err(TimerInterruptError::InvalidVector);
     }
     dispatch::register(vector, timer_interrupt_handler)
-        .map_err(|_error| TimerInterruptError::AlreadyRegistered)
+        .map_err(|_| TimerInterruptError::AlreadyRegistered)
 }
 
 /// Atomically consume the deferred-work signal.
