@@ -16,6 +16,7 @@ pub const REG_STATUS: u32 = 0x0008;
 pub const REG_EECD: u32 = 0x0010;
 pub const REG_EERD: u32 = 0x0014;
 pub const REG_ICR: u32 = 0x00c0;
+pub const REG_ITR: u32 = 0x00c4;
 pub const REG_IMS: u32 = 0x00d0;
 pub const REG_IMC: u32 = 0x00d8;
 pub const REG_RCTL: u32 = 0x0100;
