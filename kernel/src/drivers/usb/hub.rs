@@ -307,6 +307,11 @@ impl HubPortMachine{
    self.clear_connection_change=false;
    return Some(HubPortAction::ClearConnectionChange)
   }
+  if self.clear_warm_reset_change{
+   self.clear_warm_reset_change=false;
+   self.state=HubPortState::Ready;
+   return Some(HubPortAction::ClearWarmResetChange)
+  }
   match self.state{
   HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;self.reset_elapsed_ms=0;Some(if self.superspeed{HubPortAction::WarmReset}else{HubPortAction::Reset})},
   HubPortState::ClearResetChange=>{self.state=HubPortState::Ready;Some(HubPortAction::ClearResetChange)},
