@@ -51,22 +51,33 @@ each kernel segment with its ELF-derived write/execute permissions and NX
 protection. The image allocation and page-table allocations use UEFI
 `AllocatePages` and remain owned by the loader.
 
+The loader now also reserves a 512 KiB UEFI memory-map buffer and a boot-info
+page before page-table construction. It identity-maps the loaded EFI image as
+RX, a bounded window around the current RSP as RW/NX, the memory-map buffer as
+read-only, and the boot-info page as read-only in the new address space. After
+all page-table allocations, it captures a memory-map snapshot and populates
+SovereignBootInfo v1 with the map's physical address, byte size, descriptor
+stride/version, and kernel image metadata. The snapshot is not yet final for
+ExitBootServices: later firmware calls can invalidate its map key.
+
 This is still not a complete handoff. The page-table root is not loaded into
-CR3. The loader has not yet mapped its own executable image, current stack,
-firmware interfaces needed before `ExitBootServices`, handoff structure, or
-final memory-map buffer into the new address space. The kernel does not yet
-consume the Sovereign Boot ABI. The UEFI allocation provider currently accesses
-allocated pages through the firmware's active identity mapping; this assumption
-must be replaced or explicitly guaranteed by the final mapping transition.
+CR3, and the loader does not call ExitBootServices or transfer control. The
+kernel does not yet consume the Sovereign Boot ABI. The UEFI allocation
+provider and image loader currently access allocated pages through the
+firmware's active identity mapping. The current-stack mapping is a conservative
+window, not a firmware-provided authoritative stack bound. The loader image is
+mapped RX as a temporary policy; any mutable static data required after a CR3
+switch must receive an explicit writable, non-executable mapping.
 
 The next stages are:
 
-1. Establish and map the loader runtime, stack, boot-info buffer, and required
-   physical/direct-map regions in the new address space.
-2. Populate the versioned handoff structure and retain every referenced buffer.
-3. Acquire a stable final memory map and call `ExitBootServices` with retry logic.
-4. Switch CR3 only after the post-exit transition path is fully mapped.
-5. Transfer control using the agreed x86_64 entry ABI and add the kernel-side consumer.
+1. Define the exact EFI image section permissions and authoritative stack bounds.
+2. Add the final memory-map refresh and ExitBootServices retry sequence without
+   intervening allocations or firmware calls.
+3. Add the post-exit CR3 switch and x86_64 transition stub.
+4. Add the kernel-side SovereignBootInfo consumer and entry ABI.
+5. Validate the full path in QEMU and on physical UEFI hardware before retiring
+   the Limine compatibility path.
 
 Until those stages are integrated and tested, the kernel's existing Limine
 handoff remains in place as a temporary compatibility path. Do not remove
