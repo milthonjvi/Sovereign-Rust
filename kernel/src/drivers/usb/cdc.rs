@@ -218,3 +218,28 @@ impl CdcAcmPort{
   Ok(CdcTransferReport{bytes_transferred:result.bytes_transferred,short_packet:false})
  }
 }
+
+
+#[cfg(test)]
+mod interface_discovery_tests{
+ use super::*;
+ use super::super::descriptors::{ConfigurationDescriptor,InterfaceDescriptor,ParsedEndpoint,ParsedInterface,MAX_ENDPOINTS,MAX_INTERFACES};
+ #[test]fn discovers_acm_control_and_data_endpoints(){
+  let descriptors=[9,2,42,0,2,1,0,0x80,50,
+   9,4,0,0,1,2,2,1,0,5,0x24,0,0x10,0x01,
+   5,0x24,1,2,1,5,0x24,6,0,1,9,4,1,0,2,0x0a,0,0,0];
+  let mut parsed=ParsedConfiguration{
+   descriptor:ConfigurationDescriptor{total_length:42,interface_count:2,configuration_value:1,configuration_index:0,attributes:0x80,max_power:50},
+   interfaces:[None;MAX_INTERFACES],endpoints:[None;MAX_ENDPOINTS],interface_len:2,endpoint_len:3,
+  };
+  parsed.interfaces[0]=Some(ParsedInterface{descriptor:InterfaceDescriptor{number:0,alternate_setting:0,endpoint_count:1,class:2,subclass:2,protocol:1,string_index:0},first_endpoint:0,endpoint_count:1});
+  parsed.interfaces[1]=Some(ParsedInterface{descriptor:InterfaceDescriptor{number:1,alternate_setting:0,endpoint_count:2,class:USB_CLASS_CDC_DATA,subclass:0,protocol:0,string_index:0},first_endpoint:1,endpoint_count:2});
+  parsed.endpoints[0]=Some(ParsedEndpoint{address:0x83,attributes:3,max_packet_size:16,interval:8,transactions_per_microframe:1,max_burst:0,companion_attributes:0,bytes_per_interval:0,has_ss_companion:false});
+  parsed.endpoints[1]=Some(ParsedEndpoint{address:0x81,attributes:2,max_packet_size:64,interval:0,transactions_per_microframe:1,max_burst:0,companion_attributes:0,bytes_per_interval:0,has_ss_companion:false});
+  parsed.endpoints[2]=Some(ParsedEndpoint{address:0x02,attributes:2,max_packet_size:64,interval:0,transactions_per_microframe:1,max_burst:0,companion_attributes:0,bytes_per_interval:0,has_ss_companion:false});
+  let function=find_acm_interface(&descriptors,&parsed).unwrap();
+  assert_eq!(function.control_interface,0);assert_eq!(function.data_interface,1);
+  assert_eq!(function.bulk_in.address.raw(),0x81);assert_eq!(function.bulk_out.address.raw(),0x02);
+  assert_eq!(function.notification_in.unwrap().address.raw(),0x83);
+ }
+}
