@@ -51,7 +51,7 @@ impl<'a> LanguageIdList<'a>{
  pub fn contains(self,language_id:u16)->bool{
   self.bytes.chunks_exact(2).any(|v|u16::from_le_bytes([v[0],v[1]])==language_id)
  }
- pub fn iter(self)->impl Iterator<Item=u16>+'_{
+ pub fn iter(self)->impl Iterator<Item=u16>+'a{
   self.bytes.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]]))
  }
 }
