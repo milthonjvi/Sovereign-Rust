@@ -6,6 +6,8 @@
 
 use core::ptr;
 
+use crate::drivers::framebuffer::{FramebufferInfo, PixelFormat};
+
 const COMMON_MAGIC_0: u64 = 0xc7b1_dd30_df4c_8b88;
 const COMMON_MAGIC_1: u64 = 0x0a82_e883_a194_f07b;
 
@@ -134,6 +136,56 @@ pub struct LimineBootInfo {
 }
 
 impl LimineBootInfo {
+    /// Return the first boot-provided framebuffer and normalized metadata.
+    ///
+    /// # Safety
+    /// Must only be called after Limine handoff while its response structures
+    /// and framebuffer mapping remain valid.
+    pub unsafe fn framebuffer_info(&self) -> Option<(*mut u8, FramebufferInfo)> {
+        if self.framebuffer.is_null() {
+            return None;
+        }
+        // SAFETY: The caller guarantees Limine response memory remains valid.
+        let response = unsafe { ptr::read(self.framebuffer) };
+        if response.framebuffer_count == 0 || response.framebuffers.is_null() {
+            return None;
+        }
+        // SAFETY: Limine provides an array with framebuffer_count entries.
+        let framebuffer_ptr = unsafe { ptr::read(response.framebuffers) };
+        if framebuffer_ptr.is_null() {
+            return None;
+        }
+        // SAFETY: The first framebuffer pointer is non-null and bootloader-owned.
+        let framebuffer = unsafe { ptr::read(framebuffer_ptr) };
+        if framebuffer.address.is_null() {
+            return None;
+        }
+
+        let pixel_format = match (
+            framebuffer.red_mask_size,
+            framebuffer.green_mask_size,
+            framebuffer.blue_mask_size,
+            framebuffer.red_mask_shift,
+            framebuffer.green_mask_shift,
+            framebuffer.blue_mask_shift,
+        ) {
+            (8, 8, 8, 0, 8, 16) => PixelFormat::Rgb,
+            (8, 8, 8, 16, 8, 0) => PixelFormat::Bgr,
+            _ => return None,
+        };
+
+        let info = FramebufferInfo {
+            address: framebuffer.address as u64,
+            width: usize::try_from(framebuffer.width).ok()?,
+            height: usize::try_from(framebuffer.height).ok()?,
+            pitch: usize::try_from(framebuffer.pitch).ok()?,
+            bits_per_pixel: u8::try_from(framebuffer.bpp).ok()?,
+            pixel_format,
+        };
+        info.validate().ok()?;
+        Some((framebuffer.address, info))
+    }
+
     /// Collect the responses written by a Limine-compatible bootloader.
     ///
     /// # Safety
