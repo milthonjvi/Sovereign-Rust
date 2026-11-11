@@ -43,6 +43,15 @@ pub struct Ps2Diagnostics {
     pub mouse_port: u8,
 }
 
+/// One byte removed from the i8042 output buffer, including its status snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Ps2DataByte {
+    /// Status captured before reading the data port.
+    pub status: u8,
+    /// Byte returned by data port 0x60.
+    pub value: u8,
+}
+
 /// Exclusive owner of the legacy i8042 controller.
 pub struct Ps2Controller {
     poll_limit: usize,
@@ -207,13 +216,22 @@ impl Ps2Controller {
         self.send_device_byte(true, value)
     }
 
-    pub fn try_read_byte(&self) -> Result<Option<u8>, Ps2Error> {
+    /// Reads one pending output byte and preserves its controller status.
+    /// The status snapshot must be passed to the protocol pipeline so mouse
+    /// bytes, parity errors, and timeout errors are not misclassified.
+    pub fn try_read_with_status(&self) -> Result<Option<Ps2DataByte>, Ps2Error> {
         self.ensure_initialized()?;
         // SAFETY: The controller status/data ports are exclusively owned.
         let status = unsafe { io::in8(STATUS_COMMAND) };
         if status & OUTPUT_FULL == 0 { return Ok(None); }
         // SAFETY: OUTPUT_FULL guarantees a byte is available.
-        Ok(Some(unsafe { io::in8(DATA) }))
+        let value = unsafe { io::in8(DATA) };
+        Ok(Some(Ps2DataByte { status, value }))
+    }
+
+    /// Compatibility helper when the caller intentionally does not need status.
+    pub fn try_read_byte(&self) -> Result<Option<u8>, Ps2Error> {
+        Ok(self.try_read_with_status()?.map(|byte| byte.value))
     }
 
     /// Resets keyboard scanning state and enables scan-code reporting.
