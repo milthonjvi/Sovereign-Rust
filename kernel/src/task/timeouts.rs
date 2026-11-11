@@ -5,7 +5,7 @@
 //! the scheduler, which owns task-state transitions and ready-queue insertion.
 
 use crate::time::{
-    ClockSource, Deadline, TimerEvent, TimerId, TscDeadlineQueue, TscDeadlineQueueError,
+    BootstrapTimerInitError, ClockSource, Deadline, TimerEvent, TimerId, TscDeadlineQueue, TscDeadlineQueueError,
 };
 
 /// Stable task identifier used by timeout registration.
@@ -20,6 +20,29 @@ pub struct TaskTimeouts<S: ClockSource, const N: usize> {
 }
 
 impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
+    /// Initialize the BSP hardware timer and task timeout manager end-to-end.
+    ///
+    /// The APIC LVT is configured masked, its handler is registered, the
+    /// deadline queue is constructed, and only then is the timer unmasked.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, after interrupt bootstrap selected x2APIC.
+    /// The source and TSC frequency must be stable for the current CPU.
+    pub unsafe fn initialize_bootstrap(
+        vector: u8,
+        source: S,
+        initial_time_ns: u64,
+        tsc_frequency_hz: u64,
+    ) -> Result<Self, BootstrapTimerInitError> {
+        // SAFETY: Forwarded from this method's bootstrap initialization contract.
+        let timers = unsafe {
+            TscDeadlineQueue::initialize_bootstrap(
+                vector, source, initial_time_ns, tsc_frequency_hz,
+            )?
+        };
+        Ok(Self { timers })
+    }
+
     /// Construct task timeout management on the current CPU.
     ///
     /// # Safety
