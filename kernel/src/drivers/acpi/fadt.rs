@@ -164,7 +164,6 @@ impl PmRegisterBlockLengths {
     pub fn validate(self) -> Result<(), AcpiError> {
         if (self.pm1_event != 0 && (self.pm1_event < 4 || self.pm1_event % 2 != 0))
             || (self.pm1_control != 0 && self.pm1_control < 2)
-            || (self.pm2_control != 0 && self.pm2_control < 1)
             || (self.pm_timer != 0 && self.pm_timer != 4)
             || self.gpe0 % 2 != 0
             || self.gpe1 % 2 != 0
