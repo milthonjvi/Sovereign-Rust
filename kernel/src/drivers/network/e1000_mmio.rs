@@ -17,6 +17,7 @@ pub enum E1000MmioError {
     NullBase,
     MisalignedBase,
     WindowTooSmall,
+    AddressRangeOverflow,
     MisalignedOffset,
     OutOfBounds,
 }
@@ -47,6 +48,11 @@ impl VolatileE1000Registers {
         }
         if length < E1000_MMIO_MIN_LENGTH {
             return Err(E1000MmioError::WindowTooSmall);
+        }
+        (base.as_ptr() as usize).checked_add(length)
+            .ok_or(E1000MmioError::AddressRangeOverflow)?;
+        if length > isize::MAX as usize {
+            return Err(E1000MmioError::AddressRangeOverflow);
         }
         Ok(Self { base, length })
     }
