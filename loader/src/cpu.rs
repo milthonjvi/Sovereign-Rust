@@ -6,7 +6,6 @@ const CPUID_EXTENDED_MAX: u32 = 0x8000_0000;
 const CPUID_EXTENDED_FEATURES: u32 = 0x8000_0001;
 const EFER_MSR: u32 = 0xC000_0080;
 const EFER_NXE: u64 = 1 << 11;
-const CR0_WRITE_PROTECT: u64 = 1 << 16;
 const CPUID_NX: u32 = 1 << 20;
 
 /// Proof token produced only after EFER.NXE is confirmed active.
@@ -67,25 +66,9 @@ pub unsafe fn enable_nxe() -> Result<NxeEnabled, CpuFeatureError> {
             );
         }
     }
-    let cr0: u64;
-    // SAFETY: Read CR0 at CPL 0 before enforcing read-only PTE permissions.
-    unsafe {
-        asm!(
-            "mov {}, cr0",
-            out(reg) cr0,
-            options(nomem, nostack, preserves_flags)
-        );
-    }
-    if cr0 & CR0_WRITE_PROTECT == 0 {
-        // SAFETY: Setting CR0.WP makes supervisor writes obey read-only PTEs.
-        unsafe {
-            asm!(
-                "mov cr0, {}",
-                in(reg) cr0 | CR0_WRITE_PROTECT,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-    }
+    // CR0.WP is deferred until after ExitBootServices. Enabling it while
+    // firmware is still running can expose firmware assumptions about its
+    // supervisor mappings; the final transition enables it with our CR3.
 
     let cr4: u64;
     // SAFETY: Reading CR4 is valid at CPL 0 and does not mutate processor state.
