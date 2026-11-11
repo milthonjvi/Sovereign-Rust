@@ -79,9 +79,9 @@ impl<'a> FramebufferSurface<'a> {
         if dx >= dy {
             let (start, end) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
             let visible_start = start.max(0);
-            let visible_end = end.min(self.info.width.saturating_sub(1) as i64);
+            let visible_end = end.min(i64::try_from(self.info.width.saturating_sub(1)).unwrap_or(i64::MAX));
             if visible_start > visible_end { return; }
-            let y_direction = if (x1 >= x0) == (y1 >= y0) { 1i128 } else { -1i128 };
+            let y_direction = if y1 >= y0 { 1i128 } else { -1i128 };
             for x in visible_start..=visible_end {
                 let distance = (x as i128 - x0 as i128).unsigned_abs();
                 let offset = (distance * dy as u128 + dx as u128 / 2) / dx as u128;
@@ -93,9 +93,9 @@ impl<'a> FramebufferSurface<'a> {
         } else {
             let (start, end) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
             let visible_start = start.max(0);
-            let visible_end = end.min(self.info.height.saturating_sub(1) as i64);
+            let visible_end = end.min(i64::try_from(self.info.height.saturating_sub(1)).unwrap_or(i64::MAX));
             if visible_start > visible_end { return; }
-            let x_direction = if (x1 >= x0) == (y1 >= y0) { 1i128 } else { -1i128 };
+            let x_direction = if x1 >= x0 { 1i128 } else { -1i128 };
             for y in visible_start..=visible_end {
                 let distance = (y as i128 - y0 as i128).unsigned_abs();
                 let offset = (distance * dx as u128 + dy as u128 / 2) / dy as u128;
