@@ -531,6 +531,8 @@ pub unsafe fn set_auto_rts_flow_control(
 
 /// Removes up to the output slice length in one SPSC batch.
 ///
+/// Prefer this over repeated `receive_byte` calls for bulk reads.
+///
 /// The low-watermark RTS transition is evaluated once after the batch, avoiding
 /// repeated modem-control port I/O when a consumer drains many bytes.
 ///
@@ -628,7 +630,10 @@ pub fn receive_high_watermark(base: u16) -> Option<usize> {
     binding(base).map(|port| port.queue.high_watermark())
 }
 
-/// Returns the static RX queue associated with a legacy UART base port.\n/// Do not consume it directly while automatic RTS is enabled; use receive_byte\n/// so the low-watermark transition can reassert the peer's transmit permission.
+/// Returns the static RX queue associated with a legacy UART base port.
+/// Do not consume it directly while automatic RTS is enabled; use receive_byte
+/// or receive_bytes so the low-watermark transition can reassert the peer's
+/// transmit permission.
 pub fn receive_buffer(base: u16) -> Option<&'static UartRxBuffer<RX_CAPACITY>> {
     binding(base).map(|port| port.queue)
 }
@@ -648,6 +653,8 @@ fn drain_port(
     queue: &'static UartRxBuffer<RX_CAPACITY>,
     stats: &'static AtomicRxStatistics,
 ) {
+    // Resolve per-port RTS state once per drain, not once per received byte.
+    let rts_watermarks = binding(base).map(|port| port.rts_watermarks);
     let mut drained = 0;
     while drained < MAX_DRAIN_PER_PORT {
         // SAFETY: The attached UART owns this I/O range and the IRQ handler is
@@ -663,11 +670,13 @@ fn drain_port(
         // SAFETY: This shared-line handler is the only producer for this queue.
         let accepted = unsafe { queue.push(byte) };
         if accepted {
-            let encoded = binding(base).map(|port| port.rts_watermarks.load(Ordering::Acquire)).unwrap_or(0);
-            if encoded != 0 {
-                let (high, _) = decode_rts_watermarks(encoded);
-                if rts_should_deassert(queue.len(), high) {
-                    drive_rts(base, false);
+            if let Some(watermarks) = rts_watermarks {
+                let encoded = watermarks.load(Ordering::Acquire);
+                if encoded != 0 {
+                    let (high, _) = decode_rts_watermarks(encoded);
+                    if rts_should_deassert(queue.len(), high) {
+                        drive_rts(base, false);
+                    }
                 }
             }
         } else {
