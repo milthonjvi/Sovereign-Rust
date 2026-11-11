@@ -523,6 +523,9 @@ fn transition_to_kernel(
             // CR3. This keeps NMI/exception delivery off the firmware stack
             // throughout the address-space transition window.
             "mov rsp, rcx",
+            "mov r10, cr0",
+            "or r10, 0x10000",
+            "mov cr0, r10",
             "mov cr3, rax",
             "mov rdi, rdx",
             "jmp r8",
@@ -531,6 +534,7 @@ fn transition_to_kernel(
             in("rcx") new_stack,
             in("r8") kernel_entry,
             in("r9") &idtr,
+            lateout("r10") _,
             options(noreturn)
         );
     }
