@@ -544,6 +544,7 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
         ) {
             if queue_error_is_fatal(&error) {
                 self.ready = false;
+                self.faulted = true;
             }
             return Err(map_queue_error(error));
         }
