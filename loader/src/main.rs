@@ -91,12 +91,15 @@ pub extern "efiapi" fn efi_main(
     // Reserve a dedicated 256 KiB kernel bootstrap stack. The transition
     // never relies on the firmware-owned stack after CR3 is loaded.
     const KERNEL_STACK_PAGES: usize = 64;
+    const KERNEL_STACK_GUARD_PAGES: u64 = 1;
+    const KERNEL_STACK_ALLOCATION_PAGES: usize =
+        KERNEL_STACK_PAGES + (KERNEL_STACK_GUARD_PAGES as usize * 2);
     let mut kernel_stack_physical = 0u64;
     // SAFETY: Boot Services remain active and the output slot is writable.
     let stack_status = unsafe {
         allocate_loader_pages(
             &mut *(system_table.boot_services as *mut EfiBootServices),
-            KERNEL_STACK_PAGES,
+            KERNEL_STACK_ALLOCATION_PAGES,
             &mut kernel_stack_physical,
         )
     };
@@ -111,7 +114,7 @@ pub extern "efiapi" fn efi_main(
         ptr::write_bytes(
             kernel_stack_physical as usize as *mut u8,
             0,
-            KERNEL_STACK_PAGES * 4096,
+            KERNEL_STACK_ALLOCATION_PAGES * 4096,
         );
     }
 
@@ -210,10 +213,17 @@ pub extern "efiapi" fn efi_main(
         return page_table_error_status(error);
     }
 
+    // Leave one unmapped guard page on both sides of the bootstrap stack.
+    // This turns stack underflow/overflow into a page fault instead of silently
+    // corrupting adjacent loader-owned state.
+    let kernel_stack_base = match kernel_stack_physical.checked_add(4096) {
+        Some(base) => base,
+        None => return EFI_COMPROMISED_DATA,
+    };
     let kernel_stack_size = (KERNEL_STACK_PAGES as u64) * 4096;
     if let Err(error) = map_identity_range(
         &mut page_tables,
-        kernel_stack_physical,
+        kernel_stack_base,
         kernel_stack_size,
         PagePermissions::KERNEL_READ_WRITE,
     ) {
@@ -310,7 +320,8 @@ pub extern "efiapi" fn efi_main(
 
     let kernel_page_table_root = page_tables.root_physical();
     let kernel_stack_size = (KERNEL_STACK_PAGES as u64) * 4096;
-    let kernel_stack_top = match kernel_stack_physical.checked_add(kernel_stack_size) {
+    let kernel_stack_top_offset = (KERNEL_STACK_PAGES as u64 + KERNEL_STACK_GUARD_PAGES) * 4096;
+    let kernel_stack_top = match kernel_stack_physical.checked_add(kernel_stack_top_offset) {
         Some(top) => top,
         None => return EFI_COMPROMISED_DATA,
     };
