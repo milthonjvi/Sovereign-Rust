@@ -201,6 +201,7 @@ pub unsafe fn initialize<R: E1000Registers>(
     let ral = registers.read32(REG_RAL0).map_err(E1000InitError::Register)?;
     let rah = registers.read32(REG_RAH0).map_err(E1000InitError::Register)?;
     let mac = mac_address_from_registers(ral, rah)
+        .filter(|address| address.is_unicast())
         .ok_or(E1000InitError::MissingMacAddress)?;
 
     program_ring(registers, REG_RDBAL, REG_RDBAH, REG_RDLEN, REG_RDH, REG_RDT, queues.rx)
@@ -770,7 +771,7 @@ mod tests {
             if offset == REG_CTRL {
                 return Ok(if self.reset_stuck { CTRL_RST } else { 0 });
             }
-            if offset == REG_RAL0 { return Ok(0x4433_2211); }
+            if offset == REG_RAL0 { return Ok(0x4433_2202); }
             if offset == REG_STATUS { return Ok(STATUS_LU | STATUS_FD | (2 << STATUS_SPEED_SHIFT)); }
             if offset == REG_RAH0 { return Ok(0x8000_6655); }
             Ok(0)
