@@ -1,7 +1,7 @@
 use super::EfiStatus;
 
-/// UEFI Simple Text Output Protocol prefix. The first two slots are Reset and
-/// OutputString, in that order as required by the firmware ABI.
+/// UEFI Simple Text Output Protocol prefix. Reset and OutputString are the
+/// first two function slots in the firmware ABI.
 #[repr(C)]
 pub struct EfiSimpleTextOutputProtocol {
     reset: usize,
@@ -16,19 +16,21 @@ pub struct Console<'a> {
     protocol: &'a mut EfiSimpleTextOutputProtocol,
 }
 
-impl<'a> Console<'a> {
+impl Console<'static> {
     /// Construct a console wrapper from the firmware protocol pointer.
     ///
     /// # Safety
-    /// The pointer must reference a valid, uniquely borrowed UEFI Simple Text
-    /// Output Protocol instance for the lifetime of the returned wrapper.
+    /// The pointer must reference a valid UEFI protocol instance that remains
+    /// valid for the returned lifetime. The caller must ensure exclusive use.
     pub unsafe fn from_ptr(protocol: *mut EfiSimpleTextOutputProtocol) -> Self {
-        // SAFETY: The caller upholds the protocol pointer and exclusivity contract.
+        // SAFETY: The caller guarantees validity and exclusive access.
         Self {
             protocol: unsafe { &mut *protocol },
         }
     }
+}
 
+impl Console<'_> {
     /// Write ASCII as null-terminated UTF-16 without allocating.
     pub fn write_ascii(&mut self, text: &str) -> bool {
         let Some(output_string) = self.protocol.output_string else {
