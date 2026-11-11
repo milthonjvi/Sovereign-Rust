@@ -148,7 +148,7 @@ impl Trb{
   Self{parameter:buffer,status:(length&0x1ffff)|(((td_size as u32)&0x1f)<<17),
    control:((TrbType::Normal as u32)<<10)|(1<<4)|((interrupt_on_completion as u32)<<5)|(1<<2)}
  }
- pub const fn setup_stage(setup:super::super::transfer::SetupPacket)->Self{
+ pub fn setup_stage(setup:super::transfer::SetupPacket)->Self{
   let encoded=setup.encode();
   let parameter=u64::from_le_bytes(encoded);
   let trt=if setup.length==0{0}else if setup.request_type&0x80!=0{3}else{2};
@@ -156,7 +156,7 @@ impl Trb{
  }
  pub const fn data_stage(buffer:u64,length:u32,td_size:u8,direction_in:bool,interrupt_on_completion:bool)->Self{
   Self{parameter:buffer,status:(length&0x1ffff)|(((td_size as u32)&0x1f)<<17),
-   control:((TrbType::DataStage as u32)<<10)|((direction_in as u32)<<16)|(1<<4)|((interrupt_on_completion as u32)<<5)}
+   control:((TrbType::DataStage as u32)<<10)|((direction_in as u32)<<16)|(1<<4)|(1<<2)|((interrupt_on_completion as u32)<<5)}
  }
  pub const fn status_stage(direction_in:bool,interrupt_on_completion:bool)->Self{
   Self{parameter:0,status:0,control:((TrbType::StatusStage as u32)<<10)|((direction_in as u32)<<16)|((interrupt_on_completion as u32)<<5)}
