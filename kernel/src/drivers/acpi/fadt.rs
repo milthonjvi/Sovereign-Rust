@@ -319,6 +319,27 @@ mod tests {
     }
 
     #[test]
+    fn prefers_nonzero_extended_facs_pointer_and_falls_back_to_legacy() {
+        let mut bytes = make_fadt(148, 0, None, None);
+        bytes[36..40].copy_from_slice(&0x4000u32.to_le_bytes());
+        bytes[132..140].copy_from_slice(&0x1_0000_4000u64.to_le_bytes());
+        bytes[9] = 0;
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert_eq!(fadt.firmware_control_address(), 0x1_0000_4000);
+
+        let mut legacy = make_fadt(148, 0, None, None);
+        legacy[36..40].copy_from_slice(&0x5000u32.to_le_bytes());
+        legacy[132..140].copy_from_slice(&0u64.to_le_bytes());
+        legacy[9] = 0;
+        let checksum = 0u8.wrapping_sub(legacy.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        legacy[9] = checksum;
+        let fadt = Fadt::parse(&legacy).unwrap();
+        assert_eq!(fadt.firmware_control_address(), 0x5000);
+    }
+
+    #[test]
     fn validates_gas_width_offset_access_and_address() {
         assert_eq!(valid_reset_gas().validate(), Ok(()));
         let mut gas = valid_reset_gas();
