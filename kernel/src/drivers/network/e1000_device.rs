@@ -10,7 +10,7 @@ use super::device::{
 };
 use super::dma::DmaBuffer;
 use super::e1000::{
-    supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL, REG_RAL0, REG_RAH0, REG_MTA_BASE,
+    supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL, REG_RAL0, REG_RAH0, REG_MTA_BASE, REG_ITR,
 };
 use super::e1000_descriptor::mac_address_from_registers;
 use super::e1000_filter::E1000MulticastFilter;
@@ -196,6 +196,23 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             return Err(DriverError::HardwareFault);
         }
         self.multicast_filter = next;
+        Ok(())
+    }
+
+    /// Configure the minimum interval between device interrupts.
+    ///
+    /// The ITR value is expressed in 256-nanosecond units. Zero disables
+    /// throttling; configure this before enabling the APIC interrupt bridge
+    /// when the desired policy is known.
+    pub fn set_interrupt_throttle(&mut self, interval_256ns: u16) -> Result<(), DriverError> {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        if self.registers.write32(REG_ITR, interval_256ns as u32).is_err() {
+            self.ready = false;
+            self.faulted = true;
+            return Err(DriverError::HardwareFault);
+        }
         Ok(())
     }
 
