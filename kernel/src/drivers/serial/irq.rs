@@ -529,6 +529,49 @@ pub unsafe fn set_auto_rts_flow_control(
     Ok(())
 }
 
+/// Removes up to the output slice length in one SPSC batch.
+///
+/// The low-watermark RTS transition is evaluated once after the batch, avoiding
+/// repeated modem-control port I/O when a consumer drains many bytes.
+///
+/// # Safety
+/// Exactly one consumer may call this function. Call with IF clear on the CPU
+/// servicing this UART IRQ so the MCR update cannot race the IRQ producer.
+pub unsafe fn receive_bytes(base: u16, output: &mut [u8]) -> Option<usize> {
+    let port = binding(base)?;
+    // SAFETY: The caller upholds the SPSC single-consumer contract.
+    let received = unsafe { drain_rx_queue(port.queue, output) };
+    if received != 0 {
+        let encoded = port.rts_watermarks.load(Ordering::Acquire);
+        if encoded != 0 {
+            let (_, low) = decode_rts_watermarks(encoded);
+            if rts_should_assert(port.queue.len(), low) {
+                drive_rts(base, true);
+            }
+        }
+    }
+    Some(received)
+}
+
+#[inline]
+unsafe fn drain_rx_queue<const N: usize>(
+    queue: &UartRxBuffer<N>,
+    output: &mut [u8],
+) -> usize {
+    let mut received = 0;
+    while received < output.len() {
+        // SAFETY: The caller owns the queue's unique consumer role.
+        match unsafe { queue.pop() } {
+            Some(byte) => {
+                output[received] = byte;
+                received += 1;
+            }
+            None => break,
+        }
+    }
+    received
+}
+
 /// Removes one byte and services the low-watermark RTS transition.
 ///
 /// # Safety
@@ -789,6 +832,19 @@ pub(super) fn is_attached(base: u16) -> bool {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn batch_rx_drain_preserves_order_and_respects_output_limit() {
+        let queue = UartRxBuffer::<8>::new();
+        for byte in [0x11, 0x22, 0x33, 0x44] {
+            assert!(unsafe { queue.push(byte) });
+        }
+        let mut output = [0u8; 3];
+        assert_eq!(unsafe { drain_rx_queue(&queue, &mut output) }, 3);
+        assert_eq!(output, [0x11, 0x22, 0x33]);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(unsafe { queue.pop() }, Some(0x44));
+    }
 
     #[test]
     fn rts_watermarks_encode_and_decode_without_loss() {
