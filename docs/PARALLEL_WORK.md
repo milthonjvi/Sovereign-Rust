@@ -8,8 +8,8 @@ paths or redefine shared interfaces independently.
 
 | Workstream | Assigned paths | Must not modify |
 |---|---|---|
-| Core integration and x86_64 bootstrap (coordinator) | root manifests, `README.md`, `docs/`, shared interfaces, `kernel/src/arch/x86_64/**`, `kernel/src/boot/**` | active workstream-owned files |
-| Boot and image pipeline | `boot/**`, `tools/boot/**` | `kernel/src/**`, root manifests, shared docs |
+| Core integration, Sovereign Boot UEFI, and x86_64 bootstrap (coordinator) | root manifests, `README.md`, `docs/`, `loader/**`, shared interfaces, `kernel/src/arch/x86_64/**`, `kernel/src/boot/**` | active workstream-owned files |
+| Boot and image pipeline | `boot/**`, `tools/boot/**` | `loader/**`, `kernel/src/**`, root manifests, shared docs |
 | Advanced x86_64 CPU support | coordinator-owned `kernel/src/arch/x86_64/**` (coordinate before edits) | boot pipeline, memory, drivers, scheduler |
 | Memory management | `kernel/src/memory/**` | architecture implementation, boot pipeline, drivers |
 | Interrupts and exceptions | `kernel/src/interrupts/**` | boot pipeline, memory allocator, drivers |
