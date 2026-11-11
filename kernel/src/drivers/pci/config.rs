@@ -11,9 +11,9 @@ impl PciIdentity{pub fn read<A:ConfigAccess>(io:&A,a:PciAddress)->Result<Option<
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct PciFunction{pub address:PciAddress,pub identity:PciIdentity}
 /// Scan one bus into caller-owned storage; no heap allocation is performed.
 pub fn scan_bus<A:ConfigAccess>(io:&A,segment:u16,bus:u8,out:&mut[PciFunction])->Result<usize,ConfigError>{let mut count=0;for device in 0..MAX_DEVICES{let a=PciAddress{segment,bus,device,function:0};let Some(first)=PciIdentity::read(io,a)? else{continue};if count<out.len(){out[count]=PciFunction{address:a,identity:first};count+=1}let limit=if first.is_multifunction(){MAX_FUNCTIONS}else{1};for function in 1..limit{let a=PciAddress{segment,bus,device,function};if let Some(identity)=PciIdentity::read(io,a)?{if count<out.len(){out[count]=PciFunction{address:a,identity};count+=1}}}}Ok(count)}
-#[derive(Clone,Copy,Debug,Eq,PartialEq)] pub enum BarKind{Io,Memory32,Memory64}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)] pub enum BarKind{Io,MemoryBelow1M,Memory32,Memory64}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct Bar{pub index:u8,pub kind:BarKind,pub prefetchable:bool,pub base:u64,pub raw_low:u32,pub raw_high:Option<u32>}
-impl Bar{pub const fn decode(index:u8,low:u32,high:Option<u32>)->Option<Self>{if low&1!=0{return Some(Self{index,kind:BarKind::Io,prefetchable:false,base:(low&!3)as u64,raw_low:low,raw_high:None})}let ty=(low>>1)&3;if ty==0{Some(Self{index,kind:BarKind::Memory32,prefetchable:low&8!=0,base:(low&!15)as u64,raw_low:low,raw_high:None})}else if ty==2{match high{Some(hi)=>Some(Self{index,kind:BarKind::Memory64,prefetchable:low&8!=0,base:((hi as u64)<<32)|(low as u64&!15),raw_low:low,raw_high:Some(hi)}),None=>None}}else{None}}}
+impl Bar{pub const fn decode(index:u8,low:u32,high:Option<u32>)->Option<Self>{if low&1!=0{return Some(Self{index,kind:BarKind::Io,prefetchable:false,base:(low&!3)as u64,raw_low:low,raw_high:None})}let ty=(low>>1)&3;if ty==0{Some(Self{index,kind:BarKind::Memory32,prefetchable:low&8!=0,base:(low&!15)as u64,raw_low:low,raw_high:None})}else if ty==1{Some(Self{index,kind:BarKind::MemoryBelow1M,prefetchable:low&8!=0,base:(low&0x000f_fff0)as u64,raw_low:low,raw_high:None})}else if ty==2{match high{Some(hi)=>Some(Self{index,kind:BarKind::Memory64,prefetchable:low&8!=0,base:((hi as u64)<<32)|(low as u64&!15),raw_low:low,raw_high:Some(hi)}),None=>None}}else{None}}}
 /// PCIe ECAM window descriptor, normally sourced from ACPI MCFG.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct EcamWindow{pub segment:u16,pub start_bus:u8,pub end_bus:u8,pub physical_base:u64}
 impl EcamWindow{pub const fn contains(self,a:PciAddress)->bool{a.segment==self.segment&&a.bus>=self.start_bus&&a.bus<=self.end_bus}pub const fn offset(self,a:PciAddress,register:u16)->Option<u64>{if !self.contains(a)||a.device>=MAX_DEVICES||a.function>=MAX_FUNCTIONS||register>=PCIE_CONFIG_SIZE||register&3!=0{return None}Some((((a.bus-self.start_bus)as u64)<<20)|((a.device as u64)<<15)|((a.function as u64)<<12)|register as u64)}}
@@ -21,38 +21,31 @@ impl EcamWindow{pub const fn contains(self,a:PciAddress)->bool{a.segment==self.s
 /// Read the currently programmed BAR values without probing or modifying them.
 /// The output buffer must hold every decoded BAR; a 64-bit BAR consumes two
 /// configuration registers but produces one Bar entry.
-pub fn read_bars<A: ConfigAccess>(
-    io: &A,
-    function: PciFunction,
-    out: &mut [Bar],
-) -> Result<usize, ConfigError> {
+pub fn read_bars<A: ConfigAccess>(io: &A, function: PciFunction, out: &mut [Bar]) -> Result<usize, ConfigError> {
     let count = function.identity.bar_register_count();
     let mut index = 0u8;
     let mut written = 0usize;
-
     while index < count {
         let register = 0x10u16 + (index as u16) * 4;
         let low = io.read_u32(function.address, register)?;
         let is_64_bit_memory = low & 1 == 0 && ((low >> 1) & 3) == 2;
         let high = if is_64_bit_memory {
-            if index + 1 >= count {
-                return Err(ConfigError::InvalidBar);
-            }
+            if index + 1 >= count { return Err(ConfigError::InvalidBar); }
             Some(io.read_u32(function.address, register + 4)?)
-        } else {
-            None
-        };
-
+        } else { None };
         let bar = Bar::decode(index, low, high).ok_or(ConfigError::InvalidBar)?;
-        if written >= out.len() {
-            return Err(ConfigError::BufferTooSmall);
-        }
+        if written >= out.len() { return Err(ConfigError::BufferTooSmall); }
         out[written] = bar;
         written += 1;
         index += if is_64_bit_memory { 2 } else { 1 };
     }
-
     Ok(written)
 }
 
-#[cfg(test)] mod tests{use super::*;#[test]fn bdf_bounds(){assert!(PciAddress::new(0,0,31,7).is_some());assert!(PciAddress::new(0,0,32,0).is_none());}#[test]fn bar_decode(){assert_eq!(Bar::decode(0,0x1001,None).unwrap().base,0x1000);assert!(Bar::decode(0,0x1004,None).is_none());assert_eq!(Bar::decode(0,0x100c,Some(1)).unwrap().base,0x1_0000_1000);}#[test]fn ecam_offset(){let w=EcamWindow{segment:0,start_bus:32,end_bus:63,physical_base:0xe0000000};let a=PciAddress{segment:0,bus:33,device:2,function:3};assert_eq!(w.offset(a,0x100),Some(0x10_0000+0x1_0000+0x1800+0x100));}}
+#[cfg(test)] mod tests {
+    use super::*;
+    #[test] fn bdf_bounds(){assert!(PciAddress::new(0,0,31,7).is_some());assert!(PciAddress::new(0,0,32,0).is_none());}
+    #[test] fn bar_decode(){assert_eq!(Bar::decode(0,0x1001,None).unwrap().base,0x1000);assert!(Bar::decode(0,0x1004,None).is_none());assert_eq!(Bar::decode(0,0x100c,Some(1)).unwrap().base,0x1_0000_1000);}
+    #[test] fn decodes_below_one_megabyte_bar(){let bar=Bar::decode(0,0x0008_1002,None).unwrap();assert_eq!(bar.kind,BarKind::MemoryBelow1M);assert_eq!(bar.base,0x81000);}
+    #[test] fn ecam_offset(){let w=EcamWindow{segment:0,start_bus:32,end_bus:63,physical_base:0xe0000000};let a=PciAddress{segment:0,bus:33,device:2,function:3};assert_eq!(w.offset(a,0x100),Some(0x10_0000+0x1_0000+0x1800+0x100));}
+}
