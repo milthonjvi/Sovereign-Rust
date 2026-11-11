@@ -131,6 +131,7 @@ impl AcpiTables {
             // power-management consumer, not required for table discovery.
             fadt.validate_firmware_metadata()?;
             fadt.validate_fixed_feature_flags()?;
+            fadt.validate_boot_architecture_flags()?;
 
             // FACS is referenced by FADT.FIRMWARE_CTRL / X_FIRMWARE_CTRL,
             // not listed in the RSDT/XSDT. It has no SDT checksum. Prefer a
