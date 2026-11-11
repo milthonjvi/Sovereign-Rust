@@ -141,11 +141,42 @@ pub struct EfiMemoryDescriptor {
     pub attribute: u64,
 }
 
+impl EfiMemoryDescriptor {
+    pub const fn new(
+        memory_type: u32,
+        physical_start: u64,
+        virtual_start: u64,
+        number_of_pages: u64,
+        attribute: u64,
+    ) -> Self {
+        Self {
+            memory_type,
+            _padding: 0,
+            physical_start,
+            virtual_start,
+            number_of_pages,
+            attribute,
+        }
+    }
+}
+
 pub struct EfiMemoryMap<'a> {
     base: *const u8,
     byte_len: usize,
     descriptor_stride: usize,
     _lifetime: core::marker::PhantomData<&'a [u8]>,
+}
+
+impl<'a> EfiMemoryMap<'a> {
+    #[cfg(test)]
+    pub(crate) fn from_descriptors(descriptors: &'a [EfiMemoryDescriptor]) -> Self {
+        Self {
+            base: descriptors.as_ptr().cast::<u8>(),
+            byte_len: core::mem::size_of_val(descriptors),
+            descriptor_stride: core::mem::size_of::<EfiMemoryDescriptor>(),
+            _lifetime: core::marker::PhantomData,
+        }
+    }
 }
 
 impl EfiMemoryMap<'_> {
