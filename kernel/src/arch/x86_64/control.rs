@@ -104,6 +104,43 @@ pub unsafe fn write_cr0(value: u64) {
 }
 
 #[inline]
+/// Write CR3 (page-table root and optional PCID).
+///
+/// # Safety
+/// Must execute at CPL 0. The root must be page-aligned and refer to a valid
+/// page-table hierarchy; PCID/no-flush bits must obey the active CR4.PCIDE state.
+pub unsafe fn write_cr3(value: u64) {
+    // SAFETY: Caller guarantees ring 0 and a valid CR3 value.
+    unsafe { core::arch::asm!("mov cr3, {}", in(reg) value, options(nomem, nostack, preserves_flags)); }
+}
+
+#[inline]
+/// Invalidate one linear address in the local processor's TLB.
+///
+/// # Safety
+/// Must execute at CPL 0. The address must be canonical for the active paging
+/// mode. Other processors require their own invalidation or a TLB shootdown.
+pub unsafe fn invalidate_page(address: u64) {
+    // SAFETY: Caller guarantees CPL 0 and a canonical linear address.
+    unsafe { core::arch::asm!("invlpg [{}]", in(reg) address, options(nostack, preserves_flags)); }
+}
+
+#[inline]
+/// Flush non-global translations for the current address space on this CPU.
+///
+/// This preserves the current physical root and PCID. Global translations are
+/// intentionally not invalidated; use a PGE-aware global flush when required.
+///
+/// # Safety
+/// Must execute at CPL 0 with a valid active CR3 and correct PCID state.
+pub unsafe fn flush_current_address_space() {
+    // SAFETY: Caller guarantees ring 0 and a valid current page-table root.
+    let current = unsafe { read_cr3() };
+    // A zero no-flush bit requests a context flush when PCID is enabled.
+    unsafe { write_cr3(current & !(1u64 << 63)) };
+}
+
+#[inline]
 /// Write CR4.
 ///
 /// # Safety
