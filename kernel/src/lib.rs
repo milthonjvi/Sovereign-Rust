@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 //! Sovereign Core kernel.
 //!
 //! The kernel is split into portable policy and architecture-specific mechanisms.
