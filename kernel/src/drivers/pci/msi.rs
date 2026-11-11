@@ -3,7 +3,7 @@
 //! This module discovers capability state and resource locations only. It does
 //! not enable MSI/MSI-X, program message addresses, or touch device BAR memory.
 use super::capabilities::Capability;
-use super::config::{ConfigAccess, ConfigError, PciAddress, PciIdentity, PCI_CONFIG_SIZE};
+use super::config::{Bar, BarKind, ConfigAccess, ConfigError, PciAddress, PciIdentity, PCI_CONFIG_SIZE};
 
 pub const MSI_CAPABILITY_ID: u8 = 0x05;
 pub const MSIX_CAPABILITY_ID: u8 = 0x11;
@@ -49,6 +49,7 @@ impl MsiCapability {
         let masking = control & (1 << 8) != 0;
         let mmc = ((control >> 1) & 0x7) as u8;
         let mme = ((control >> 4) & 0x7) as u8;
+        if mme > mmc { return Err(ConfigError::OutOfRange); }
         let address_low = read_standard(io, address, offset + 4)?;
         let (message_address, data_register) = if is_64 {
             let address_high = read_standard(io, address, offset + 8)?;
@@ -142,6 +143,20 @@ impl MsixCapability {
         } else {
             Ok(())
         }
+    }
+
+    /// Validate that both BIR values resolve to decoded memory BARs.
+    /// Pass the output of `read_bars`; 64-bit BAR upper slots are not accepted
+    /// as independent resources because they are not emitted as separate entries.
+    pub fn validate_bars(self, bars: &[Bar]) -> Result<(), ConfigError> {
+        let table = bars.iter().find(|bar| bar.index == self.table_bar)
+            .ok_or(ConfigError::InvalidBar)?;
+        let pba = bars.iter().find(|bar| bar.index == self.pending_bit_array_bar)
+            .ok_or(ConfigError::InvalidBar)?;
+        if table.kind == BarKind::Io || pba.kind == BarKind::Io {
+            return Err(ConfigError::InvalidBar);
+        }
+        Ok(())
     }
 
     /// Required byte length of the MSI-X table (16 bytes per vector).
