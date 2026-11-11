@@ -21,7 +21,8 @@ pub enum KeyCode {
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, NumLock, ScrollLock,
     Keypad7, Keypad8, Keypad9, KeypadMinus, Keypad4, Keypad5, Keypad6,
     KeypadPlus, Keypad1, Keypad2, Keypad3, Keypad0, KeypadPeriod, KeypadEnter,
-    F11, F12, RightCtrl, RightAlt, Home, Up, PageUp, Left, Right, End, Down,
+    KeypadSlash, F11, F12, RightCtrl, RightAlt, LeftMeta, RightMeta, Menu,
+    PrintScreen, Home, Up, PageUp, Left, Right, End, Down,
     PageDown, Insert, Delete, Unknown(u16),
 }
 
