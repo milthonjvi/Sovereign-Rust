@@ -66,6 +66,85 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// barrier and one RX-tail MMIO update. Invalid, fragmented, and undersized
     /// frames are dropped; valid frames are packed into the leading output slots.
     /// All scratch storage is supplied by the caller and no allocation occurs.
+    /// Process a batch of completed RX frames directly from DMA memory.
+    ///
+    /// This combines zero-copy delivery with one RX ownership barrier and one
+    /// tail-register update for the batch. The callback must be bounded and
+    /// nonblocking; each borrowed frame expires before its descriptor is recycled.
+    pub fn receive_with_batch<F>(
+        &mut self,
+        completions: &mut [(u16, RxCompletion)],
+        recycle_backup: &mut [RxDescriptor],
+        mut consume: F,
+    ) -> Result<usize, DriverError>
+    where
+        F: FnMut(&[u8]),
+    {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        let limit = core::cmp::min(
+            core::cmp::min(completions.len(), recycle_backup.len()),
+            self.rx_descriptors.len(),
+        );
+        if limit == 0 {
+            return Ok(0);
+        }
+
+        let received = match self.rx_queue.poll_batch(
+            self.registers,
+            self.rx_descriptors,
+            &mut completions[..limit],
+        ) {
+            Ok(received) => received,
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                    self.faulted = true;
+                }
+                return Err(map_queue_error(error));
+            }
+        };
+        if received == 0 {
+            return Ok(0);
+        }
+
+        let mut delivered = 0usize;
+        for (index, completion) in completions[..received].iter() {
+            let slot = *index as usize;
+            if slot >= self.rx_buffers.len() {
+                self.ready = false;
+                self.faulted = true;
+                return Err(DriverError::HardwareFault);
+            }
+            let was_fragmented = self.dropping_rx_frame;
+            self.dropping_rx_frame = !completion.end_of_packet;
+            let length = completion.length as usize;
+            let valid = !was_fragmented
+                && completion.end_of_packet
+                && completion.errors == 0
+                && length != 0
+                && length <= E1000_MAX_FRAME_SIZE
+                && length <= self.rx_buffers[slot].len();
+            if valid {
+                consume(&self.rx_buffers[slot].as_slice()[..length]);
+                delivered += 1;
+            }
+        }
+
+        if let Err(error) = self.rx_queue.recycle_batch(
+            self.registers,
+            self.rx_descriptors,
+            &completions[..received],
+            &mut recycle_backup[..received],
+        ) {
+            self.ready = false;
+            self.faulted = true;
+            return Err(map_queue_error(error));
+        }
+        Ok(delivered)
+    }
+
     pub fn receive_batch(
         &mut self,
         outputs: &mut [&mut [u8]],
