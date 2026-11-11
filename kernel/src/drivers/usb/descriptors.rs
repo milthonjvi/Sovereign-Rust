@@ -16,7 +16,7 @@ impl DeviceDescriptor {
   let d=Self{usb_release:w(2),device_class:b[4],device_subclass:b[5],device_protocol:b[6],
    max_packet_size_0:b[7],vendor_id:w(8),product_id:w(10),device_release:w(12),
    manufacturer_index:b[14],product_index:b[15],serial_index:b[16],configurations:b[17]};
-  if d.max_packet_size_0==0||d.configurations==0{return Err(UsbError::MalformedDescriptor)}
+  if !matches!(d.max_packet_size_0,8|16|32|64|9)||d.configurations==0{return Err(UsbError::MalformedDescriptor)}
   Ok(d)
  }
 }
@@ -255,5 +255,18 @@ mod superspeed_companion_validation_tests{
  }
  #[test]fn rejects_reserved_isochronous_endpoint_attribute_bits(){
   assert_eq!(ParsedEndpoint::parse(&[7,5,0x81,0x41,0,2,1]),Err(UsbError::MalformedDescriptor));
+ }
+}
+
+#[cfg(test)]
+mod device_descriptor_validation_tests{
+ use super::*;
+ #[test]fn accepts_usb3_ep0_packet_size_encoding(){
+  let mut d=[0u8;18];d[0]=18;d[1]=1;d[7]=9;d[17]=1;
+  assert_eq!(DeviceDescriptor::parse(&d).unwrap().max_packet_size_0,9);
+ }
+ #[test]fn rejects_invalid_ep0_packet_size(){
+  let mut d=[0u8;18];d[0]=18;d[1]=1;d[7]=12;d[17]=1;
+  assert_eq!(DeviceDescriptor::parse(&d),Err(UsbError::MalformedDescriptor));
  }
 }
