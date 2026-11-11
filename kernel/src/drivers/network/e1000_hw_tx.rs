@@ -1,6 +1,6 @@
 //! E1000 transmit descriptor-ring ownership and publication.
 
-use super::*;
+use super::{E1000Error, E1000QueueError, E1000Registers, RingCursor, TxDescriptor, REG_TDT, TXD_STATUS_DD};
 
 impl E1000TxQueue {
     pub(crate) fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
