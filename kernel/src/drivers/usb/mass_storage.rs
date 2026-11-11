@@ -54,9 +54,10 @@ impl CommandStatusWrapper{
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct BotResult{pub tag:u32,pub bytes_transferred:u32,pub residue:u32,pub command_failed:bool}
-pub struct BulkOnlyTransport{pub device:DeviceAddress,pub interface:MassStorageInterface,next_tag:u32}
+pub struct BulkOnlyTransport{pub device:DeviceAddress,pub interface:MassStorageInterface,pub lun:u8,next_tag:u32}
 impl BulkOnlyTransport{
- pub const fn new(device:DeviceAddress,interface:MassStorageInterface)->Self{Self{device,interface,next_tag:1}}
+ pub const fn new(device:DeviceAddress,interface:MassStorageInterface)->Self{Self{device,interface,lun:0,next_tag:1}}
+ pub fn select_lun(&mut self,lun:u8)->Result<(),UsbError>{if lun>15{return Err(UsbError::MalformedDescriptor)}self.lun=lun;Ok(())}
  pub fn max_lun<C:HostController>(&self,controller:&mut C)->Result<u8,UsbError>{
   let mut data=[0u8;1];
   let report=execute_control(controller,self.device,get_max_lun_request(self.interface.interface_number),&mut data)?;
@@ -91,7 +92,7 @@ impl BulkOnlyTransport{
   cbw[4..8].copy_from_slice(&tag.to_le_bytes());
   cbw[8..12].copy_from_slice(&length.to_le_bytes());
   cbw[12]=if direction==DataDirection::In{0x80}else{0};
-  cbw[13]=0;cbw[14]=command.length;cbw[15..15+command.length as usize].copy_from_slice(&command.bytes[..command.length as usize]);
+  cbw[13]=self.lun;cbw[14]=command.length;cbw[15..15+command.length as usize].copy_from_slice(&command.bytes[..command.length as usize]);
   let cbw_result=controller.bulk_transfer(self.device,self.interface.bulk_out,&mut cbw)?;
   require_exact(cbw_result,CBW_LENGTH)?;
   let mut transferred=0u32;
