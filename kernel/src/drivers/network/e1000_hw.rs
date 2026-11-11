@@ -684,9 +684,14 @@ mod tests {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1_0000_1000, 0x1_0000_2000).unwrap();
         let mut rx = [RxDescriptor::default(); 32];
-        let rx_buffers = core::array::from_fn(|index| 0x4000u64 + index as u64 * 2048);
+        let mut rx_storage = [[0u8; 2048]; 32];
+        let rx_buffers: Vec<DmaBuffer<'_>> = rx_storage.iter_mut().enumerate()
+            .map(|(index, bytes)| DmaBuffer::new(0x4000 + index as u64 * 2048, bytes).unwrap())
+            .collect();
         let mut tx = [TxDescriptor::default(); 32];
-        let info = initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true).unwrap();
+        // SAFETY: MockRegisters does not perform DMA; these buffers model the
+        // pinned mappings supplied by the platform in a real initialization.
+        let info = unsafe { initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true) }.unwrap();
         assert_eq!(info.mac, MacAddress([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]));
         assert_eq!(rx[0].buffer_address, 0x4000);
         assert_eq!(rx[0].status, 0);
@@ -857,9 +862,13 @@ mod tests {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1000, 0x2000).unwrap();
         let mut rx = [RxDescriptor::default(); 32];
-        let rx_buffers = [0x4000u64; 32];
+        let mut rx_storage = [[0u8; 2048]; 32];
+        let rx_buffers: Vec<DmaBuffer<'_>> = rx_storage.iter_mut().enumerate()
+            .map(|(index, bytes)| DmaBuffer::new(0x4000 + index as u64 * 2048, bytes).unwrap())
+            .collect();
         let mut tx = [TxDescriptor::default(); 32];
-        assert_eq!(initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, false), Err(E1000InitError::BusMasterDisabled));
+        // SAFETY: MockRegisters does not perform DMA; these buffers model pinned mappings.
+        assert_eq!(unsafe { initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, false) }, Err(E1000InitError::BusMasterDisabled));
         assert!(regs.writes.is_empty());
     }
 }
