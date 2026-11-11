@@ -28,7 +28,7 @@ pub use fat::{FatChainValue, FatDirEntry};
 pub use fat_read::{enumerate_directory, read_cluster, read_fat_entry, read_fat_entry_from_copy, verify_fat_mirrors, read_file_data, read_fs_info, FatFsInfo, FatVolume};
 
 pub mod fat_lfn;
-pub use fat_lfn::{consume_lfn_record, short_name_checksum, visit_directory, FatLongName, LfnError};
+pub use fat_lfn::{consume_lfn_record, short_name_checksum, visit_directory, lookup_path, FatLongName, LfnError};
 
 pub mod cache;
 pub use cache::{BlockCache, CacheStats};
