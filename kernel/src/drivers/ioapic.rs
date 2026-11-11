@@ -314,7 +314,6 @@ impl IoApicController {
 
     /// Read an existing redirection entry.
     pub fn read_redirection(&mut self, gsi: u32) -> Result<(u32, u32), IoApicError> {
-        let expected_high = entry.high()?;
         let index = self.redirection_index(gsi)?;
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
         // The low dword contains the asynchronously changing Remote-IRR bit.
@@ -346,6 +345,7 @@ impl IoApicController {
         if !valid_redirection_vector(entry.vector) {
             return Err(IoApicError::InvalidVector);
         }
+        let expected_high = entry.high()?;
         let index = self.redirection_index(gsi)?;
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
         // First mask the existing route, then change destination, then publish
