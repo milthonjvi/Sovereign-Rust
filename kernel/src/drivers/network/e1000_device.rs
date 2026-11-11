@@ -365,11 +365,13 @@ impl<R: E1000Registers> Driver for E1000Device<'_, '_, R> {
         match reset(self.registers) {
             Ok(()) => {
                 self.stopped = true;
+                self.faulted = false;
                 self.interface.link = LinkState::Down;
                 Ok(())
             }
             Err(E1000ResetError::Register(_)) | Err(E1000ResetError::Timeout) => {
                 self.faulted = true;
+                self.interface.link = LinkState::Unknown;
                 Err(DriverError::HardwareFault)
             }
         }
@@ -524,6 +526,7 @@ mod tests {
     #[derive(Default)]
     struct MockRegisters {
         writes: Vec<(u32, u32)>,
+        fail_register: Option<u32>,
     }
 
     unsafe impl E1000Registers for MockRegisters {
@@ -537,6 +540,9 @@ mod tests {
         }
 
         fn write32(&mut self, offset: u32, value: u32) -> Result<(), Self::Error> {
+            if self.fail_register == Some(offset) {
+                return Err(());
+            }
             self.writes.push((offset, value));
             Ok(())
         }
@@ -586,8 +592,16 @@ mod tests {
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
+        device.registers.fail_register = Some(super::super::e1000::REG_CTRL);
+        assert_eq!(device.shutdown(), Err(DriverError::HardwareFault));
+        assert!(device.faulted);
+        assert!(!device.ready);
+        assert_eq!(device.interface.link, LinkState::Unknown);
+
+        device.registers.fail_register = None;
         assert_eq!(device.shutdown(), Ok(()));
         assert!(device.stopped);
+        assert!(!device.faulted);
         assert!(!device.ready);
         assert_eq!(device.interface.link, LinkState::Down);
         assert!(device.registers.writes.contains(&(super::super::e1000::REG_CTRL,
