@@ -107,6 +107,7 @@ impl IoApicController {
         controller.id = ((id_version >> 24) & 0x0F) as u8;
         controller.redirection_count = ((version >> 16) & 0xFF) + 1;
         if controller.redirection_count == 0
+            || controller.redirection_count > 120
             || controller.gsi_base.checked_add(controller.redirection_count).is_none()
         {
             return Err(IoApicError::GsiOutOfRange);
@@ -239,7 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_vectors() {
-        assert_eq!(IoApicError::InvalidVector, IoApicError::InvalidVector);
+    fn redirection_entry_encodes_mask_and_destination() {
+        let entry = RedirectionEntry {
+            vector: 0x41,
+            destination_apic_id: 3,
+            masked: true,
+            mode: InterruptMode { active_low: true, level_triggered: true },
+        };
+        assert_eq!(entry.low(), 0x41 | REDIRECTION_MASK | REDIRECTION_ACTIVE_LOW | REDIRECTION_LEVEL);
+        assert_eq!(entry.high(), 3 << 24);
     }
 }
