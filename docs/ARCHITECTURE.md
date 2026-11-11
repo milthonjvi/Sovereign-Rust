@@ -82,9 +82,11 @@ unchanged as the compatibility path.
   `EFI/BOOT/BOOTX64.EFI` and the dedicated UEFI kernel binary at
   `EFI/BOOT/sovereign-kernel.elf`.
 
-No successful build, QEMU boot, or physical-machine boot has been recorded yet.
-Limine requests and the existing Limine image path must remain until the
-Sovereign UEFI path passes those validations.
+The standalone UEFI loader has passed its release build in GitHub Actions.
+The full kernel build remains blocked by compile errors in parallel driver and
+subsystem work; no complete kernel image, QEMU boot, or physical-machine boot
+has been recorded. Limine requests and the existing Limine image path must
+remain until the Sovereign UEFI path passes those validations.
 
 ## Kernel layers
 
