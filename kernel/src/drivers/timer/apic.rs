@@ -162,16 +162,31 @@ impl LocalApicTimer {
         let mut lvt = vector as u32 | mode_bits;
         if masked { lvt |= LVT_MASKED; }
 
-        self.write(LVT_TIMER, lvt);
+        // Quiesce the previous configuration before changing divider/count.
+        // Keep the new mode masked until every register is programmed.
+        self.write(LVT_TIMER, lvt | LVT_MASKED);
         if mode != ApicTimerMode::TscDeadline {
             self.write(DIVIDE_CONFIGURATION, divide.encoding() as u32);
             self.write(INITIAL_COUNT, initial_count);
         } else {
+            // TSC deadline is driven by IA32_TSC_DEADLINE, not INITIAL_COUNT.
             self.write(INITIAL_COUNT, 0);
         }
+        self.write(LVT_TIMER, lvt);
         Ok(())
     }
 
+    /// Stop countdown/periodic delivery by masking the LVT and clearing its
+    /// initial count. In TSC-deadline mode the architecture layer must also
+    /// write zero to IA32_TSC_DEADLINE; this MMIO driver cannot do that.
+    pub fn stop(&mut self) {
+        let lvt = self.read(LVT_TIMER);
+        self.write(LVT_TIMER, lvt | LVT_MASKED);
+        self.write(INITIAL_COUNT, 0);
+    }
+
+    /// Load a new countdown. The caller must ensure the LVT is configured and
+    /// unmasked only after the count and interrupt path are ready.
     pub fn set_initial_count(&mut self, count: u32) { self.write(INITIAL_COUNT, count); }
 
     pub fn mask(&mut self) {
