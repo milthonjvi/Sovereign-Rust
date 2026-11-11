@@ -923,6 +923,26 @@ mod tests {
         assert_eq!(&device.tx_buffers[3].as_slice()[..33], &[0x45; 33]);
         assert!(device.registers.writes.contains(&(REG_TDT, 4)));
 
+        let tdt_writes_before_rejected_batch = device.registers.writes
+            .iter().filter(|(reg, _)| *reg == REG_TDT).count();
+        assert_eq!(
+            device.transmit_batch_with(2, &mut slots, &mut submissions, |index, buffer| {
+                buffer[..8].fill(0xaa);
+                if index == 0 {
+                    Ok(8)
+                } else {
+                    Err(DriverError::InvalidConfiguration)
+                }
+            }),
+            Err(DriverError::InvalidConfiguration),
+        );
+        assert_eq!(
+            device.registers.writes.iter().filter(|(reg, _)| *reg == REG_TDT).count(),
+            tdt_writes_before_rejected_batch,
+        );
+        assert_eq!(device.tx_descriptors[4].status, TXD_STATUS_DD);
+        assert_eq!(device.tx_descriptors[5].status, TXD_STATUS_DD);
+
         assert_eq!(
             device.transmit_with(|buffer| {
                 buffer[..16].fill(0x55);
