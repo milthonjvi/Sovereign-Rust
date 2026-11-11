@@ -111,12 +111,14 @@ impl<'a> FramebufferConsole<'a> {
             FONT_LINE_HEIGHT,
             self.background,
         );
+        // The complete cell was cleared immediately above. Rendering the
+        // glyph transparently avoids painting its background pixels twice.
         self.surface.draw_char(
             x,
             y,
             character,
             self.foreground,
-            Some(self.background),
+            None,
         );
 
         self.column += 1;
