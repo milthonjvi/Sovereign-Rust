@@ -158,9 +158,9 @@ impl Trb{
  pub const fn configure_endpoint(input_context:u64,slot_id:u8)->Self{Self::command(TrbType::ConfigureEndpoint,input_context,0,slot_id)}
  pub const fn evaluate_context(input_context:u64,slot_id:u8)->Self{Self::command(TrbType::EvaluateContext,input_context,0,slot_id)}
  pub const fn noop_command()->Self{Self::command(TrbType::NoopCommand,0,0,0)}
- pub const fn normal_transfer(buffer:u64,length:u32,td_size:u8,interrupt_on_completion:bool)->Self{
+ pub const fn normal_transfer(buffer:u64,length:u32,td_size:u8,chain:bool,interrupt_on_completion:bool)->Self{
   Self{parameter:buffer,status:(length&0x1ffff)|(((td_size as u32)&0x1f)<<17),
-   control:((TrbType::Normal as u32)<<10)|(1<<4)|((interrupt_on_completion as u32)<<5)|(1<<2)}
+   control:((TrbType::Normal as u32)<<10)|((chain as u32)<<4)|((interrupt_on_completion as u32)<<5)|(1<<2)}
  }
  pub fn setup_stage(setup:super::transfer::SetupPacket)->Self{
   let encoded=setup.encode();
