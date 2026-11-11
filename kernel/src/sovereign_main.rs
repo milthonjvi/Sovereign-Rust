@@ -126,6 +126,13 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
     }
 
 
+    // Publish the validated handoff only after every pointer and mapping has
+    // been checked. Memory management can now consume the retained UEFI map.
+    // SAFETY: BSP bootstrap, IF clear, and this publication occurs exactly once.
+    if !unsafe { sovereign_kernel::boot::sovereign::install_boot_info(boot_info) } {
+        fatal_halt();
+    }
+
     // Install the kernel's GDT/TSS, IDT, and masked legacy PIC only after the
     // Sovereign handoff and every memory descriptor have passed validation.
     // SAFETY: BSP at CPL 0 with interrupts disabled and a validated stack.
