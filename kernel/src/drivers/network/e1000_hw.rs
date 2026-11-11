@@ -785,6 +785,26 @@ mod tests {
     }
 
     #[test]
+    fn rx_batch_rejects_uncompleted_descriptor_without_partial_rearm() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [RxDescriptor::for_buffer(0xa000); 8];
+        let mut queue = E1000RxQueue::new(8).unwrap();
+        let mut completions = [(0u16, super::super::e1000_descriptor::RxCompletion {
+            length: 64, end_of_packet: true, errors: 0,
+        }); 2];
+        descriptors[0].status = super::super::e1000::RXD_STATUS_DD;
+        descriptors[1].status = 0;
+        assert_eq!(queue.poll_batch(&mut regs, &descriptors, &mut completions), Ok(1));
+        // A forged second entry must not cause the valid first descriptor to be rearmed.
+        completions[1].0 = 1;
+        let mut backup = [RxDescriptor::default(); 2];
+        assert_eq!(queue.recycle_batch(&mut regs, &mut descriptors, &completions, &mut backup),
+            Err(E1000QueueError::InvalidRing));
+        assert_eq!(descriptors[0].status, super::super::e1000::RXD_STATUS_DD);
+        assert_eq!(regs.writes.iter().filter(|(register, _)| *register == REG_RDT).count(), 0);
+    }
+
+    #[test]
     fn refuses_to_initialize_without_bus_mastering() {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1000, 0x2000).unwrap();
