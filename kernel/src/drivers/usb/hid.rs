@@ -56,8 +56,14 @@ impl HidDescriptor{
     target=configuration[offset+2]==interface_number
      &&configuration[offset+3]==alternate_setting
      &&configuration[offset+5]==HID_CLASS;
-   }else if target&&descriptor_type==HID_DESCRIPTOR_TYPE{
-    return Self::parse(&configuration[offset..offset+length]);
+   }else if target{
+    // The HID class descriptor belongs immediately after its interface
+    // descriptor. Do not accidentally associate a later interface/endpoint
+    // class descriptor with the preceding interface.
+    if descriptor_type==HID_DESCRIPTOR_TYPE{
+     return Self::parse(&configuration[offset..offset+length]);
+    }
+    target=false;
    }
    offset+=length;
   }
@@ -175,6 +181,15 @@ mod tests{
   assert_eq!(descriptor.report_length,63);
   assert_eq!(descriptor.hid_release,0x0111);
   assert_eq!(HidDescriptor::find_in_configuration(&configuration,3,0),Err(UsbError::Unsupported));
+ }
+ #[test]fn does_not_associate_late_hid_descriptor_after_endpoint(){
+  let configuration=[
+   9,2,34,0,1,1,0,0x80,50,
+   9,4,3,1,1,HID_CLASS,0,0,0,
+   7,5,0x81,3,8,0,10,
+   9,HID_DESCRIPTOR_TYPE,0x11,0x01,0,1,HID_REPORT_DESCRIPTOR_TYPE,63,0,
+  ];
+  assert_eq!(HidDescriptor::find_in_configuration(&configuration,3,1),Err(UsbError::Unsupported));
  }
  #[test]fn rejects_truncated_raw_configuration_hid_descriptor(){
   let configuration=[9,2,27,0,1,1,0,0x80,50,9,4,3,1,1,HID_CLASS,0,0,0,9,HID_DESCRIPTOR_TYPE];
