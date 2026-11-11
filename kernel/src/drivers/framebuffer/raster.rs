@@ -255,7 +255,7 @@ pub fn stroke_triangle(
 
 #[cfg(test)]
 mod tests {
-    use super::{fill_triangle, stroke_triangle};
+    use super::{fill_polygon, fill_triangle, stroke_polygon, stroke_triangle, ScanlineIntersection};
     use crate::drivers::framebuffer::color::{Color, PixelFormat};
     use crate::drivers::framebuffer::info::FramebufferInfo;
     use crate::drivers::framebuffer::surface::FramebufferSurface;
@@ -271,6 +271,17 @@ mod tests {
         };
         // SAFETY: the test array is writable, correctly sized, and exclusively borrowed.
         unsafe { FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap() }
+    }
+
+    #[test]
+    fn strokes_closed_polygon_edges() {
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        stroke_polygon(&mut target, &[(1, 1), (5, 1), (5, 5), (1, 5)], Color::GREEN);
+        drop(target);
+        assert_eq!(memory[(1 * 8 + 3) * 4 + 1], 255);
+        assert_eq!(memory[(3 * 8 + 5) * 4 + 1], 255);
+        assert_eq!(memory[(3 * 8 + 3) * 4 + 1], 0);
     }
 
     #[test]
