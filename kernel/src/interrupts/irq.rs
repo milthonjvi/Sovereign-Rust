@@ -80,6 +80,13 @@ pub extern "C" fn sovereign_irq_dispatch(frame: *const ExceptionFrame) {
     if !dispatch_vector(vector) {
         fatal_unhandled_irq();
     }
+
+    // EOI is centralized here so individual device handlers cannot forget it
+    // or accidentally acknowledge the PIC twice.
+    // SAFETY: This common path handles a genuine PIC IRQ on the BSP.
+    if unsafe { super::init::end_legacy_irq(irq) }.is_err() {
+        fatal_unhandled_irq();
+    }
 }
 
 fn fatal_unhandled_irq() -> ! {
