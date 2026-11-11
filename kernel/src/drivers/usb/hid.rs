@@ -173,3 +173,59 @@ mod interface_tests{
   assert_eq!(find_boot_interface(&config,BootHidKind::Keyboard),None);
  }
 }
+
+
+use super::controller::{HostController,TransferStatus};
+use super::transfer::{DeviceAddress,Endpoint,EndpointAddress,TransferType};
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct KeyboardChanges{
+ pub report:BootKeyboardReport,pub pressed:[u8;6],pub pressed_count:u8,
+ pub released:[u8;6],pub released_count:u8,
+ pub modifiers_pressed:u8,pub modifiers_released:u8,
+}
+pub struct BootHidPoller{device:DeviceAddress,pub interface:BootHidInterface,previous_keyboard:Option<BootKeyboardReport>}
+impl BootHidPoller{
+ pub const fn new(device:DeviceAddress,interface:BootHidInterface)->Self{
+  Self{device,interface,previous_keyboard:None}
+ }
+ fn endpoint(&self)->Endpoint{
+  Endpoint{address:EndpointAddress::from_raw(self.interface.interrupt_in_address),
+   transfer_type:TransferType::Interrupt,max_packet_size:self.interface.max_packet_size,
+   interval:self.interface.interval}
+ }
+ fn poll<C:HostController,const N:usize>(&self,controller:&mut C,data:&mut[u8;N])->Result<usize,UsbError>{
+  let result=controller.interrupt_transfer(self.device,self.endpoint(),data)?;
+  match result.status{
+   TransferStatus::Success=>{},
+   TransferStatus::TimedOut=>return Err(UsbError::Timeout),
+   TransferStatus::NoDevice=>return Err(UsbError::ControllerUnavailable),
+   TransferStatus::Stall=>return Err(UsbError::Unsupported),
+   TransferStatus::Pending|TransferStatus::ControllerError=>return Err(UsbError::TransferFailed),
+  }
+  if result.bytes_transferred>N||result.bytes_transferred>self.interface.max_packet_size as usize{
+   return Err(UsbError::TransferFailed)
+  }
+  Ok(result.bytes_transferred)
+ }
+ pub fn poll_keyboard<C:HostController>(&mut self,controller:&mut C)->Result<KeyboardChanges,UsbError>{
+  if self.interface.kind!=BootHidKind::Keyboard{return Err(UsbError::Unsupported)}
+  let mut bytes=[0u8;8];let count=self.poll(controller,&mut bytes)?;
+  if count<BootKeyboardReport::LENGTH{return Err(UsbError::BufferTooShort)}
+  let report=BootKeyboardReport::parse(&bytes[..count])?;
+  let previous=self.previous_keyboard.unwrap_or(BootKeyboardReport{modifiers:0,keys:[0;6]});
+  let mut pressed=[0;6];let mut released=[0;6];
+  let pressed_count=report.pressed_since(previous,&mut pressed) as u8;
+  let released_count=report.released_since(previous,&mut released) as u8;
+  let changes=KeyboardChanges{report,pressed,pressed_count,released,released_count,
+   modifiers_pressed:report.modifiers&!previous.modifiers,
+   modifiers_released:previous.modifiers&!report.modifiers};
+  self.previous_keyboard=Some(report);Ok(changes)
+ }
+ pub fn poll_mouse<C:HostController>(&self,controller:&mut C)->Result<BootMouseReport,UsbError>{
+  if self.interface.kind!=BootHidKind::Mouse{return Err(UsbError::Unsupported)}
+  let mut bytes=[0u8;8];let count=self.poll(controller,&mut bytes)?;
+  if count<BootMouseReport::LENGTH{return Err(UsbError::BufferTooShort)}
+  BootMouseReport::parse(&bytes[..count])
+ }
+}
