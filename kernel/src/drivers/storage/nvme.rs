@@ -122,8 +122,10 @@ impl NvmeNamespace{
         if data.len()<132{return Err(NvmeError::InvalidNamespace);}
         let nsze=u64::from_le_bytes(data[0..8].try_into().map_err(|_|NvmeError::InvalidNamespace)?);
         let ncap=u64::from_le_bytes(data[8..16].try_into().map_err(|_|NvmeError::InvalidNamespace)?);
+        let nuse=u64::from_le_bytes(data[16..24].try_into().map_err(|_|NvmeError::InvalidNamespace)?);
         let nlbaf=data[25]; let flbas=data[26]&0x0F;
-        if nsze==0 || ncap>nsze || flbas>nlbaf{return Err(NvmeError::InvalidNamespace);}
+        if data[26]&0x30!=0 { return Err(NvmeError::UnsupportedLbaFormat); }
+        if nsze==0 || ncap>nsze || nuse>ncap || flbas>nlbaf{return Err(NvmeError::InvalidNamespace);}
         let off=128+flbas as usize*4;
         let metadata=u16::from_le_bytes([data[off],data[off+1]]);
         let shift=data[off+2];
