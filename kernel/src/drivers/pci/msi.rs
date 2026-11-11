@@ -58,6 +58,9 @@ impl MsiCapability {
         } else {
             (address_low as u64, offset + 8)
         };
+        if message_address & 0x3 != 0 {
+            return Err(ConfigError::OutOfRange);
+        }
         let message_data = read_standard(io, address, data_register)? as u16;
 
         let (mask_bits, pending_bits) = if masking {
