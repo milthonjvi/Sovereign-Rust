@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(unsafe { queue.pop() }, Some(0x41));
         assert_eq!(unsafe { queue.pop() }, Some(0x42));
         assert_eq!(unsafe { queue.pop() }, Some(0x43));
-        assert_eq!(queue.pop(), None);
+        assert_eq!(unsafe { queue.pop() }, None);
     }
 
     #[test]
@@ -167,9 +167,9 @@ mod tests {
     #[test]
     fn wraps_indices_without_reordering() {
         let queue = UartRxBuffer::<4>::new();
-        assert!(queue.push(1));
-        assert!(queue.push(2));
-        assert_eq!(queue.pop(), Some(1));
+        assert!(unsafe { queue.push(1) });
+        assert!(unsafe { queue.push(2) });
+        assert_eq!(unsafe { queue.pop() }, Some(1));
         assert!(unsafe { queue.push(3) });
         assert!(unsafe { queue.push(4) });
         assert_eq!(unsafe { queue.pop() }, Some(2));
