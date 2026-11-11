@@ -10,4 +10,5 @@ pub mod cpuid;
 pub mod io;
 pub mod msr;
 pub mod tss;
+pub mod x2apic;
 pub mod init;
