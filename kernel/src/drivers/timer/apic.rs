@@ -332,6 +332,92 @@ impl X2ApicTimer {
         Ok(Self { vector, divide, frequency_hz, _cpu_local: PhantomData })
     }
 
+    /// Calibrate the x2APIC countdown against an invariant TSC.
+    ///
+    /// This avoids requiring HPET when CPUID or another trusted source has
+    /// already supplied an accurate invariant-TSC frequency. The timer
+    /// remains masked on return.
+    ///
+    /// # Safety
+    /// Must execute at CPL 0 on a CPU with x2APIC and invariant TSC enabled.
+    /// The caller must own the local timer LVT and provide an accurate TSC
+    /// frequency for the current CPU.
+    pub unsafe fn calibrate_with_tsc(
+        vector: u8,
+        divide: ApicDivide,
+        tsc_frequency_hz: u64,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Result<Self, DriverError> {
+        if tsc_frequency_hz == 0 || sample_ms == 0 || max_spin_iterations == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let max_extended = crate::arch::x86_64::cpuid::cpuid(0x8000_0000, 0).eax;
+        if max_extended < 0x8000_0007
+            || crate::arch::x86_64::cpuid::cpuid(0x8000_0007, 0).edx & (1 << 8) == 0
+        {
+            return Err(DriverError::UnsupportedDevice);
+        }
+        let target_tsc_ticks = (sample_ms as u128)
+            .checked_mul(tsc_frequency_hz as u128)
+            .and_then(|value| value.checked_add(999))
+            .ok_or(DriverError::InvalidConfiguration)?
+            / 1_000;
+        if target_tsc_ticks == 0 || target_tsc_ticks > u64::MAX as u128 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        // SAFETY: Caller guarantees this CPU's x2APIC is initialized.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.configure_one_shot_timer(vector, divide.encoding())
+            .map_err(map_x2apic_error)?;
+        let tsc_before_start = read_tsc_serialized();
+        if apic.load_masked_one_shot_count(u32::MAX).is_err() {
+            apic.stop_one_shot_timer();
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let tsc_after_start = read_tsc_serialized();
+        let tsc_start = midpoint_u64(tsc_before_start, tsc_after_start);
+
+        let mut reached_target = false;
+        for _ in 0..max_spin_iterations {
+            let elapsed = read_tsc_serialized().wrapping_sub(tsc_start);
+            if elapsed as u128 >= target_tsc_ticks {
+                reached_target = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        if !reached_target {
+            apic.stop_one_shot_timer();
+            return Err(DriverError::HardwareFault);
+        }
+
+        let tsc_before_end = read_tsc_serialized();
+        let current_count = apic.timer_current_count();
+        let tsc_after_end = read_tsc_serialized();
+        let tsc_end = midpoint_u64(tsc_before_end, tsc_after_end);
+        apic.stop_one_shot_timer();
+
+        let elapsed_apic = u32::MAX.saturating_sub(current_count);
+        let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
+        if current_count == 0 || elapsed_apic == 0 || elapsed_tsc == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let bus_frequency = calibrated_bus_clock_hz_from_tsc(
+            elapsed_apic,
+            elapsed_tsc,
+            tsc_frequency_hz,
+            divide,
+        )?;
+        let frequency_hz = bus_frequency / divide.factor() as u64;
+        if frequency_hz == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        Ok(Self { vector, divide, frequency_hz, _cpu_local: PhantomData })
+    }
+
     /// Unmask the configured one-shot LVT after the handler is registered.
     ///
     /// # Safety
@@ -406,6 +492,49 @@ impl X2ApicTimer {
 }
 
 #[inline]
+fn read_tsc_serialized() -> u64 {
+    let low: u32;
+    let high: u32;
+    // SAFETY: RDTSC is available on x86_64; LFENCE brackets the sample.
+    unsafe {
+        core::arch::asm!(
+            "lfence",
+            "rdtsc",
+            "lfence",
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    ((high as u64) << 32) | low as u64
+}
+
+#[inline]
+fn midpoint_u64(a: u64, b: u64) -> u64 {
+    a.wrapping_add(b.wrapping_sub(a) / 2)
+}
+
+/// Derive the local-APIC input clock from an invariant-TSC measurement.
+fn calibrated_bus_clock_hz_from_tsc(
+    apic_elapsed_ticks: u32,
+    tsc_elapsed_ticks: u64,
+    tsc_frequency_hz: u64,
+    divide: ApicDivide,
+) -> Result<u64, DriverError> {
+    if apic_elapsed_ticks == 0 || tsc_elapsed_ticks == 0 || tsc_frequency_hz == 0 {
+        return Err(DriverError::InvalidConfiguration);
+    }
+    let numerator = (apic_elapsed_ticks as u128)
+        .checked_mul(divide.factor() as u128)
+        .and_then(|value| value.checked_mul(tsc_frequency_hz as u128))
+        .ok_or(DriverError::InvalidConfiguration)?;
+    let frequency = numerator / tsc_elapsed_ticks as u128;
+    if frequency == 0 || frequency > u64::MAX as u128 {
+        return Err(DriverError::InvalidConfiguration);
+    }
+    Ok(frequency as u64)
+}
+
 /// Convert a relative delay into a bounded one-shot APIC countdown.
 fn countdown_count_for_delay_ns(
     delay_ns: u64,
@@ -543,6 +672,25 @@ mod tests {
         // configuration validation is covered by the API's explicit preconditions.
         assert_eq!(periodic_initial_count(100_000_000, 1_000_000_000, ApicDivide::By1),
             Err(DriverError::InvalidConfiguration));
+    }
+
+    #[test]
+    fn calibrates_apic_bus_clock_from_invariant_tsc() {
+        // 6,250 APIC ticks / 25,000,000 TSC ticks at 2.5 GHz, divided by 16.
+        assert_eq!(
+            calibrated_bus_clock_hz_from_tsc(6_250, 25_000_000, 2_500_000_000, ApicDivide::By16),
+            Ok(100_000_000)
+        );
+        assert_eq!(
+            calibrated_bus_clock_hz_from_tsc(0, 25_000_000, 2_500_000_000, ApicDivide::By16),
+            Err(DriverError::InvalidConfiguration)
+        );
+    }
+
+    #[test]
+    fn tsc_midpoint_handles_wraparound() {
+        assert_eq!(midpoint_u64(u64::MAX - 3, 4), 0);
+        assert_eq!(midpoint_u64(10, 20), 15);
     }
 
     #[test]
