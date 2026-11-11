@@ -6,6 +6,11 @@ impl Ps2MouseDecoder {
  pub const fn new(wheel_enabled: bool) -> Self {
   Self { packet:[0;4], index:0, packet_len:if wheel_enabled {4} else {3}, previous_buttons:None }
  }
+ /// Discards an incomplete packet and forces the next packet to resynchronize.
+ pub fn reset_stream(&mut self) {
+  self.index = 0;
+  self.previous_buttons = None;
+ }
  /// Feed one byte. A complete packet can produce motion, button, and wheel events.
  pub fn feed(&mut self, byte:u8, out:&mut [Option<InputEvent>;3])->usize {
   out.fill(None);
@@ -50,6 +55,15 @@ mod tests {
   assert_eq!(out[2],Some(InputEvent::MouseWheel{delta:-1}));
  }
 
+ #[test] fn reset_discards_partial_packet() {
+  let mut d=Ps2MouseDecoder::new(false); let mut out=[None;3];
+  assert_eq!(d.feed(0x09,&mut out),0);
+  d.reset_stream();
+  assert_eq!(d.feed(0x04,&mut out),0); // Not a valid packet header.
+  assert_eq!(d.feed(0x08,&mut out),0);
+  assert_eq!(d.feed(0x02,&mut out),0);
+  assert_eq!(d.feed(0x00,&mut out),2);
+ }
  #[test] fn overflow_flags_suppress_invalid_axis_deltas() {
   let mut d=Ps2MouseDecoder::new(false); let mut out=[None;3];
   d.feed(0x48,&mut out); // X overflow, valid packet header.
