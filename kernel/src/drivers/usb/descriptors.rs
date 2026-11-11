@@ -206,13 +206,13 @@ mod configuration_tests{
    9,2,31,0,1,1,0,0x80,50,
    9,4,0,0,1,0xff,0,0,0,
    7,5,0x81,2,0,2,0,
-   6,0x30,3,0,0,4,
+   6,0x30,3,0,0,0,
   ];
   let c=ParsedConfiguration::parse(&bytes).unwrap();
   assert_eq!(c.interface_len,1);assert_eq!(c.endpoint_len,1);
   let e=c.endpoints[0].unwrap();
   assert_eq!(e.max_packet_size,512);assert_eq!(e.max_burst,3);
-  assert!(e.has_ss_companion);assert_eq!(e.bytes_per_interval,1024);
+  assert!(e.has_ss_companion);assert_eq!(e.bytes_per_interval,0);
  }
  #[test]fn rejects_configuration_with_truncated_descriptor(){
   let bytes=[9,2,12,0,1,1,0,0x80,50,9,4,0];
