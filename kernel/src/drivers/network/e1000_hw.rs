@@ -318,6 +318,45 @@ impl E1000TxQueue {
         }
     }
 
+    /// Collect consecutive free producer slots with one DMA read barrier.
+    ///
+    /// The returned indices are in submission order and can be passed directly
+    /// to submit_batch(). The caller must serialize queue access between this
+    /// availability check and publication.
+    pub fn available_slots<R: E1000Registers>(
+        &self,
+        registers: &mut R,
+        descriptors: &[TxDescriptor],
+        output: &mut [u16],
+    ) -> Result<usize, E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        let free = descriptors.len() - 1 - self.pending as usize;
+        let limit = core::cmp::min(output.len(), free);
+        if limit == 0 {
+            return Ok(0);
+        }
+
+        registers.dma_read_barrier();
+        let count = descriptors.len();
+        let start = self.cursor.index() as usize;
+        let mut available = 0;
+        while available < limit {
+            let index = (start + available) & (count - 1);
+            // SAFETY: read-only ownership check on the pinned DMA descriptor ring.
+            let descriptor = unsafe {
+                core::ptr::read_volatile(descriptors.as_ptr().add(index))
+            };
+            if descriptor.status & TXD_STATUS_DD == 0 {
+                break;
+            }
+            output[available] = index as u16;
+            available += 1;
+        }
+        Ok(available)
+    }
+
     /// Return the next completed descriptor index in submission order.
     /// The caller can use this index to release the matching DMA buffer.
     pub fn reap_one<R: E1000Registers>(
