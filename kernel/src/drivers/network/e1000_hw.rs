@@ -93,14 +93,30 @@ impl E1000QueueConfig {
     pub fn new(rx_base: u64, tx_base: u64, rx_count: usize, tx_count: usize)
         -> Result<Self, super::e1000::E1000Error>
     {
-        let rx = RingConfig::new(rx_base, rx_count)?;
-        let tx = RingConfig::new(tx_base, tx_count)?;
-        if rx.byte_length % RING_LENGTH_ALIGNMENT != 0
+        let config = Self {
+            rx: RingConfig::new(rx_base, rx_count)?,
+            tx: RingConfig::new(tx_base, tx_count)?,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Revalidate public ring fields and ensure the RX/TX DMA ranges are disjoint.
+    pub fn validate(self) -> Result<(), super::e1000::E1000Error> {
+        let rx = RingConfig::new(self.rx.physical_base, self.rx.descriptor_count as usize)?;
+        let tx = RingConfig::new(self.tx.physical_base, self.tx.descriptor_count as usize)?;
+        if rx != self.rx || tx != self.tx
+            || rx.byte_length % RING_LENGTH_ALIGNMENT != 0
             || tx.byte_length % RING_LENGTH_ALIGNMENT != 0
         {
             return Err(super::e1000::E1000Error::InvalidRingSize);
         }
-        Ok(Self { rx, tx })
+        let rx_end = rx.physical_base + rx.byte_length as u64;
+        let tx_end = tx.physical_base + tx.byte_length as u64;
+        if rx.physical_base < tx_end && tx.physical_base < rx_end {
+            return Err(super::e1000::E1000Error::OverlappingDmaRanges);
+        }
+        Ok(())
     }
 
     pub fn defaults(rx_base: u64, tx_base: u64) -> Result<Self, super::e1000::E1000Error> {
@@ -149,6 +165,12 @@ pub unsafe fn initialize<R: E1000Registers>(
         || rx_buffers.len() != rx_descriptors.len()
         || tx_descriptors.len() != queues.tx.descriptor_count as usize
         || DmaBuffer::validate_rx_pool(rx_buffers).is_err()
+        || DmaBuffer::validate_disjoint_from_range(
+            rx_buffers, queues.rx.physical_base, queues.rx.byte_length as usize,
+        ).is_err()
+        || DmaBuffer::validate_disjoint_from_range(
+            rx_buffers, queues.tx.physical_base, queues.tx.byte_length as usize,
+        ).is_err()
     {
         return Err(E1000InitError::InvalidDescriptorBuffers);
     }
@@ -695,18 +717,7 @@ impl E1000RxQueue {
 }
 
 fn validate_queue(queues: &E1000QueueConfig) -> Result<(), ()> {
-    for ring in [queues.rx, queues.tx] {
-        if ring.descriptor_count < 8
-            || !ring.descriptor_count.is_power_of_two()
-            || ring.byte_length as usize
-                != ring.descriptor_count as usize * super::e1000::DESCRIPTOR_SIZE
-            || ring.byte_length % RING_LENGTH_ALIGNMENT != 0
-            || ring.physical_base % super::e1000::DESCRIPTOR_SIZE as u64 != 0
-        {
-            return Err(());
-        }
-    }
-    Ok(())
+    queues.validate().map_err(|_| ())
 }
 
 fn program_ring<R: E1000Registers>(
@@ -803,6 +814,32 @@ mod tests {
     fn queue_config_enforces_hardware_ring_length_alignment() {
         assert!(E1000QueueConfig::defaults(0x1000, 0x2000).is_ok());
         assert!(E1000QueueConfig::new(0x1000, 0x2000, 12, 32).is_err());
+    }
+
+    #[test]
+    fn queue_config_rejects_overlapping_descriptor_rings() {
+        assert_eq!(
+            E1000QueueConfig::new(0x1000, 0x1040, 8, 8),
+            Err(super::super::e1000::E1000Error::OverlappingDmaRanges),
+        );
+    }
+
+    #[test]
+    fn initialization_rejects_rx_buffers_overlapping_descriptor_rings() {
+        let mut regs = MockRegisters::default();
+        let queues = E1000QueueConfig::defaults(0x4000, 0x8000).unwrap();
+        let mut rx = [RxDescriptor::default(); 32];
+        let mut rx_storage = [[0u8; 2048]; 32];
+        let rx_buffers: Vec<DmaBuffer<'_>> = rx_storage.iter_mut().enumerate()
+            .map(|(index, bytes)| mock_dma_buffer(0x4000 + index as u64 * 2048, bytes))
+            .collect();
+        let mut tx = [TxDescriptor::default(); 32];
+        // SAFETY: MockRegisters never performs DMA; synthetic ranges intentionally overlap.
+        assert_eq!(
+            unsafe { initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true) },
+            Err(E1000InitError::InvalidDescriptorBuffers),
+        );
+        assert!(regs.writes.is_empty());
     }
 
     #[test]
