@@ -71,7 +71,9 @@ impl HubPortStatus{
  }
  pub const fn connected(self)->bool{self.status&Self::CONNECTION!=0}
  pub const fn enabled(self)->bool{self.status&Self::ENABLE!=0}
+ /// USB 2.0 hub port power bit.
  pub const fn powered(self)->bool{self.status&Self::POWER!=0}
+ /// USB 2.0 speed flags; SuperSpeed uses speed_superspeed().
  pub const fn low_speed(self)->bool{self.status&Self::LOW_SPEED!=0}
  pub const fn high_speed(self)->bool{self.status&Self::HIGH_SPEED!=0}
  pub const fn has_change(self)->bool{self.change!=0}
@@ -85,6 +87,8 @@ impl HubPortStatus{
   if !self.connected(){return None}
   match (self.status>>10)&0x0f{1=>Some(UsbSpeed::Full),2=>Some(UsbSpeed::Low),3=>Some(UsbSpeed::High),4=>Some(UsbSpeed::Super),5=>Some(UsbSpeed::SuperPlus),_=>None}
  }
+ /// SuperSpeed port power bit (wPortStatus bit 9).
+ pub const fn powered_superspeed(self)->bool{self.status&(1<<9)!=0}
  /// SuperSpeed port link state (wPortStatus bits 5..8).
  pub const fn superspeed_link_state(self)->u8{((self.status>>5)&0x0f)as u8}
 }
