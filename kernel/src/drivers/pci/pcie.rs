@@ -143,6 +143,9 @@ impl PcieCapability {
         let link_raw = read_standard(io, address, offset + 0x0c)?;
         let link_status_raw = read_standard(io, address, offset + 0x10)?;
         let max_payload_code = (device_raw & 0x7) as u8;
+        if max_payload_code > 5 {
+            return Err(ConfigError::OutOfRange);
+        }
         let max_payload_bytes = 128u16.checked_shl(max_payload_code as u32)
             .ok_or(ConfigError::OutOfRange)?;
 
@@ -209,8 +212,8 @@ mod tests {
         let mut registers = [0u32; 64];
         registers[0x40 / 4] = 0x0742_0010; // v2, root port, slot, INT message 3.
         registers[0x44 / 4] = 0x0000_8022; // 512-byte MPS, extended tags, RBER.
-        registers[0x4c / 4] = 0x003f_0c13; // Gen3 x63 max, ASPM and latencies.
-        registers[0x50 / 4] = 0x2808_0000; // Gen3 x8, DLL active and slot clock.
+        registers[0x4c / 4] = 0x003d_3d03; // Gen3 x16 max, ASPM, latencies and link reporting.
+        registers[0x50 / 4] = 0x3083_0000; // Gen3 x8, DLL active and slot clock.
         let io = MockConfig(registers);
         let pcie = PcieCapability::read(&io, address(), Capability { id: PCIE_CAPABILITY_ID, offset: 0x40 }).unwrap();
         assert_eq!(pcie.version, 2);
@@ -221,6 +224,7 @@ mod tests {
         assert!(pcie.device.extended_tag_supported);
         assert!(pcie.device.role_based_error_reporting);
         assert_eq!(pcie.link.max_speed, PcieLinkSpeed::Gen3_8Gt);
+        assert_eq!(pcie.link.max_width, 16);
         assert_eq!(pcie.link_status.current_speed, PcieLinkSpeed::Gen3_8Gt);
         assert_eq!(pcie.link_status.negotiated_width, 8);
         assert!(pcie.link_status.dll_link_active);
