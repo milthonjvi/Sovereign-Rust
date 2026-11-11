@@ -126,6 +126,10 @@ impl<'a> EcamAccess<'a> {
         let buses = (window.end_bus as usize).checked_sub(window.start_bus as usize)
             .and_then(|n| n.checked_add(1)).ok_or(ConfigError::MappingUnavailable)?;
         let required = buses.checked_mul(ECAM_BUS_SIZE).ok_or(ConfigError::MappingUnavailable)?;
+        // EcamWindow is public and may not have come from parse_mcfg; validate
+        // the complete physical aperture again at the mapping boundary.
+        window.physical_base.checked_add(required as u64)
+            .ok_or(ConfigError::MappingUnavailable)?;
         if mapped_len < required { return Err(ConfigError::MappingUnavailable); }
         let mapped_base = NonNull::new(mapped_base).ok_or(ConfigError::MappingUnavailable)?;
         if (mapped_base.as_ptr() as usize) & 3 != 0 {
@@ -260,6 +264,19 @@ mod tests {
         let a = PciAddress { segment: 0, bus: 0, device: 0, function: 0 };
         assert_eq!(access.read_u32(a, 2), Err(ConfigError::UnalignedRegister));
         assert_eq!(access.read_u32(a, PCIE_CONFIG_SIZE), Err(ConfigError::OutOfRange));
+    }
+
+    #[test]
+    fn mapped_ecam_rejects_physical_span_overflow() {
+        let mut memory = Aligned([0; ECAM_BUS_SIZE]);
+        let w = EcamWindow {
+            segment: 0, start_bus: 0, end_bus: 0,
+            physical_base: u64::MAX & !0x000f_ffff,
+        };
+        assert!(matches!(
+            unsafe { EcamAccess::new(w, memory.0.as_mut_ptr(), memory.0.len()) },
+            Err(ConfigError::MappingUnavailable)
+        ));
     }
 
     #[test]
