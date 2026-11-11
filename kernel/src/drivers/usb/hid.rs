@@ -146,3 +146,30 @@ pub fn find_boot_interface(config:&ParsedConfiguration,kind:BootHidKind)->Option
  }
  None
 }
+
+
+#[cfg(test)]
+mod interface_tests{
+ use super::*;
+ use super::super::descriptors::{ConfigurationDescriptor,InterfaceDescriptor,ParsedEndpoint,ParsedInterface,MAX_ENDPOINTS,MAX_INTERFACES};
+ #[test]fn locates_boot_keyboard_interrupt_in_endpoint(){
+  let mut config=ParsedConfiguration{
+   descriptor:ConfigurationDescriptor{total_length:25,interface_count:1,configuration_value:1,configuration_index:0,attributes:0x80,max_power:50},
+   interfaces:[None;MAX_INTERFACES],endpoints:[None;MAX_ENDPOINTS],interface_len:1,endpoint_len:1,
+  };
+  config.interfaces[0]=Some(ParsedInterface{descriptor:InterfaceDescriptor{number:2,alternate_setting:0,endpoint_count:1,class:HID_CLASS,subclass:HID_SUBCLASS_BOOT,protocol:HID_PROTOCOL_KEYBOARD,string_index:0},first_endpoint:0,endpoint_count:1});
+  config.endpoints[0]=Some(ParsedEndpoint{address:0x81,attributes:3,max_packet_size:8,interval:10,transactions_per_microframe:1,max_burst:0,companion_attributes:0,bytes_per_interval:0,has_ss_companion:false});
+  let found=find_boot_interface(&config,BootHidKind::Keyboard).unwrap();
+  assert_eq!(found.interface_number,2);assert_eq!(found.interrupt_in_address,0x81);
+  assert_eq!(found.max_packet_size,8);
+ }
+ #[test]fn rejects_keyboard_without_interrupt_in_endpoint(){
+  let mut config=ParsedConfiguration{
+   descriptor:ConfigurationDescriptor{total_length:25,interface_count:1,configuration_value:1,configuration_index:0,attributes:0x80,max_power:50},
+   interfaces:[None;MAX_INTERFACES],endpoints:[None;MAX_ENDPOINTS],interface_len:1,endpoint_len:1,
+  };
+  config.interfaces[0]=Some(ParsedInterface{descriptor:InterfaceDescriptor{number:0,alternate_setting:0,endpoint_count:1,class:HID_CLASS,subclass:HID_SUBCLASS_BOOT,protocol:HID_PROTOCOL_KEYBOARD,string_index:0},first_endpoint:0,endpoint_count:1});
+  config.endpoints[0]=Some(ParsedEndpoint{address:0x01,attributes:3,max_packet_size:8,interval:10,transactions_per_microframe:1,max_burst:0,companion_attributes:0,bytes_per_interval:0,has_ss_companion:false});
+  assert_eq!(find_boot_interface(&config,BootHidKind::Keyboard),None);
+ }
+}
