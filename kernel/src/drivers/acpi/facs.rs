@@ -208,6 +208,35 @@ impl Facs {
             None
         }
     }
+
+    /// Validate the selected wake vector against the requested execution mode.
+    ///
+    /// A 64-bit environment may only be requested when firmware advertises
+    /// 64BIT_WAKE_SUPPORTED_F. Without that agreement, the X vector must fit
+    /// in the 32-bit physical address space used by the 32-bit wake context.
+    /// This validates metadata only; it cannot verify identity mapping,
+    /// page containment, executable memory, or the processor state at resume.
+    pub const fn validated_waking_vector(&self) -> Result<Option<WakingVector>, AcpiError> {
+        let requests_64bit = self.requests_64bit_wake();
+        if requests_64bit && !self.supports_64bit_wake() {
+            return Err(AcpiError::MalformedTable);
+        }
+
+        if requests_64bit && !self.has_64bit_waking_vector() {
+            return Err(AcpiError::MalformedTable);
+        }
+
+        if let Some(vector) = self.waking_vector() {
+            if let WakingVector::Extended64(address) = vector {
+                if !requests_64bit && address > u32::MAX as u64 {
+                    return Err(AcpiError::UnsupportedAddress);
+                }
+            }
+            Ok(Some(vector))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, AcpiError> {
@@ -277,6 +306,60 @@ mod tests {
         bytes[24..32].copy_from_slice(&0u64.to_le_bytes());
         let facs = Facs::parse(0x4000, &bytes).unwrap();
         assert_eq!(facs.waking_vector(), Some(WakingVector::Legacy32(0x1000)));
+    }
+
+    #[test]
+    fn validates_waking_vector_execution_environment_agreement() {
+        let mut bytes = fixture();
+
+        // A 64-bit request is invalid unless firmware advertises support.
+        bytes[20..24].copy_from_slice(&FLAG_S4_BIOS.to_le_bytes());
+        assert_eq!(
+            Facs::parse(0x4000, &bytes).unwrap().validated_waking_vector(),
+            Err(AcpiError::MalformedTable),
+        );
+
+        // A request also requires a nonzero extended vector.
+        bytes[20..24].copy_from_slice(&(FLAG_S4_BIOS | FLAG_64BIT_WAKE).to_le_bytes());
+        bytes[24..32].fill(0);
+        bytes[36..40].copy_from_slice(&OSPM_FLAG_64BIT_WAKE.to_le_bytes());
+        assert_eq!(
+            Facs::parse(0x4000, &bytes).unwrap().validated_waking_vector(),
+            Err(AcpiError::MalformedTable),
+        );
+    }
+
+    #[test]
+    fn validates_32bit_and_64bit_waking_vector_addressability() {
+        let mut bytes = fixture();
+
+        // The extended field can still be used in a 32-bit environment when
+        // its physical address is representable in that environment.
+        bytes[20..24].copy_from_slice(&FLAG_S4_BIOS.to_le_bytes());
+        bytes[24..32].copy_from_slice(&0xF000_1000u64.to_le_bytes());
+        bytes[36..40].fill(0);
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(
+            facs.validated_waking_vector(),
+            Ok(Some(WakingVector::Extended64(0xF000_1000))),
+        );
+        assert!(!facs.uses_64bit_wake_environment());
+
+        // An address above 4 GiB requires the negotiated 64-bit environment.
+        bytes[24..32].copy_from_slice(&0x1_0000_1000u64.to_le_bytes());
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(
+            facs.validated_waking_vector(),
+            Err(AcpiError::UnsupportedAddress),
+        );
+
+        bytes[36..40].copy_from_slice(&OSPM_FLAG_64BIT_WAKE.to_le_bytes());
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(
+            facs.validated_waking_vector(),
+            Ok(Some(WakingVector::Extended64(0x1_0000_1000))),
+        );
+        assert!(facs.uses_64bit_wake_environment());
     }
 
     #[test]
