@@ -216,24 +216,8 @@ impl BootHidPoller{
  pub const fn new(device:DeviceAddress,interface:BootHidInterface)->Self{
   Self{device,interface,previous_keyboard:None}
  }
- fn endpoint(&self)->Endpoint{
-  Endpoint{address:EndpointAddress::from_raw(self.interface.interrupt_in_address),
-   transfer_type:TransferType::Interrupt,max_packet_size:self.interface.max_packet_size,
-   interval:self.interface.interval}
- }
  fn poll<C:HostController,const N:usize>(&self,controller:&mut C,data:&mut[u8;N])->Result<usize,UsbError>{
-  let result=controller.interrupt_transfer(self.device,self.endpoint(),data)?;
-  match result.status{
-   TransferStatus::Success=>{},
-   TransferStatus::TimedOut=>return Err(UsbError::Timeout),
-   TransferStatus::NoDevice=>return Err(UsbError::ControllerUnavailable),
-   TransferStatus::Stall=>return Err(UsbError::Unsupported),
-   TransferStatus::Pending|TransferStatus::ControllerError=>return Err(UsbError::TransferFailed),
-  }
-  if result.bytes_transferred>N||result.bytes_transferred>self.interface.max_packet_size as usize{
-   return Err(UsbError::TransferFailed)
-  }
-  Ok(result.bytes_transferred)
+  self.interface.read_report(controller,self.device,data)
  }
  pub fn poll_keyboard<C:HostController>(&mut self,controller:&mut C)->Result<KeyboardChanges,UsbError>{
   if self.interface.kind!=BootHidKind::Keyboard{return Err(UsbError::Unsupported)}
@@ -360,5 +344,24 @@ mod report_descriptor_tests{
   assert_eq!(HidReportDescriptor::parse(&descriptor).unwrap().report(0).unwrap().input_bits,8);
   assert_eq!(HidReportDescriptor::parse(&[0xb4]),Err(UsbError::MalformedDescriptor));
   assert_eq!(HidReportDescriptor::parse(&[0x75]),Err(UsbError::MalformedDescriptor));
+ }
+}
+
+#[cfg(test)]
+mod input_handoff_tests{
+ use super::*;
+ #[test]fn builds_report_descriptor_request_for_selected_interface(){
+  let request=get_report_descriptor(5,128);
+  assert_eq!(request.request_type,0x81);assert_eq!(request.request,6);
+  assert_eq!(request.value,0x2200);assert_eq!(request.index,5);
+  assert_eq!(request.length,128);
+ }
+ #[test]fn boot_interface_exposes_normalized_interrupt_endpoint(){
+  let interface=BootHidInterface{interface_number:3,alternate_setting:1,kind:BootHidKind::Mouse,
+   interrupt_in_address:0x83,max_packet_size:16,interval:4};
+  let endpoint=interface.endpoint();
+  assert_eq!(endpoint.address.raw(),0x83);assert!(endpoint.address.is_in());
+  assert_eq!(endpoint.address.number(),3);assert_eq!(endpoint.transfer_type,TransferType::Interrupt);
+  assert_eq!(endpoint.max_packet_size,16);assert_eq!(endpoint.interval,4);
  }
 }
