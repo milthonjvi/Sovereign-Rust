@@ -32,16 +32,43 @@ pub fn parse_mcfg(table: &[u8], out: &mut [EcamWindow]) -> Result<usize, McfgErr
     }
     if !checksum_valid(&table[..length]) { return Err(McfgError::Acpi(AcpiError::InvalidChecksum)); }
     if table[36..44].iter().any(|v| *v != 0) { return Err(McfgError::InvalidEntry); }
-    let count = (length - MCFG_HEADER_SIZE) / MCFG_ENTRY_SIZE;
+    let entries = &table[MCFG_HEADER_SIZE..length];
+    let count = entries.len() / MCFG_ENTRY_SIZE;
     if count > out.len() { return Err(McfgError::OutputTooSmall); }
-    for (i, e) in table[MCFG_HEADER_SIZE..length].chunks_exact(MCFG_ENTRY_SIZE).enumerate() {
-        let base = u64le(e, 0);
-        let start = e[10];
-        let end = e[11];
-        if base & 0x000f_ffff != 0 || start > end || u32le(e, 12) != 0 {
+
+    // Validate the complete table before publishing any window to the caller.
+    for (index, entry) in entries.chunks_exact(MCFG_ENTRY_SIZE).enumerate() {
+        let base = u64le(entry, 0);
+        let segment = u16le(entry, 8);
+        let start = entry[10];
+        let end = entry[11];
+        let reserved = u32le(entry, 12);
+        if base & 0x000f_ffff != 0 || start > end || reserved != 0 {
             return Err(McfgError::InvalidEntry);
         }
-        out[i] = EcamWindow { segment: u16le(e, 8), start_bus: start, end_bus: end, physical_base: base };
+        let bus_count = (end as u64) - (start as u64) + 1;
+        let span = bus_count.checked_mul(ECAM_BUS_SIZE as u64)
+            .ok_or(McfgError::InvalidEntry)?;
+        base.checked_add(span).ok_or(McfgError::InvalidEntry)?;
+
+        for previous in entries[..index * MCFG_ENTRY_SIZE].chunks_exact(MCFG_ENTRY_SIZE) {
+            if u16le(previous, 8) == segment {
+                let previous_start = previous[10];
+                let previous_end = previous[11];
+                if start <= previous_end && previous_start <= end {
+                    return Err(McfgError::InvalidEntry);
+                }
+            }
+        }
+    }
+
+    for (index, entry) in entries.chunks_exact(MCFG_ENTRY_SIZE).enumerate() {
+        out[index] = EcamWindow {
+            segment: u16le(entry, 8),
+            start_bus: entry[10],
+            end_bus: entry[11],
+            physical_base: u64le(entry, 0),
+        };
     }
     Ok(count)
 }
