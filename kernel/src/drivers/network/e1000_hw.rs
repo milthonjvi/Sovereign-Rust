@@ -211,8 +211,7 @@ impl E1000TxQueue {
         Ok(Self { cursor: RingCursor::new(descriptor_count)?, clean: RingCursor::new(descriptor_count)?, pending: 0 })
     }
 
-    /// Submit a DMA-mapped frame. The caller must keep its buffer alive until
-    /// the corresponding descriptor's DD bit is observed by reap().
+    /// Submit one DMA-mapped frame and publish its descriptor to hardware.
     pub fn submit<R: E1000Registers>(
         &mut self,
         registers: &mut R,
@@ -220,32 +219,71 @@ impl E1000TxQueue {
         buffer_dma: u64,
         length: usize,
     ) -> Result<u16, E1000QueueError<R::Error>> {
+        let index = self.cursor.index();
+        self.submit_batch(registers, descriptors, &[(buffer_dma, length)])?;
+        Ok(index)
+    }
+
+    /// Submit a batch with one DMA barrier and one TDT write.
+    /// This amortizes MMIO and ordering overhead under sustained traffic.
+    pub fn submit_batch<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &mut [TxDescriptor],
+        frames: &[(u64, usize)],
+    ) -> Result<usize, E1000QueueError<R::Error>> {
         if descriptors.len() != self.cursor_count() {
             return Err(E1000QueueError::InvalidRing);
         }
-        if length == 0 || length > u16::MAX as usize || buffer_dma == 0 || buffer_dma & 0xf != 0 {
+        if frames.is_empty() {
+            return Ok(0);
+        }
+        if frames.iter().any(|(address, length)| {
+            *address == 0 || *address & 0xf != 0 || *length == 0 || *length > u16::MAX as usize
+        }) {
             return Err(E1000QueueError::InvalidFrameLength);
         }
-        let index = self.cursor.index() as usize;
-        // SAFETY: the caller keeps this DMA ring pinned and exclusively owned by this queue.
-        let current = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
-        if self.pending as usize >= descriptors.len() - 1 || current.status & TXD_STATUS_DD == 0 {
+        if frames.len() > descriptors.len() - 1 - self.pending as usize {
             return Err(E1000QueueError::TxRingFull);
         }
-        let descriptor = super::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
-            .map_err(|_| E1000QueueError::InvalidFrameLength)?;
-        // SAFETY: this descriptor belongs to the pinned DMA ring supplied by the caller.
-        unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(index), descriptor); }
+
+        let count = descriptors.len();
+        let start = self.cursor.index() as usize;
+        for offset in 0..frames.len() {
+            let index = (start + offset) & (count - 1);
+            // SAFETY: the caller provides a pinned DMA ring exclusively owned by this queue.
+            let current = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+            if current.status & TXD_STATUS_DD == 0 {
+                return Err(E1000QueueError::TxRingFull);
+            }
+        }
+
+        for (offset, &(buffer_dma, length)) in frames.iter().enumerate() {
+            let index = (start + offset) & (count - 1);
+            let descriptor = super::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
+                .map_err(|_| E1000QueueError::InvalidFrameLength)?;
+            // SAFETY: this descriptor belongs to the pinned DMA ring supplied by the caller.
+            unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(index), descriptor); }
+        }
         registers.dma_write_barrier();
-        let next = (index + 1) & (descriptors.len() - 1);
+        let next = (start + frames.len()) & (count - 1);
         if let Err(error) = registers.write32(REG_TDT, next as u32) {
-            // SAFETY: restore the descriptor before returning ownership to the caller.
-            unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(index), current); }
+            for offset in 0..frames.len() {
+                let index = (start + offset) & (count - 1);
+                // SAFETY: hardware was not notified, so these descriptors remain CPU-owned.
+                unsafe {
+                    let mut descriptor = core::ptr::read_volatile(descriptors.as_ptr().add(index));
+                    descriptor.status = TXD_STATUS_DD;
+                    core::ptr::write_volatile(descriptors.as_mut_ptr().add(index), descriptor);
+                }
+            }
             return Err(E1000QueueError::Register(error));
         }
-        self.cursor.advance();
-        self.pending += 1;
-        Ok(index as u16)
+        for _ in 0..frames.len() {
+            self.cursor.advance();
+        }
+        self.pending += frames.len() as u16;
+        Ok(frames.len())
     }
 
     /// Return the next completed descriptor index in submission order.
@@ -309,22 +347,47 @@ impl E1000RxQueue {
         registers: &mut R,
         descriptors: &[RxDescriptor],
     ) -> Result<Option<(u16, super::e1000_descriptor::RxCompletion)>, E1000QueueError<R::Error>> {
+        let mut result = [(0u16, super::e1000_descriptor::RxCompletion {
+            length: 0, end_of_packet: false, errors: 0,
+        }); 1];
+        if self.poll_batch(registers, descriptors, &mut result)? == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(result[0]))
+        }
+    }
+
+    /// Drain a contiguous batch of completed RX descriptors with one DMA
+    /// read barrier. Output is caller-owned; no heap allocation is performed.
+    pub fn poll_batch<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &[RxDescriptor],
+        output: &mut [(u16, super::e1000_descriptor::RxCompletion)],
+    ) -> Result<usize, E1000QueueError<R::Error>> {
         if descriptors.len() != self.cursor_count() {
             return Err(E1000QueueError::InvalidRing);
         }
-        if self.outstanding as usize >= descriptors.len() {
-            return Ok(None);
+        let available = descriptors.len() - self.outstanding as usize;
+        let limit = core::cmp::min(output.len(), available);
+        if limit == 0 {
+            return Ok(0);
         }
-        let index = self.cursor.index() as usize;
         registers.dma_read_barrier();
-        // SAFETY: volatile read observes descriptor write-back performed by the NIC.
-        let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
-        let Some(completion) = descriptor.completion() else {
-            return Ok(None);
-        };
-        self.cursor.advance();
-        self.outstanding += 1;
-        Ok(Some((index as u16, completion)))
+        let mut count = 0;
+        while count < limit {
+            let index = self.cursor.index() as usize;
+            // SAFETY: volatile read observes device write-back in the pinned DMA ring.
+            let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+            let Some(completion) = descriptor.completion() else {
+                break;
+            };
+            output[count] = (index as u16, completion);
+            self.cursor.advance();
+            self.outstanding += 1;
+            count += 1;
+        }
+        Ok(count)
     }
 
     /// Return a processed RX buffer to hardware. Recycling must follow descriptor
