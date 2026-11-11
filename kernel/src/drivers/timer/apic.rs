@@ -5,7 +5,11 @@
 //! programming remains the responsibility of the architecture/MSR layer.
 
 use core::{marker::PhantomData, ptr::{read_volatile, write_volatile, NonNull}};
-use crate::drivers::api::DriverError;
+use crate::{
+    arch::x86_64::x2apic::{X2Apic, X2ApicError},
+    drivers::api::DriverError,
+};
+use super::hpet::Hpet;
 
 pub const LVT_TIMER: usize = 0x320;
 pub const INITIAL_COUNT: usize = 0x380;
