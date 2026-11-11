@@ -11,6 +11,75 @@ pub const FACS_MIN_LENGTH: usize = 64;
 pub const FACS_ALIGNMENT: u64 = 64;
 const FLAG_S4_BIOS: u32 = 1 << 0;
 const FLAG_64BIT_WAKE: u32 = 1 << 1;
+const GLOBAL_LOCK_PENDING: u32 = 1 << 0;
+const GLOBAL_LOCK_OWNED: u32 = 1 << 1;
+
+
+/// Result of applying the ACPI global-lock acquire transition to a snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GlobalLockAcquire {
+    /// Updated lock word; publish it with atomic compare-exchange, never a plain store.
+    pub updated_word: u32,
+    pub acquired: bool,
+}
+
+/// Result of applying the ACPI global-lock release transition to a snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GlobalLockRelease {
+    /// Updated lock word; publish it atomically.
+    pub updated_word: u32,
+    /// A pending waiter exists and requires the ACPI Global Lock Release notification.
+    pub pending_waiter: bool,
+}
+
+/// Pure ACPI global-lock state transitions.
+///
+/// These calculate the next word from an observed value. The shared FACS
+/// field still requires an atomic compare-exchange retry loop.
+pub struct GlobalLock;
+
+impl GlobalLock {
+    pub const PENDING: u32 = GLOBAL_LOCK_PENDING;
+    pub const OWNED: u32 = GLOBAL_LOCK_OWNED;
+
+    pub const fn is_pending(word: u32) -> bool {
+        word & GLOBAL_LOCK_PENDING != 0
+    }
+
+    pub const fn is_owned(word: u32) -> bool {
+        word & GLOBAL_LOCK_OWNED != 0
+    }
+
+    /// Calculate one acquire attempt while preserving reserved bits.
+    pub const fn acquire_transition(observed: u32) -> GlobalLockAcquire {
+        if observed & GLOBAL_LOCK_OWNED == 0 {
+            GlobalLockAcquire {
+                updated_word: observed | GLOBAL_LOCK_OWNED,
+                acquired: true,
+            }
+        } else {
+            GlobalLockAcquire {
+                updated_word: observed | GLOBAL_LOCK_PENDING,
+                acquired: false,
+            }
+        }
+    }
+
+    /// Calculate one release transition. A pending waiter requires notification.
+    pub const fn release_transition(observed: u32) -> GlobalLockRelease {
+        if observed & GLOBAL_LOCK_PENDING != 0 {
+            GlobalLockRelease {
+                updated_word: observed & !(GLOBAL_LOCK_PENDING | GLOBAL_LOCK_OWNED),
+                pending_waiter: true,
+            }
+        } else {
+            GlobalLockRelease {
+                updated_word: observed & !GLOBAL_LOCK_OWNED,
+                pending_waiter: false,
+            }
+        }
+    }
+}
 
 /// Validated, read-only FACS metadata.
 ///
@@ -123,6 +192,33 @@ mod tests {
         assert!(facs.supports_s4_bios());
         assert!(facs.supports_64bit_wake());
         assert!(facs.has_64bit_waking_vector());
+    }
+
+
+    #[test]
+    fn global_lock_acquire_sets_owned_or_pending_and_preserves_reserved_bits() {
+        let free = 0x8000_0000;
+        let acquired = GlobalLock::acquire_transition(free);
+        assert_eq!(acquired.updated_word, free | GlobalLock::OWNED);
+        assert!(acquired.acquired);
+
+        let busy = 0x4000_0000 | GlobalLock::OWNED;
+        let pending = GlobalLock::acquire_transition(busy);
+        assert_eq!(pending.updated_word, busy | GlobalLock::PENDING);
+        assert!(!pending.acquired);
+    }
+
+    #[test]
+    fn global_lock_release_clears_pending_and_owned_and_reports_waiter() {
+        let with_waiter = 0x8000_0000 | GlobalLock::OWNED | GlobalLock::PENDING;
+        let released = GlobalLock::release_transition(with_waiter);
+        assert_eq!(released.updated_word, 0x8000_0000);
+        assert!(released.pending_waiter);
+
+        let without_waiter = 0x4000_0000 | GlobalLock::OWNED;
+        let released = GlobalLock::release_transition(without_waiter);
+        assert_eq!(released.updated_word, 0x4000_0000);
+        assert!(!released.pending_waiter);
     }
 
     #[test]
