@@ -367,6 +367,42 @@ mod tests {
     }
 
     #[test]
+    fn opaque_alpha_runs_use_format_aware_span_writes() {
+        use super::super::color::PixelFormat;
+        use super::super::info::FramebufferInfo;
+        use super::super::surface::FramebufferSurface;
+
+        let source = [
+            Color::opaque(10, 20, 30),
+            Color::opaque(40, 50, 60),
+            Color::with_alpha(0, 255, 0, 0),
+            Color::opaque(70, 80, 90),
+        ];
+        let image = ImageView::new(&source, 4, 1, 4).unwrap();
+        let mut memory = [0u8; 4 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 4,
+            height: 1,
+            pitch: 4 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Bgr,
+        };
+        // SAFETY: the backing array is writable, correctly sized and exclusively borrowed.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        target.clear(Color::new(1, 2, 3));
+        image.draw_alpha_blended(&mut target, 0, 0).unwrap();
+        drop(target);
+
+        assert_eq!(&memory[0..4], &[30, 20, 10, 0]);
+        assert_eq!(&memory[4..8], &[60, 50, 40, 0]);
+        assert_eq!(&memory[8..12], &[3, 2, 1, 0]);
+        assert_eq!(&memory[12..16], &[90, 80, 70, 0]);
+    }
+
+    #[test]
     fn validates_last_row_extent() {
         let pixels = [Color::BLACK; 5];
         assert_eq!(
