@@ -7,6 +7,7 @@
 use core::ptr;
 
 use crate::drivers::framebuffer::{FramebufferInfo, PixelFormat};
+use crate::drivers::acpi::{AcpiError, rsdp::Rsdp};
 
 const COMMON_MAGIC_0: u64 = 0xc7b1_dd30_df4c_8b88;
 const COMMON_MAGIC_1: u64 = 0x0a82_e883_a194_f07b;
@@ -21,6 +22,13 @@ pub struct LimineRequest<T> {
 
 // The bootloader writes response pointers before transferring control to us.
 unsafe impl<T> Sync for LimineRequest<T> {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RsdpResponse {
+    pub revision: u64,
+    pub address: *const u8,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +103,15 @@ pub static mut LIMINE_BASE_REVISION: [u64; 3] = [
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 #[unsafe(no_mangle)]
+pub static mut LIMINE_RSDP_REQUEST: LimineRequest<RsdpResponse> = LimineRequest {
+    id: [COMMON_MAGIC_0, COMMON_MAGIC_1, 0xc5e7_7b6b_397e_7b43, 0x2763_7845_accd_cf3c],
+    revision: 0,
+    response: ptr::null_mut(),
+};
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+#[unsafe(no_mangle)]
 pub static mut LIMINE_HHDM_REQUEST: LimineRequest<HhdmResponse> = LimineRequest {
     id: [COMMON_MAGIC_0, COMMON_MAGIC_1, 0x48dc_f1cb_8ad2_b852, 0x6398_4e95_9a98_244b],
     revision: 0,
@@ -133,9 +150,44 @@ pub struct LimineBootInfo {
     pub memory_map_entries: *mut *mut MemoryMapEntry,
     pub memory_map_count: usize,
     pub framebuffer: *mut FramebufferResponse,
+    pub rsdp_address: *const u8,
 }
 
 impl LimineBootInfo {
+
+    /// Parse the firmware RSDP supplied by Limine.
+    ///
+    /// Limine base revision 6 supplies a virtual address, so this pointer must
+    /// not be adjusted by the HHDM offset.
+    ///
+    /// # Safety
+    /// The bootloader-provided RSDP pointer must refer to readable memory.
+    pub unsafe fn acpi_rsdp(&self) -> Result<Option<Rsdp>, AcpiError> {
+        if self.rsdp_address.is_null() {
+            return Ok(None);
+        }
+
+        // SAFETY: Guaranteed by the caller and Limine's RSDP response contract.
+        let revision = unsafe { ptr::read(self.rsdp_address.add(15)) };
+        let length = if revision == 0 {
+            20usize
+        } else {
+            // SAFETY: ACPI 2.0+ RSDP has a 36-byte fixed prefix.
+            let length_ptr = unsafe { self.rsdp_address.add(20).cast::<u32>() };
+            // SAFETY: The RSDP response points to a readable ACPI structure.
+            let length = unsafe { ptr::read_unaligned(length_ptr) } as usize;
+            if !(36..=4096).contains(&length) {
+                return Err(AcpiError::InvalidLength);
+            }
+            length
+        };
+
+        // SAFETY: The validated RSDP length bounds this byte range; firmware
+        // memory remains readable during early boot.
+        let bytes = unsafe { core::slice::from_raw_parts(self.rsdp_address, length) };
+        Rsdp::parse(bytes).map(Some)
+    }
+
     /// Return the first boot-provided framebuffer and normalized metadata.
     ///
     /// # Safety
@@ -198,6 +250,8 @@ impl LimineBootInfo {
         let memory_request = unsafe { ptr::read_volatile(ptr::addr_of!(LIMINE_MEMMAP_REQUEST.response)) };
         // SAFETY: Same handoff guarantee applies to the framebuffer request.
         let framebuffer_request = unsafe { ptr::read_volatile(ptr::addr_of!(LIMINE_FRAMEBUFFER_REQUEST.response)) };
+        // ACPI is optional; a null response means firmware did not expose ACPI.
+        let rsdp_request = unsafe { ptr::read_volatile(ptr::addr_of!(LIMINE_RSDP_REQUEST.response)) };
 
         if hhdm_request.is_null() || memory_request.is_null() {
             return None;
@@ -222,11 +276,19 @@ impl LimineBootInfo {
         }
         let memory_map_count = usize::try_from(memory_map.entry_count).ok()?;
 
+        let rsdp_address = if rsdp_request.is_null() {
+            ptr::null()
+        } else {
+            // SAFETY: Limine owns this response for the kernel lifetime.
+            unsafe { ptr::read(rsdp_request) }.address
+        };
+
         Some(Self {
             hhdm_offset: hhdm.offset,
             memory_map_entries: memory_map.entries,
             memory_map_count,
             framebuffer: framebuffer_request,
+            rsdp_address,
         })
     }
 }
