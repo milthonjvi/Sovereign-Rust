@@ -168,3 +168,77 @@ mod tests {
         assert_eq!(state.finish(&short), Err(LfnError::InvalidUtf16));
     }
 }
+
+
+/// Visit directory entries with assembled VFAT names. The callback receives an
+/// empty name slice when no valid LFN is attached; it can then use the 8.3 alias.
+/// Returning false stops enumeration without treating it as an error.
+pub fn visit_directory<D, F>(
+    device: &mut D,
+    volume: &super::fat_read::FatVolume,
+    start_cluster: Option<u32>,
+    cluster_buffer: &mut [u8],
+    fat_scratch: &mut [u8],
+    mut visitor: F,
+) -> Result<usize, FatError>
+where
+    D: super::block::BlockDevice,
+    F: FnMut(&FatDirEntry, &[u16]) -> bool,
+{
+    use super::fat::{FatChainValue, FatKind};
+    use super::block::BlockRange;
+    use super::fat_read::{read_cluster, read_fat_entry};
+    let bps = volume.bpb.bytes_per_sector as usize;
+    if start_cluster.is_none() {
+        if volume.bpb.kind == FatKind::Fat32 || cluster_buffer.len() < bps {
+            return Err(FatError::InvalidDirectoryEntry);
+        }
+    } else if cluster_buffer.len() != volume.cluster_size_bytes() {
+        return Err(FatError::ClusterBufferTooSmall);
+    }
+    let mut state = FatLongName::new();
+    let mut visited = 0usize;
+    let mut stopped = false;
+    let mut process = |bytes: &[u8]| -> Result<(), FatError> {
+        for raw in bytes.chunks_exact(32) {
+            if raw[0] == 0 { stopped = true; state.reset(); break; }
+            if raw[0] == 0xE5 { state.reset(); continue; }
+            if raw[11] == 0x0F {
+                let _ = state.push_record(raw);
+                continue;
+            }
+            if let Some(entry) = FatDirEntry::parse(raw)? {
+                let named = state.finish(&entry.short_name).ok().flatten();
+                let keep_going = match named {
+                    Some((name, len)) => visitor(&entry, &name[..len]),
+                    None => visitor(&entry, &[]),
+                };
+                visited += 1;
+                if !keep_going { stopped = true; break; }
+            } else { state.reset(); }
+        }
+        Ok(())
+    };
+    if let Some(mut cluster) = start_cluster {
+        loop {
+            if visited as u32 >= volume.bpb.cluster_count { return Err(FatError::ChainTooLong); }
+            read_cluster(device, volume, cluster, cluster_buffer)?;
+            process(cluster_buffer)?;
+            if stopped { break; }
+            cluster = match read_fat_entry(device, volume, cluster, fat_scratch)? {
+                FatChainValue::Next(next) => next,
+                FatChainValue::End => break,
+            };
+        }
+    } else {
+        let first = volume.bpb.reserved_sectors as u64
+            + volume.bpb.fat_count as u64 * volume.bpb.sectors_per_fat as u64;
+        for sector in 0..volume.bpb.root_directory_sectors as u64 {
+            device.read_blocks(BlockRange::new(first + sector, 1), &mut cluster_buffer[..bps])
+                .map_err(FatError::Block)?;
+            process(&cluster_buffer[..bps])?;
+            if stopped { break; }
+        }
+    }
+    Ok(visited)
+}
