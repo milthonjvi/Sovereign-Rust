@@ -4,6 +4,7 @@ use super::{AcpiError, sdt::Sdt};
 
 pub const FADT_SIGNATURE: [u8; 4] = *b"FACP";
 const FADT_RESET_REG_SUP: u32 = 1 << 10;
+const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
 
 /// Common FADT fields needed for early platform and power-management setup.
 /// Register access is deliberately left to architecture-specific code.
@@ -26,6 +27,25 @@ pub struct Fadt {
     pub x_firmware_ctrl: Option<u64>,
     pub x_dsdt: Option<u64>,
     pub extended_pm_registers: Option<ExtendedPmRegisters>,
+}
+
+/// Platform power-management model advertised by FADT flags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PmHardwareMode { LegacyFixedHardware, HardwareReduced }
+
+/// Validated source of a fixed PM register block.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PmRegisterAddress { SystemIo(u32), Gas(GenericAddress) }
+
+/// Resolved fixed-register map. Reduced-hardware platforms intentionally
+/// expose no legacy fixed-register addresses through this structure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PmRegisterMap {
+    pub mode: PmHardwareMode,
+    pub pm1a_event: Option<PmRegisterAddress>, pub pm1b_event: Option<PmRegisterAddress>,
+    pub pm1a_control: Option<PmRegisterAddress>, pub pm1b_control: Option<PmRegisterAddress>,
+    pub pm2_control: Option<PmRegisterAddress>, pub pm_timer: Option<PmRegisterAddress>,
+    pub gpe0: Option<PmRegisterAddress>, pub gpe1: Option<PmRegisterAddress>,
 }
 
 impl Fadt {
@@ -128,6 +148,44 @@ impl Fadt {
     /// This is metadata validation only; it does not probe or access hardware.
     pub fn validate_register_block_lengths(&self) -> Result<(), AcpiError> {
         self.register_block_lengths.validate()
+    }
+
+    /// Select the PM model advertised by the FADT.
+    pub const fn pm_hardware_mode(&self) -> PmHardwareMode {
+        if self.flags & FADT_HW_REDUCED_ACPI != 0 { PmHardwareMode::HardwareReduced }
+        else { PmHardwareMode::LegacyFixedHardware }
+    }
+
+    /// Resolve extended GAS descriptors before legacy System I/O addresses.
+    /// This returns metadata only and never accesses a register.
+    pub fn resolve_pm_register_map(&self) -> Result<PmRegisterMap, AcpiError> {
+        let mode = self.pm_hardware_mode();
+        if mode == PmHardwareMode::HardwareReduced {
+            return Ok(PmRegisterMap { mode, pm1a_event: None, pm1b_event: None,
+                pm1a_control: None, pm1b_control: None, pm2_control: None,
+                pm_timer: None, gpe0: None, gpe1: None });
+        }
+        self.validate_pm_registers()?;
+        let ext = self.extended_pm_registers;
+        let choose = |gas: Option<GenericAddress>, legacy: u32, length: u8|
+            -> Option<PmRegisterAddress> {
+            if let Some(gas) = gas.filter(|g| g.is_present()) { Some(PmRegisterAddress::Gas(gas)) }
+            else if legacy != 0 && length != 0 { Some(PmRegisterAddress::SystemIo(legacy)) }
+            else { None }
+        };
+        let get = |f: fn(&ExtendedPmRegisters) -> GenericAddress| ext.map(f);
+        let l = self.register_block_lengths;
+        let r = self.legacy_pm_registers;
+        Ok(PmRegisterMap { mode,
+            pm1a_event: choose(get(|x| x.pm1a_event), r.pm1a_event, l.pm1_event),
+            pm1b_event: choose(get(|x| x.pm1b_event), r.pm1b_event, l.pm1_event),
+            pm1a_control: choose(get(|x| x.pm1a_control), r.pm1a_control, l.pm1_control),
+            pm1b_control: choose(get(|x| x.pm1b_control), r.pm1b_control, l.pm1_control),
+            pm2_control: choose(get(|x| x.pm2_control), r.pm2_control, l.pm2_control),
+            pm_timer: choose(get(|x| x.pm_timer), r.pm_timer, l.pm_timer),
+            gpe0: choose(get(|x| x.gpe0), r.gpe0, l.gpe0),
+            gpe1: choose(get(|x| x.gpe1), r.gpe1, l.gpe1),
+        })
     }
 
     /// Validate the complete PM register metadata without accessing hardware.
@@ -459,6 +517,49 @@ mod tests {
             pm1_event: 0, pm1_control: 0, pm2_control: 0,
             pm_timer: 0, gpe0: 0, gpe1: 0,
         }.validate(), Ok(()));
+    }
+
+    #[test]
+    fn resolves_extended_pm_gas_before_legacy_address() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes()); b[89] = 2;
+        b[172] = 0; b[173] = 16; b[175] = GenericAddress::ACCESS_WORD;
+        b[176..184].copy_from_slice(&0xFEE0_1000u64.to_le_bytes());
+        b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
+        let map = Fadt::parse(&b).unwrap().resolve_pm_register_map().unwrap();
+        assert_eq!(map.pm1a_control, Some(PmRegisterAddress::Gas(GenericAddress {
+            address_space: 0, bit_width: 16, bit_offset: 0,
+            access_size: GenericAddress::ACCESS_WORD, address: 0xFEE0_1000 })));
+    }
+
+    #[test]
+    fn resolves_legacy_pm_when_extended_gas_is_absent() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes()); b[89] = 2;
+        b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
+        let map = Fadt::parse(&b).unwrap().resolve_pm_register_map().unwrap();
+        assert_eq!(map.pm1a_control, Some(PmRegisterAddress::SystemIo(0x404)));
+    }
+
+    #[test]
+    fn reduced_hardware_never_exposes_legacy_fixed_registers() {
+        let mut b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes()); b[89] = 2;
+        b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
+        let map = Fadt::parse(&b).unwrap().resolve_pm_register_map().unwrap();
+        assert_eq!(map.mode, PmHardwareMode::HardwareReduced);
+        assert_eq!(map.pm1a_control, None); assert_eq!(map.pm1a_event, None);
+    }
+
+    #[test]
+    fn malformed_extended_gas_is_not_hidden_by_legacy_fallback() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes()); b[89] = 2;
+        b[172] = 2; b[173] = 16; b[175] = GenericAddress::ACCESS_WORD;
+        b[176..184].copy_from_slice(&0x1000u64.to_le_bytes());
+        b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.resolve_pm_register_map(), Err(AcpiError::InvalidGas));
     }
 
     #[test]
