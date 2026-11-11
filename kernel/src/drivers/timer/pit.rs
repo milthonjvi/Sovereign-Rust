@@ -132,14 +132,8 @@ impl Pit {
         PIT_TICKS.store(0, Ordering::Relaxed);
         PIT_WORK_PENDING.store(false, Ordering::Release);
         PIT_FREQUENCY_HZ.store(config.actual_hz, Ordering::Release);
-        if let Err(error) = unsafe { self.program_config(config) } {
-            let _ = unsafe {
-                crate::interrupts::init::unregister_legacy_irq(0, pit_irq_handler)
-            };
-            PIT_FREQUENCY_HZ.store(0, Ordering::Release);
-            PIT_IRQ_ACTIVE.store(false, Ordering::Release);
-            return Err(PitIrqError::Driver(error));
-        }
+        // SAFETY: PIT port ownership is part of this function's contract.
+        unsafe { self.program_config(config) };
 
         if let Err(error) = unsafe { crate::interrupts::init::unmask_legacy_irq(0) } {
             let _ = unsafe {
@@ -184,7 +178,7 @@ impl Pit {
         }
         let config = PitConfig::from_frequency(requested_hz)?;
         // SAFETY: Port ownership and privilege are guaranteed by this function's caller.
-        unsafe { self.program_config(config)?; }
+        unsafe { self.program_config(config) };
         Ok(config)
     }
 
@@ -193,7 +187,7 @@ impl Pit {
     /// # Safety
     /// The caller must own the PIT ports and ensure the active IRQ handler's
     /// clocksource frequency cannot be changed concurrently.
-    unsafe fn program_config(&mut self, config: PitConfig) -> Result<(), DriverError> {
+    unsafe fn program_config(&mut self, config: PitConfig) {
         // SAFETY: Port ownership and privilege are guaranteed by the caller.
         unsafe {
             io::out8(COMMAND, CHANNEL0_RATE_GENERATOR);
