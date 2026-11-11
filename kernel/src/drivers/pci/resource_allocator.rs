@@ -125,10 +125,9 @@ impl<'a> ResourcePool<'a> {
 
     /// Roll back the most recent allocation in its window.
     ///
-    /// Allocations are released in reverse order per window. This makes it
-    /// possible for a caller to undo BAR assignment when a later programming
-    /// or mapping step fails without introducing a heap-backed free list.
-    /// Roll back the most recent allocation in its window.
+    /// Allocations are released in reverse order per window. This allows a
+    /// caller to undo BAR assignment when a later programming or mapping step
+    /// fails without introducing a heap-backed free list.
     ///
     /// # Safety
     /// The allocation must be the exact value previously returned by allocate
