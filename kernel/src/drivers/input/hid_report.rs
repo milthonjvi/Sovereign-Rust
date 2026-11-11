@@ -361,6 +361,24 @@ impl HidReportDecoder {
         }
     }
     pub const fn device_id(&self) -> InputDeviceId { self.device }
+
+    /// Lifecycle publication is retryable: on a full queue, the caller retains
+    /// the returned event and must retry rather than silently losing unplug.
+    pub fn publish_connected<const N: usize>(
+        &mut self, producer: &mut SpscProducer<'_, InputEvent, N>,
+    ) -> Result<(), InputEvent> {
+        producer.push(InputEvent::DeviceConnected { device: self.device })
+    }
+
+    /// Clears decoder history only after the disconnect event was enqueued.
+    pub fn publish_disconnected<const N: usize>(
+        &mut self, producer: &mut SpscProducer<'_, InputEvent, N>,
+    ) -> Result<(), InputEvent> {
+        producer.push(InputEvent::DeviceDisconnected { device: self.device })?;
+        self.reset();
+        Ok(())
+    }
+
     pub fn reset(&mut self) {
         self.previous = [0; MAX_HID_VALUES];
         self.initialized = [false; MAX_HID_VALUES];
