@@ -1,7 +1,8 @@
-//! Read-only decoding of PCI MSI and MSI-X capabilities.
+//! PCI MSI and MSI-X capability discovery and controlled MSI configuration.
 //!
-//! This module discovers capability state and resource locations only. It does
-//! not enable MSI/MSI-X, program message addresses, or touch device BAR memory.
+//! Capability parsing is read-only. MSI programming is an explicit privileged
+//! operation; MSI-X table programming remains the responsibility of a mapped
+//! device-resource layer.
 use super::capabilities::Capability;
 use super::config::{Bar, BarKind, ConfigAccess, ConfigError, PciAddress, PciIdentity, PCI_CONFIG_SIZE};
 use super::resources::BarResource;
@@ -86,6 +87,31 @@ impl MsiCapability {
             pending_bits,
         })
     }
+}
+
+/// Disable conventional MSI while preserving its address, data, and MME state.
+///
+/// # Safety
+/// The device must be quiescent and exclusively owned by the caller. The
+/// interrupt source must be masked or drained before disabling delivery.
+pub unsafe fn disable_msi<A: ConfigAccess>(
+    io: &A,
+    address: PciAddress,
+    capability: Capability,
+) -> Result<(), ConfigError> {
+    if capability.id != MSI_CAPABILITY_ID {
+        return Err(ConfigError::OutOfRange);
+    }
+    let _ = MsiCapability::read(io, address, capability)?;
+    let offset = capability.offset as u16;
+    let header = read_standard(io, address, offset)?;
+    let control = (header >> 16) as u16;
+    let disabled_control = control & !1;
+    io.write_u32(
+        address,
+        offset,
+        (header & 0xffff) | ((disabled_control as u32) << 16),
+    )
 }
 
 /// Disable MSI-X and assert the function mask before switching interrupt modes.
