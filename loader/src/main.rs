@@ -8,7 +8,7 @@ mod uefi;
 
 use core::{mem, panic::PanicInfo};
 use uefi::{
-    inspect_kernel_file, Console, EfiHandle, EfiStatus, EfiSystemTable,
+    load_kernel_file, Console, EfiHandle, EfiStatus, EfiSystemTable,
     EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_SUCCESS,
     EFI_SYSTEM_TABLE_SIGNATURE,
 };
@@ -48,16 +48,22 @@ pub extern "efiapi" fn efi_main(
         return EFI_INVALID_PARAMETER;
     }
 
-    let status = inspect_kernel_file(image_handle, system_table);
-    if status != EFI_SUCCESS {
-        let _ = console.write_ascii("Kernel file lookup or ELF validation failed.\r\n");
-        return status;
-    }
+    let loaded_kernel = match load_kernel_file(image_handle, system_table) {
+        Ok(kernel) => kernel,
+        Err(status) => {
+            let _ = console.write_ascii("Kernel ELF loading failed.\r\n");
+            return status;
+        }
+    };
 
-    if !console.write_ascii("Kernel ELF64 header validated.\r\n") {
+    if !console.write_ascii("Kernel PT_LOAD segments copied to reserved physical memory.\r\n")
+        || !console.write_ascii("Kernel virtual mappings and handoff are still pending.\r\n")
+    {
         return EFI_INVALID_PARAMETER;
     }
 
+    // Keep the allocation metadata live until the next boot stage is wired in.
+    let _loaded_kernel = loaded_kernel;
     EFI_SUCCESS
 }
 
