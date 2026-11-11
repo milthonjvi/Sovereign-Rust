@@ -447,3 +447,116 @@ mod detection_tests{
         assert_eq!(AhciDeviceType::from_signature(0x1234_5678),AhciDeviceType::Unknown(0x1234_5678));
     }
 }
+
+
+/// Snapshot of the AHCI port registers relevant to command completion and
+/// recovery. Values are captured in one ordered software pass; hardware may
+/// still change them between individual MMIO reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AhciPortSnapshot {
+    pub interrupt_status: u32,
+    pub task_file_data: u32,
+    pub sata_error: u32,
+    pub command_issue: u32,
+    pub sata_active: u32,
+}
+impl AhciPortSnapshot {
+    pub const fn task_file_error(self) -> bool { self.task_file_data & (1 << 0) != 0 }
+    pub const fn task_file_busy(self) -> bool { self.task_file_data & (1 << 7) != 0 }
+    pub const fn task_file_data_request(self) -> bool { self.task_file_data & (1 << 3) != 0 }
+    pub const fn task_file_device_fault(self) -> bool { self.task_file_data & (1 << 5) != 0 }
+    pub const fn task_file_ready(self) -> bool {
+        !self.task_file_error() && !self.task_file_busy() && !self.task_file_data_request()
+    }
+    pub const fn interface_fatal(self) -> bool { self.interrupt_status & (1 <<  fatal_interrupt_bit()) != 0 }
+    pub const fn has_command_error(self) -> bool {
+        self.interrupt_status & ((1 << 30) | (1 << 29) | (1 << 28) | (1 << 27) | (1 << 26)) != 0
+            || self.task_file_error() || self.task_file_device_fault()
+    }
+}
+const fn fatal_interrupt_bit() -> u32 { 29 }
+
+/// Read a diagnostic snapshot without acknowledging write-one-to-clear
+/// registers. Callers can retain the snapshot before performing recovery.
+pub fn snapshot_port<R: AhciRegisterIo>(
+    io: &mut R,
+    base: u32,
+) -> Result<AhciPortSnapshot, AhciError> {
+    Ok(AhciPortSnapshot {
+        interrupt_status: io.read32(port_register(base, 0x10)?)?,
+        task_file_data: io.read32(port_register(base, 0x20)?)?,
+        sata_error: io.read32(port_register(base, 0x30)?)?,
+        command_issue: io.read32(port_register(base, 0x38)?)?,
+        sata_active: io.read32(port_register(base, 0x34)?)?,
+    })
+}
+
+/// Acknowledge only the supplied observed W1C bits. This avoids clearing
+/// unrelated status bits that may have arrived after a snapshot was taken.
+pub fn acknowledge_port_status<R: AhciRegisterIo>(
+    io: &mut R,
+    base: u32,
+    interrupt_bits: u32,
+    sata_error_bits: u32,
+) -> Result<(), AhciError> {
+    if interrupt_bits != 0 {
+        io.write32(port_register(base, 0x10)?, interrupt_bits)?;
+    }
+    if sata_error_bits != 0 {
+        io.write32(port_register(base, 0x30)?, sata_error_bits)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod recovery_status_tests {
+    use super::*;
+
+    struct StatusRegisters([u32; 64]);
+    impl AhciRegisterIo for StatusRegisters {
+        fn read32(&mut self, offset: u32) -> Result<u32, AhciError> {
+            Ok(self.0[(offset / 4) as usize])
+        }
+        fn write32(&mut self, offset: u32, value: u32) -> Result<(), AhciError> {
+            let register = &mut self.0[(offset / 4) as usize];
+            if offset == 0x10 || offset == 0x30 { *register &= !value; }
+            else { *register = value; }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn snapshot_reports_command_and_link_faults_without_acknowledging() {
+        let mut regs = StatusRegisters([0; 64]);
+        regs.0[0x10 / 4] = (1 << 30) | (1 << 29);
+        regs.0[0x20 / 4] = (1 << 0) | (1 << 5);
+        regs.0[0x30 / 4] = 0xA5;
+        regs.0[0x38 / 4] = 1 << 3;
+        let status = snapshot_port(&mut regs, 0).unwrap();
+        assert!(status.has_command_error());
+        assert!(status.interface_fatal());
+        assert!(status.task_file_error());
+        assert!(status.task_file_device_fault());
+        assert_eq!(status.sata_error, 0xA5);
+        assert_eq!(regs.0[0x10 / 4], (1 << 30) | (1 << 29));
+    }
+
+    #[test]
+    fn acknowledges_only_requested_w1c_bits() {
+        let mut regs = StatusRegisters([0; 64]);
+        regs.0[0x10 / 4] = 0b1111;
+        regs.0[0x30 / 4] = 0b1010;
+        acknowledge_port_status(&mut regs, 0, 0b0101, 0b0010).unwrap();
+        assert_eq!(regs.0[0x10 / 4], 0b1010);
+        assert_eq!(regs.0[0x30 / 4], 0b1000);
+    }
+
+    #[test]
+    fn task_file_ready_rejects_busy_and_data_request() {
+        let ready = AhciPortSnapshot { interrupt_status: 0, task_file_data: 0, sata_error: 0, command_issue: 0, sata_active: 0 };
+        assert!(ready.task_file_ready());
+        assert!(!AhciPortSnapshot { task_file_data: 1 << 7, ..ready }.task_file_ready());
+        assert!(!AhciPortSnapshot { task_file_data: 1 << 3, ..ready }.task_file_ready());
+        assert!(!AhciPortSnapshot { task_file_data: 1, ..ready }.task_file_ready());
+    }
+}
