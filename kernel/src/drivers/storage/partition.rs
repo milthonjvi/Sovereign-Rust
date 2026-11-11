@@ -210,6 +210,7 @@ impl<D: BlockDevice> BlockDevice for PartitionDevice<'_, D> {
     }
 
     fn flush(&mut self) -> Result<(), BlockError> { self.parent.flush() }
+    fn max_transfer_blocks(&self) -> u64 { self.parent.max_transfer_blocks() }
 }
 
 #[cfg(test)]
@@ -234,6 +235,7 @@ mod tests {
             Ok(())
         }
         fn flush(&mut self) -> Result<(), BlockError> { self.flushes += 1; Ok(()) }
+        fn max_transfer_blocks(&self) -> u64 { 2 }
     }
 
     fn descriptor() -> Partition {
@@ -251,6 +253,7 @@ mod tests {
         view.read_blocks(BlockRange::new(1, 1), &mut block).unwrap();
         assert_eq!(block[0], 0x7B, "relative LBA 1 must map to parent LBA 3");
         assert_eq!(view.parent.reads, 1);
+        assert_eq!(view.max_transfer_blocks(), 2);
     }
 
     #[test]
