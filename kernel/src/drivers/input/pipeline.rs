@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn rejects_corrupt_bytes_and_counts_queue_overflow() {
         let mut queue = SpscQueue::<InputEvent, 2>::new();
-        let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&queue, false);
+        let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&mut queue, false);
         pipeline.feed(STATUS_PARITY, 0x1E);
         pipeline.feed(0, 0x1E);
         pipeline.feed(0, 0x30);
