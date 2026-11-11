@@ -607,7 +607,7 @@ unsafe fn find_acpi_rsdp(system_table: &EfiSystemTable) -> Option<(u64, u64)> {
     let mut legacy = None;
     for index in 0..system_table.number_of_table_entries {
         // SAFETY: The system table advertises this many configuration entries.
-        let entry = unsafe { ptr::read(entries.add(index)) };
+        let entry = unsafe { ptr::read_unaligned(entries.add(index)) };
         let is_acpi_20 = guid_matches(&entry.vendor_guid, &ACPI_20_TABLE_GUID);
         let is_acpi_10 = guid_matches(&entry.vendor_guid, &ACPI_10_TABLE_GUID);
         if !is_acpi_20 && !is_acpi_10 {
