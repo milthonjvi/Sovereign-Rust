@@ -145,8 +145,13 @@ mod tests {
     }
 
     #[test]
-    fn pending_signal_is_consumed_once() {
+    fn pending_signal_is_consumed_once_and_can_be_reasserted() {
         TIMER_WORK_PENDING.store(true, Ordering::Release);
+        assert!(take_timer_work_pending());
+        assert!(!take_timer_work_pending());
+
+        signal_timer_work_pending();
+        assert!(timer_work_pending());
         assert!(take_timer_work_pending());
         assert!(!take_timer_work_pending());
     }
