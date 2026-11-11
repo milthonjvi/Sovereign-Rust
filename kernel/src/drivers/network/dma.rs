@@ -116,10 +116,15 @@ impl DerefMut for DmaBuffer<'_> {
 mod tests {
     use super::*;
 
+    fn mock_dma_buffer<'a>(address: u64, bytes: &'a mut [u8]) -> DmaBuffer<'a> {
+        // SAFETY: unit tests validate address arithmetic and ownership only; no device performs DMA.
+        unsafe { DmaBuffer::new(address, bytes) }.unwrap()
+    }
+
     #[test]
     fn pairs_cpu_slice_with_dma_address() {
         let mut bytes = [0u8; 2048];
-        let mut buffer = unsafe { DmaBuffer::new(0x4000, &mut bytes) }.unwrap();
+        let mut buffer = mock_dma_buffer(0x4000, &mut bytes);
         buffer[0] = 0xaa;
         assert_eq!(buffer.dma_address(), 0x4000);
         assert_eq!(buffer.as_slice()[0], 0xaa);
@@ -128,7 +133,7 @@ mod tests {
     #[test]
     fn rejects_empty_and_misaligned_buffers() {
         let mut empty = [];
-        assert_eq!(DmaBuffer::new(0x4000, &mut empty).err(), Some(DmaBufferError::Empty));
+        assert_eq!(unsafe { DmaBuffer::new(0x4000, &mut empty) }.err(), Some(DmaBufferError::Empty));
         let mut bytes = [0u8; 32];
         assert_eq!(unsafe { DmaBuffer::new(0x4001, &mut bytes) }.err(), Some(DmaBufferError::MisalignedAddress));
     }
@@ -138,8 +143,8 @@ mod tests {
         let mut a = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let mut b = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let pool = [
-            unsafe { DmaBuffer::new(0x4000, &mut a) }.unwrap(),
-            unsafe { DmaBuffer::new(0x4800, &mut b) }.unwrap(),
+            mock_dma_buffer(0x4000, &mut a),
+            mock_dma_buffer(0x4800, &mut b),
         ];
         assert_eq!(DmaBuffer::validate_rx_pool(&pool), Ok(()));
     }
@@ -149,8 +154,8 @@ mod tests {
         let mut a = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let mut b = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let pool = [
-            DmaBuffer::new(0x4000, &mut a).unwrap(),
-            unsafe { DmaBuffer::new(0x4400, &mut b) }.unwrap(),
+            mock_dma_buffer(0x4000, &mut a),
+            mock_dma_buffer(0x4400, &mut b),
         ];
         assert_eq!(DmaBuffer::validate_rx_pool(&pool), Err(DmaBufferError::OverlappingBuffers));
     }
@@ -158,7 +163,7 @@ mod tests {
     #[test]
     fn rejects_rx_buffers_smaller_than_2kib() {
         let mut bytes = [0u8; 1024];
-        let pool = [unsafe { DmaBuffer::new(0x4000, &mut bytes) }.unwrap()];
+        let pool = [mock_dma_buffer(0x4000, &mut bytes)];
         assert_eq!(DmaBuffer::validate_rx_pool(&pool), Err(DmaBufferError::RxBufferTooSmall));
     }
 }
