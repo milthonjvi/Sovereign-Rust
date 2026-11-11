@@ -72,6 +72,9 @@ pub enum InputEvent {
     ConsumerControl {
         device: InputDeviceId, usage_page: u16, usage: u16, pressed: bool,
     },
+    /// Device remains connected, but consumers must clear all held keys,
+    /// buttons and contacts before applying the next complete report snapshot.
+    DeviceStateReset { device: InputDeviceId },
     /// Lifecycle events let consumers discard per-device state after unplug.
     DeviceConnected { device: InputDeviceId },
     DeviceDisconnected { device: InputDeviceId },
