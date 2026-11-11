@@ -248,7 +248,7 @@ mod tests {
         let mut sizes = [None; MAX_BAR_REGISTERS];
         let count = unsafe { probe_bar_sizes(&mock, function(), &mut sizes) }.unwrap();
         assert_eq!(count, 1);
-        assert_eq!(sizes[0], Some(BarSize { index: 0, size: 0x1000 }));
+        assert_eq!(sizes[0], Some(BarSize { address: function().address, index: 0, size: 0x1000 }));
         assert_eq!(mock.registers.borrow()[4], 0x0008_1002);
     }
 
