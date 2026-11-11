@@ -9,6 +9,7 @@ pub mod enumeration;
 pub mod ehci;
 pub mod hub;
 pub mod ohci;
+pub mod port;
 pub mod transfer;
 pub mod topology;
 pub mod strings;
