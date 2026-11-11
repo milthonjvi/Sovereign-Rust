@@ -62,6 +62,63 @@ static COM2_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
 static COM3_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
 static COM4_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
 
+/// Interrupt-cause counters for one UART port.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UartIrqStatistics {
+    pub interrupts: usize,
+    pub line_status: usize,
+    pub receive_data: usize,
+    pub receive_timeout: usize,
+    pub transmit_empty: usize,
+    pub modem_status: usize,
+    pub unknown_causes: usize,
+    pub budget_exhaustions: usize,
+}
+
+struct AtomicIrqStatistics {
+    interrupts: AtomicUsize,
+    line_status: AtomicUsize,
+    receive_data: AtomicUsize,
+    receive_timeout: AtomicUsize,
+    transmit_empty: AtomicUsize,
+    modem_status: AtomicUsize,
+    unknown_causes: AtomicUsize,
+    budget_exhaustions: AtomicUsize,
+}
+
+impl AtomicIrqStatistics {
+    const fn new() -> Self {
+        Self {
+            interrupts: AtomicUsize::new(0),
+            line_status: AtomicUsize::new(0),
+            receive_data: AtomicUsize::new(0),
+            receive_timeout: AtomicUsize::new(0),
+            transmit_empty: AtomicUsize::new(0),
+            modem_status: AtomicUsize::new(0),
+            unknown_causes: AtomicUsize::new(0),
+            budget_exhaustions: AtomicUsize::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> UartIrqStatistics {
+        UartIrqStatistics {
+            interrupts: self.interrupts.load(Ordering::Relaxed),
+            line_status: self.line_status.load(Ordering::Relaxed),
+            receive_data: self.receive_data.load(Ordering::Relaxed),
+            receive_timeout: self.receive_timeout.load(Ordering::Relaxed),
+            transmit_empty: self.transmit_empty.load(Ordering::Relaxed),
+            modem_status: self.modem_status.load(Ordering::Relaxed),
+            unknown_causes: self.unknown_causes.load(Ordering::Relaxed),
+            budget_exhaustions: self.budget_exhaustions.load(Ordering::Relaxed),
+        }
+    }
+}
+
+static COM1_IRQ_STATS: AtomicIrqStatistics = AtomicIrqStatistics::new();
+static COM2_IRQ_STATS: AtomicIrqStatistics = AtomicIrqStatistics::new();
+static COM3_IRQ_STATS: AtomicIrqStatistics = AtomicIrqStatistics::new();
+static COM4_IRQ_STATS: AtomicIrqStatistics = AtomicIrqStatistics::new();
+
 /// Transmission counters for one UART port.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct UartTxStatistics {
@@ -151,6 +208,7 @@ struct PortBinding {
     tx_queue: &'static UartTxBuffer,
     tx_depth: &'static AtomicUsize,
     tx_stats: &'static AtomicTxStatistics,
+    irq_stats: &'static AtomicIrqStatistics,
 }
 
 fn binding(base: u16) -> Option<PortBinding> {
@@ -158,22 +216,22 @@ fn binding(base: u16) -> Option<PortBinding> {
         0x3F8 => Some(PortBinding {
             irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM1_RX,
-            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH, tx_stats: &COM1_TX_STATS,
+            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH, tx_stats: &COM1_TX_STATS, irq_stats: &COM1_IRQ_STATS,
         }),
         0x2F8 => Some(PortBinding {
             irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM2_RX,
-            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH, tx_stats: &COM2_TX_STATS,
+            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH, tx_stats: &COM2_TX_STATS, irq_stats: &COM2_IRQ_STATS,
         }),
         0x3E8 => Some(PortBinding {
             irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM3_RX,
-            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH, tx_stats: &COM3_TX_STATS,
+            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH, tx_stats: &COM3_TX_STATS, irq_stats: &COM3_IRQ_STATS,
         }),
         0x2E8 => Some(PortBinding {
             irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM4_RX,
-            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH, tx_stats: &COM4_TX_STATS,
+            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH, tx_stats: &COM4_TX_STATS, irq_stats: &COM4_IRQ_STATS,
         }),
         _ => None,
     }
@@ -324,6 +382,11 @@ pub fn receive_statistics(base: u16) -> Option<UartRxStatistics> {
     binding(base).map(|port| port.stats.snapshot())
 }
 
+/// Returns a snapshot of interrupt-cause counters for a legacy UART.
+pub fn interrupt_statistics(base: u16) -> Option<UartIrqStatistics> {
+    binding(base).map(|port| port.irq_stats.snapshot())
+}
+
 fn drain_port(
     base: u16,
     queue: &'static UartRxBuffer<RX_CAPACITY>,
@@ -380,56 +443,79 @@ fn service_port(
     tx: &'static UartTxBuffer,
     tx_depth: &'static AtomicUsize,
     tx_stats: &'static AtomicTxStatistics,
+    irq_stats: &'static AtomicIrqStatistics,
 ) {
     // A shared IRQ may represent several UART causes. IIR reports the highest
     // priority pending cause; acknowledge it and re-read until quiescent.
-    for _ in 0..MAX_IRQ_CAUSES {
+    let mut handled = 0;
+    while handled < MAX_IRQ_CAUSES {
         // SAFETY: The registered handler owns this UART's interrupt registers.
         let iir = unsafe { io::in8(base + IIR) };
         if iir & 1 != 0 {
-            break;
+            return;
         }
+        handled += 1;
+        irq_stats.interrupts.fetch_add(1, Ordering::Relaxed);
         match iir & 0x0E {
-            IIR_LINE_STATUS | IIR_RECEIVE_DATA | IIR_RECEIVE_TIMEOUT => {
+            IIR_LINE_STATUS => {
+                irq_stats.line_status.fetch_add(1, Ordering::Relaxed);
+                drain_port(base, rx, rx_stats);
+            }
+            IIR_RECEIVE_DATA => {
+                irq_stats.receive_data.fetch_add(1, Ordering::Relaxed);
+                drain_port(base, rx, rx_stats);
+            }
+            IIR_RECEIVE_TIMEOUT => {
+                irq_stats.receive_timeout.fetch_add(1, Ordering::Relaxed);
                 drain_port(base, rx, rx_stats);
             }
             IIR_TRANSMIT_EMPTY => {
+                irq_stats.transmit_empty.fetch_add(1, Ordering::Relaxed);
                 service_transmit(base, tx, tx_depth, tx_stats);
             }
             IIR_MODEM_STATUS => {
+                irq_stats.modem_status.fetch_add(1, Ordering::Relaxed);
                 // Reading MSR clears delta-CTS/DSR/RI/DCD and deasserts this
                 // source if a UART or firmware left modem IRQ enabled.
                 // SAFETY: The handler exclusively owns the attached UART.
                 let _ = unsafe { io::in8(base + MODEM_STATUS) };
             }
             _ => {
+                irq_stats.unknown_causes.fetch_add(1, Ordering::Relaxed);
                 // Unknown/reserved IIR cause: read status registers once to
                 // acknowledge any implementation-specific latched condition.
                 // SAFETY: The handler exclusively owns the attached UART.
                 let _ = unsafe { io::in8(base + LSR) };
-                let _ = unsafe { io::in8(base + MODEM_STATUS); };
+                let _ = unsafe { io::in8(base + MODEM_STATUS) };
             }
         }
+    }
+
+    // If the cause budget was consumed and IIR still reports pending work,
+    // leave the source enabled; the level-triggered UART IRQ will retrigger.
+    // SAFETY: The registered handler owns this UART's interrupt registers.
+    if unsafe { io::in8(base + IIR) } & 1 == 0 {
+        irq_stats.budget_exhaustions.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 extern "C" fn irq3_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
     if attached & COM2_BIT != 0 {
-        service_port(0x2F8, &COM2_RX, &COM2_STATS, &COM2_TX, &COM2_TX_DEPTH, &COM2_TX_STATS);
+        service_port(0x2F8, &COM2_RX, &COM2_STATS, &COM2_TX, &COM2_TX_DEPTH, &COM2_TX_STATS, &COM2_IRQ_STATS);
     }
     if attached & COM4_BIT != 0 {
-        service_port(0x2E8, &COM4_RX, &COM4_STATS, &COM4_TX, &COM4_TX_DEPTH, &COM4_TX_STATS);
+        service_port(0x2E8, &COM4_RX, &COM4_STATS, &COM4_TX, &COM4_TX_DEPTH, &COM4_TX_STATS, &COM4_IRQ_STATS);
     }
 }
 
 extern "C" fn irq4_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
     if attached & COM1_BIT != 0 {
-        service_port(0x3F8, &COM1_RX, &COM1_STATS, &COM1_TX, &COM1_TX_DEPTH, &COM1_TX_STATS);
+        service_port(0x3F8, &COM1_RX, &COM1_STATS, &COM1_TX, &COM1_TX_DEPTH, &COM1_TX_STATS, &COM1_IRQ_STATS);
     }
     if attached & COM3_BIT != 0 {
-        service_port(0x3E8, &COM3_RX, &COM3_STATS, &COM3_TX, &COM3_TX_DEPTH, &COM3_TX_STATS);
+        service_port(0x3E8, &COM3_RX, &COM3_STATS, &COM3_TX, &COM3_TX_DEPTH, &COM3_TX_STATS, &COM3_IRQ_STATS);
     }
 }
 
@@ -441,6 +527,14 @@ pub(super) fn is_attached(base: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_legacy_uart_exposes_independent_interrupt_statistics() {
+        for base in [0x3F8, 0x2F8, 0x3E8, 0x2E8] {
+            assert_eq!(interrupt_statistics(base), Some(UartIrqStatistics::default()));
+        }
+        assert!(interrupt_statistics(0x1234).is_none());
+    }
 
     #[test]
     fn iir_cause_ids_match_16550_priority_encoding() {
