@@ -4,7 +4,7 @@ const SIGNATURE: &[u8; 8] = b"EFI PART";
 const MIN_HEADER: usize = 92;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GptError { BufferTooSmall, InvalidSignature, UnsupportedRevision, InvalidHeaderSize, HeaderCrcMismatch, InvalidLba, InvalidUsableRange, InvalidEntryGeometry, AddressOverflow, TableOutOfBounds, InvalidBlockGeometry, EntryArrayCrcMismatch, InvalidPartitionEntry, OverlappingPartitions, DuplicatePartitionGuid, PartitionOutputFull, DeviceReadFailed }
+pub enum GptError { BufferTooSmall, InvalidSignature, UnsupportedRevision, InvalidHeaderSize, HeaderCrcMismatch, InvalidLba, InvalidUsableRange, InvalidEntryGeometry, AddressOverflow, TableOutOfBounds, InvalidBlockGeometry, EntryArrayCrcMismatch, InvalidPartitionEntry, OverlappingPartitions, DuplicatePartitionGuid, PartitionOutputFull, DeviceReadFailed, NoValidHeader, HeaderPairMismatch }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GptHeader { pub revision:u32, pub header_size:u32, pub current_lba:u64, pub backup_lba:u64, pub first_usable_lba:u64, pub last_usable_lba:u64, pub disk_guid:[u8;16], pub entries_lba:u64, pub entry_count:u32, pub entry_size:u32, pub entries_crc32:u32 }
@@ -44,6 +44,80 @@ impl GptHeader {
 fn u32_at(b:&[u8],o:usize)->Result<u32,GptError>{Ok(u32::from_le_bytes(b.get(o..o+4).ok_or(GptError::BufferTooSmall)?.try_into().map_err(|_|GptError::BufferTooSmall)?))}
 fn u64_at(b:&[u8],o:usize)->Result<u64,GptError>{Ok(u64::from_le_bytes(b.get(o..o+8).ok_or(GptError::BufferTooSmall)?.try_into().map_err(|_|GptError::BufferTooSmall)?))}
 fn crc32_zeroed(b:&[u8],zero:core::ops::Range<usize>)->u32{let mut c=!0u32;for(i,v)in b.iter().enumerate(){c^=if zero.contains(&i){0}else{*v as u32};for _ in 0..8{c=(c>>1)^(0xedb8_8320&0u32.wrapping_sub(c&1));}}!c}
+
+/// Result of probing both redundant GPT header locations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GptHeaderPair {
+    pub primary: Option<GptHeader>,
+    pub backup: Option<GptHeader>,
+}
+impl GptHeaderPair {
+    /// Prefer the primary header, falling back to the backup when necessary.
+    pub const fn selected(self) -> Option<GptHeader> {
+        match self.primary { Some(header) => Some(header), None => self.backup }
+    }
+}
+
+/// Read and validate the primary (LBA 1) and backup (last LBA) GPT headers.
+/// A single valid copy is sufficient for recovery; two valid copies must agree
+/// on disk identity, usable range, and partition-array geometry/CRC.
+pub fn read_gpt_header_pair<D: super::block::BlockDevice>(
+    device: &mut D,
+    scratch: &mut [u8],
+) -> Result<GptHeaderPair, GptError> {
+    use super::block::{BlockRange, validate_buffer};
+    let geo = device.geometry().validate().map_err(|_| GptError::InvalidBlockGeometry)?;
+    if scratch.len() != geo.block_size as usize { return Err(GptError::BufferTooSmall); }
+    if geo.block_count < 3 { return Err(GptError::InvalidLba); }
+
+    let primary = read_header_at(device, geo, 1, scratch);
+    let backup_lba = geo.block_count - 1;
+    let backup = read_header_at(device, geo, backup_lba, scratch);
+    let pair = GptHeaderPair { primary: primary.ok(), backup: backup.ok() };
+    if pair.primary.is_none() && pair.backup.is_none() { return Err(GptError::NoValidHeader); }
+
+    if let (Some(p), Some(b)) = (pair.primary, pair.backup) {
+        if p.current_lba != b.backup_lba || p.backup_lba != b.current_lba
+            || p.disk_guid != b.disk_guid
+            || p.first_usable_lba != b.first_usable_lba
+            || p.last_usable_lba != b.last_usable_lba
+            || p.entry_count != b.entry_count || p.entry_size != b.entry_size
+            || p.entries_crc32 != b.entries_crc32 {
+            return Err(GptError::HeaderPairMismatch);
+        }
+    }
+    Ok(pair)
+}
+
+fn read_header_at<D: super::block::BlockDevice>(
+    device: &mut D, geo: BlockGeometry, lba: u64, scratch: &mut [u8],
+) -> Result<GptHeader, GptError> {
+    use super::block::{BlockRange, validate_buffer};
+    let range = BlockRange::new(lba, 1);
+    validate_buffer(geo, range, scratch.len()).map_err(|_| GptError::InvalidLba)?;
+    device.read_blocks(range, scratch).map_err(|_| GptError::DeviceReadFailed)?;
+    GptHeader::parse(scratch, lba, geo)
+}
+
+/// Enumerate from the primary table first, then retry using the backup table
+/// if the primary copy is unreadable, corrupt, or structurally invalid.
+pub fn enumerate_gpt_partitions_redundant<D: super::block::BlockDevice>(
+    device: &mut D,
+    pair: GptHeaderPair,
+    block_buffer: &mut [u8],
+    entry_buffer: &mut [u8],
+    output: &mut [Option<GptPartition>],
+) -> Result<usize, GptError> {
+    if let Some(primary) = pair.primary {
+        if let Ok(count) = enumerate_gpt_partitions(device, primary, block_buffer, entry_buffer, output) {
+            return Ok(count);
+        }
+    }
+    if let Some(backup) = pair.backup {
+        return enumerate_gpt_partitions(device, backup, block_buffer, entry_buffer, output);
+    }
+    Err(GptError::NoValidHeader)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GptPartition {
