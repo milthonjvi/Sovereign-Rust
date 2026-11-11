@@ -1,5 +1,6 @@
-//! Polling driver for 16550-compatible UART serial ports.
-//! Allocation-free COM1–COM4 support; IRQ delivery is owned by the interrupt subsystem.
+//! 16550-compatible UART driver for COM1–COM4.
+//! TX and fallback RX use bounded polling; optional RX IRQ mode uses shared-line
+//! handlers and fixed-capacity SPSC queues. No allocation is required.
 
 mod irq;
 mod rx;
