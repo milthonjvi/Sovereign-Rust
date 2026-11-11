@@ -290,4 +290,12 @@ mod tests {
         assert_eq!(receive_buffer(0x2E8).map(|queue| queue.capacity()).unwrap_or(0), RX_CAPACITY - 1);
         assert!(receive_buffer(0x1234).is_none());
     }
+
+    #[test]
+    fn every_legacy_uart_exposes_independent_error_statistics() {
+        for base in [0x3F8, 0x2F8, 0x3E8, 0x2E8] {
+            assert_eq!(receive_statistics(base), Some(UartRxStatistics::default()));
+        }
+        assert!(receive_statistics(0x1234).is_none());
+    }
 }
