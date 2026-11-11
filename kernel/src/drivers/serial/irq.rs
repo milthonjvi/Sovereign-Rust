@@ -33,8 +33,8 @@ const CTS_INPUT: u8 = 1 << 4;
 #[inline]
 const fn transmit_interrupt_mask(cts_enabled: bool, cts_asserted: bool, pending: bool) -> u8 {
     RX_IRQ_ENABLES
-        | if cts_enabled { MODEM_STATUS_INTERRUPT_ENABLE } else { 0 }
-        | if pending && (!cts_enabled || cts_asserted) { THRE_INTERRUPT_ENABLE } else { 0 }
+        | (if cts_enabled { MODEM_STATUS_INTERRUPT_ENABLE } else { 0 })
+        | (if pending && (!cts_enabled || cts_asserted) { THRE_INTERRUPT_ENABLE } else { 0 })
 }
 const MAX_TX_PER_IRQ: usize = 64;
 const MAX_IRQ_CAUSES: usize = 32;
