@@ -124,7 +124,9 @@ pub struct E1000InitInfo {
 /// all rings and buffers must be DMA-mapped and pinned, the descriptor slices
 /// must alias the physical ring bases supplied in queues, and PCI bus mastering
 /// must already be enabled. The platform must provide coherent DMA or implement
-/// cache maintenance in its barrier methods.
+/// cache maintenance in its barrier methods. After successful initialization,
+/// the caller must keep every ring and buffer mapping pinned until `reset()`
+/// returns successfully, including when a later adapter-binding step fails.
 ///
 /// # Safety
 /// The MMIO accessor must target this NIC. Both descriptor slices must alias
