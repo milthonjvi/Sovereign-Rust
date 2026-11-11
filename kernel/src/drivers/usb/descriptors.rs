@@ -96,12 +96,20 @@ impl ParsedEndpoint{
    bytes_per_interval:0,has_ss_companion:false})
  }
  fn apply_companion(&mut self,b:&[u8])->Result<(),UsbError>{
-  if b.len()<6||b[0]<6||b[1]!=SS_ENDPOINT_COMPANION_DESCRIPTOR||self.has_ss_companion{
+  if b.len()<6||b[0]!=6||b[1]!=SS_ENDPOINT_COMPANION_DESCRIPTOR||self.has_ss_companion||b[2]>15{
    return Err(UsbError::MalformedDescriptor)
   }
-  self.max_burst=b[2];self.companion_attributes=b[3];
-  self.bytes_per_interval=u16::from_le_bytes([b[4],b[5]]);
-  self.has_ss_companion=true;Ok(())
+  let transfer=self.attributes&3;
+  let attributes=b[3];
+  let bytes_per_interval=u16::from_le_bytes([b[4],b[5]]);
+  match transfer{
+   2=>{if attributes&0xe0!=0||bytes_per_interval!=0{return Err(UsbError::MalformedDescriptor)}},
+   1=>{if attributes&0xfc!=0||attributes&3>2||bytes_per_interval==0{return Err(UsbError::MalformedDescriptor)}},
+   3=>{if attributes!=0||bytes_per_interval==0{return Err(UsbError::MalformedDescriptor)}},
+   _=>return Err(UsbError::MalformedDescriptor),
+  }
+  self.max_burst=b[2];self.companion_attributes=attributes;
+  self.bytes_per_interval=bytes_per_interval;self.has_ss_companion=true;Ok(())
  }
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
