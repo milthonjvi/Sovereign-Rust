@@ -248,3 +248,61 @@ mod tests {
         assert_eq!(MbrTable::parse(&sector, GEOMETRY), Err(MbrError::OverlappingPartitions));
     }
 }
+    struct MockDisk { first: [u8; 512], second: [u8; 512] }
+    impl super::super::block::BlockDevice for MockDisk {
+        fn geometry(&self) -> BlockGeometry { GEOMETRY }
+        fn read_blocks(&mut self, range: super::super::block::BlockRange, buffer: &mut [u8]) -> Result<(), super::super::block::BlockError> {
+            if range.block_count != 1 || buffer.len() != 512 { return Err(super::super::block::BlockError::BufferSizeMismatch); }
+            match range.start_block {
+                100 => buffer.copy_from_slice(&self.first),
+                200 => buffer.copy_from_slice(&self.second),
+                _ => return Err(super::super::block::BlockError::OutOfBounds),
+            }
+            Ok(())
+        }
+        fn write_blocks(&mut self, _: super::super::block::BlockRange, _: &[u8]) -> Result<(), super::super::block::BlockError> {
+            Err(super::super::block::BlockError::UnsupportedOperation)
+        }
+        fn flush(&mut self) -> Result<(), super::super::block::BlockError> { Ok(()) }
+    }
+    fn set_raw_entry(sector: &mut [u8; 512], index: usize, boot: u8, kind: u8, start: u32, count: u32) {
+        set_partition(sector, index, boot, kind, start, count);
+    }
+    #[test]
+    fn follows_ebr_chain_and_returns_absolute_lbas() {
+        let mut first = empty_mbr();
+        set_raw_entry(&mut first, 0, 0, 0x83, 1, 20);
+        set_raw_entry(&mut first, 1, 0, 0x0F, 100, 400);
+        let mut second = empty_mbr();
+        set_raw_entry(&mut second, 0, 0x80, 0x07, 1, 30);
+        let mut disk = MockDisk { first, second };
+        let mut scratch = [0u8; 512];
+        let mut visited = [0u64; 4];
+        let mut output = [None; 4];
+        let count = enumerate_logical_partitions(
+            &mut disk,
+            MbrPartition { bootable: false, partition_type: 0x0F, start_lba: 100, sector_count: 500 },
+            &mut scratch, &mut visited, &mut output,
+        ).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(output[0].unwrap().start_lba, 101);
+        assert_eq!(output[1].unwrap().start_lba, 201);
+        assert!(output[1].unwrap().bootable);
+    }
+    #[test]
+    fn rejects_ebr_cycles() {
+        let mut first = empty_mbr();
+        set_raw_entry(&mut first, 0, 0, 0x83, 1, 20);
+        set_raw_entry(&mut first, 1, 0, 0x0F, 0, 400);
+        let mut disk = MockDisk { first, second: empty_mbr() };
+        let mut scratch = [0u8; 512];
+        let mut visited = [0u64; 4];
+        let mut output = [None; 4];
+        let result = enumerate_logical_partitions(
+            &mut disk,
+            MbrPartition { bootable: false, partition_type: 0x0F, start_lba: 100, sector_count: 500 },
+            &mut scratch, &mut visited, &mut output,
+        );
+        assert_eq!(result, Err(MbrError::EbrCycle));
+    }
+
