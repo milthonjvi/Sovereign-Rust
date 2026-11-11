@@ -4,7 +4,7 @@
 //! every attached UART on the shared line. RX bytes are published to separate
 //! lock-free SPSC queues for task-context consumers.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use crate::arch::x86_64::io;
 use crate::interrupts::init as interrupt_init;
@@ -14,6 +14,11 @@ use super::{Uart16550, UartError, UartRxBuffer};
 const DATA: u16 = 0;
 const LSR: u16 = 5;
 const DATA_READY: u8 = 1;
+const OVERRUN_ERROR: u8 = 1 << 1;
+const PARITY_ERROR: u8 = 1 << 2;
+const FRAMING_ERROR: u8 = 1 << 3;
+const BREAK_INTERRUPT: u8 = 1 << 4;
+const FIFO_ERROR: u8 = 1 << 7;
 const MAX_DRAIN_PER_PORT: usize = 64;
 const RX_CAPACITY: usize = 1024;
 
@@ -29,6 +34,59 @@ static COM1_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
 static COM2_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
 static COM3_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
 static COM4_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
+
+/// Hardware receive errors observed by the UART interrupt handler.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UartRxStatistics {
+    pub overrun_errors: usize,
+    pub parity_errors: usize,
+    pub framing_errors: usize,
+    pub break_interrupts: usize,
+    pub fifo_errors: usize,
+}
+
+struct AtomicRxStatistics {
+    overrun: AtomicUsize,
+    parity: AtomicUsize,
+    framing: AtomicUsize,
+    breaks: AtomicUsize,
+    fifo: AtomicUsize,
+}
+
+impl AtomicRxStatistics {
+    const fn new() -> Self {
+        Self {
+            overrun: AtomicUsize::new(0),
+            parity: AtomicUsize::new(0),
+            framing: AtomicUsize::new(0),
+            breaks: AtomicUsize::new(0),
+            fifo: AtomicUsize::new(0),
+        }
+    }
+
+    fn snapshot(&self) -> UartRxStatistics {
+        UartRxStatistics {
+            overrun_errors: self.overrun.load(Ordering::Relaxed),
+            parity_errors: self.parity.load(Ordering::Relaxed),
+            framing_errors: self.framing.load(Ordering::Relaxed),
+            break_interrupts: self.breaks.load(Ordering::Relaxed),
+            fifo_errors: self.fifo.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_lsr(&self, status: u8) {
+        if status & OVERRUN_ERROR != 0 { self.overrun.fetch_add(1, Ordering::Relaxed); }
+        if status & PARITY_ERROR != 0 { self.parity.fetch_add(1, Ordering::Relaxed); }
+        if status & FRAMING_ERROR != 0 { self.framing.fetch_add(1, Ordering::Relaxed); }
+        if status & BREAK_INTERRUPT != 0 { self.breaks.fetch_add(1, Ordering::Relaxed); }
+        if status & FIFO_ERROR != 0 { self.fifo.fetch_add(1, Ordering::Relaxed); }
+    }
+}
+
+static COM1_STATS: AtomicRxStatistics = AtomicRxStatistics::new();
+static COM2_STATS: AtomicRxStatistics = AtomicRxStatistics::new();
+static COM3_STATS: AtomicRxStatistics = AtomicRxStatistics::new();
+static COM4_STATS: AtomicRxStatistics = AtomicRxStatistics::new();
 
 /// Errors returned by UART interrupt attachment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,19 +111,19 @@ fn binding(base: u16) -> Option<PortBinding> {
     match base {
         0x3F8 => Some(PortBinding {
             irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
-            handler: irq4_handler, queue: &COM1_RX,
+            handler: irq4_handler, queue: &COM1_RX,\n            stats: &COM1_STATS,
         }),
         0x2F8 => Some(PortBinding {
             irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
-            handler: irq3_handler, queue: &COM2_RX,
+            handler: irq3_handler, queue: &COM2_RX,\n            stats: &COM2_STATS,
         }),
         0x3E8 => Some(PortBinding {
             irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
-            handler: irq4_handler, queue: &COM3_RX,
+            handler: irq4_handler, queue: &COM3_RX,\n            stats: &COM3_STATS,
         }),
         0x2E8 => Some(PortBinding {
             irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
-            handler: irq3_handler, queue: &COM4_RX,
+            handler: irq3_handler, queue: &COM4_RX,\n            stats: &COM4_STATS,
         }),
         _ => None,
     }
@@ -163,11 +221,22 @@ pub fn receive_buffer(base: u16) -> Option<&'static UartRxBuffer<RX_CAPACITY>> {
     binding(base).map(|port| port.queue)
 }
 
-fn drain_port(base: u16, queue: &'static UartRxBuffer<RX_CAPACITY>) {
+/// Returns a snapshot of hardware line errors counted by the RX interrupt path.
+pub fn receive_statistics(base: u16) -> Option<UartRxStatistics> {
+    binding(base).map(|port| port.stats.snapshot())
+}
+
+fn drain_port(
+    base: u16,
+    queue: &'static UartRxBuffer<RX_CAPACITY>,
+    stats: &'static AtomicRxStatistics,
+) {
     for _ in 0..MAX_DRAIN_PER_PORT {
         // SAFETY: The attached UART owns this I/O range and the IRQ handler is
-        // the sole producer for its SPSC queue.
+        // the sole producer for its SPSC queue. Reading LSR acknowledges latched
+        // line-status errors on 16550-compatible devices.
         let status = unsafe { io::in8(base + LSR) };
+        stats.record_lsr(status);
         if status & DATA_READY == 0 {
             break;
         }
@@ -180,14 +249,14 @@ fn drain_port(base: u16, queue: &'static UartRxBuffer<RX_CAPACITY>) {
 
 extern "C" fn irq3_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM2_BIT != 0 { drain_port(0x2F8, &COM2_RX); }
-    if attached & COM4_BIT != 0 { drain_port(0x2E8, &COM4_RX); }
+    if attached & COM2_BIT != 0 { drain_port(0x2F8, &COM2_RX, &COM2_STATS); }
+    if attached & COM4_BIT != 0 { drain_port(0x2E8, &COM4_RX, &COM4_STATS); }
 }
 
 extern "C" fn irq4_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM1_BIT != 0 { drain_port(0x3F8, &COM1_RX); }
-    if attached & COM3_BIT != 0 { drain_port(0x3E8, &COM3_RX); }
+    if attached & COM1_BIT != 0 { drain_port(0x3F8, &COM1_RX, &COM1_STATS); }
+    if attached & COM3_BIT != 0 { drain_port(0x3E8, &COM3_RX, &COM3_STATS); }
 }
 
 /// Reports whether a UART port is currently connected to its shared IRQ line.
