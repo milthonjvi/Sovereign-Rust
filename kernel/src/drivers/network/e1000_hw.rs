@@ -715,6 +715,7 @@ mod tests {
     struct MockRegisters {
         writes: Vec<(u32, u32)>,
         fail_register: Option<u32>,
+        read_barriers: usize,
     }
 
     unsafe impl E1000Registers for MockRegisters {
@@ -738,7 +739,10 @@ mod tests {
             Ok(())
         }
         fn dma_write_barrier(&mut self) { core::sync::atomic::fence(core::sync::atomic::Ordering::Release); }
-        fn dma_read_barrier(&mut self) { core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire); }
+        fn dma_read_barrier(&mut self) {
+            self.read_barriers += 1;
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        }
     }
 
     #[test]
@@ -822,6 +826,24 @@ mod tests {
         assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0x8000, 64), (0x9000, 64)]), Ok(2));
         assert_eq!(queue.available_slots(&mut regs, &descriptors, &mut slots), Ok(2));
         assert_eq!(&slots[..2], &[2, 3]);
+    }
+
+    #[test]
+    fn tx_reclaim_and_slot_discovery_use_one_dma_read_barrier() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut queue = E1000TxQueue::new(8).unwrap();
+        let mut initial_slots = [0u16; 2];
+        assert_eq!(queue.available_slots(&mut regs, &descriptors, &mut initial_slots), Ok(2));
+        assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0x8000, 64), (0x9000, 96)]), Ok(2));
+        descriptors[0].status = TXD_STATUS_DD;
+        descriptors[1].status = TXD_STATUS_DD;
+        let barriers_before = regs.read_barriers;
+        let mut slots = [u16::MAX; 4];
+        assert_eq!(queue.reclaim_and_available_slots(&mut regs, &descriptors, &mut slots), Ok(4));
+        assert_eq!(slots, [2, 3, 4, 5]);
+        assert_eq!(queue.pending, 0);
+        assert_eq!(regs.read_barriers, barriers_before + 1);
     }
 
     #[test]
