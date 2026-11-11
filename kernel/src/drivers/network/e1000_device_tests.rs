@@ -202,6 +202,7 @@ use super::*;
         let mut rx_storage = [[0u8; 2048]; 8];
         let mut tx_storage = [[0u8; 2048]; 8];
         rx_storage[2][..64].fill(0x53);
+        rx_storage[3][..64].fill(0x64);
         for (index, descriptor) in rx_descriptors.iter_mut().enumerate() {
             descriptor.buffer_address = 0x10000 + index as u64 * 2048;
             if index < 3 {
@@ -245,7 +246,7 @@ use super::*;
         rx_storage[2][..64].fill(0x53);
         for (index, descriptor) in rx_descriptors.iter_mut().enumerate() {
             descriptor.buffer_address = 0x10000 + index as u64 * 2048;
-            if index < 3 {
+            if index < 4 {
                 descriptor.length = match index { 0 => 64, 1 => 96, _ => 64 };
                 descriptor.status = RXD_STATUS_DD | RXD_STATUS_EOP;
             }
@@ -303,6 +304,20 @@ use super::*;
         );
         assert_eq!(observed_length, 64);
         assert_eq!(observed, [0x53; 64]);
-        assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_RDT).count(), 1);
-        assert!(device.registers.writes.contains(&(REG_RDT, 1)));
+        assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_RDT).count(), 2);
+        assert!(device.registers.writes.contains(&(REG_RDT, 2)));
+
+        let mut batch_observed = [0u8; 64];
+        let mut batch_observed_length = 0usize;
+        assert_eq!(
+            device.receive_with_batch(&mut completions, &mut backup, |frame| {
+                batch_observed_length = frame.len();
+                batch_observed[..frame.len()].copy_from_slice(frame);
+            }),
+            Ok(1),
+        );
+        assert_eq!(batch_observed_length, 64);
+        assert_eq!(batch_observed, [0x64; 64]);
+        assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_RDT).count(), 3);
+        assert!(device.registers.writes.contains(&(REG_RDT, 3)));
     }
