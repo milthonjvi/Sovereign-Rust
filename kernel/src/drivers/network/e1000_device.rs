@@ -111,6 +111,62 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         Ok(link)
     }
 
+    /// Copy and publish several frames as one hardware batch.
+    ///
+    /// The slots and submissions arrays are caller-owned scratch storage and
+    /// must each have at least frames.len() entries. No frame bytes are copied
+    /// unless the complete batch has free TX slots. Queue access must be
+    /// externally serialized, as for transmit().
+    pub fn transmit_batch(
+        &mut self,
+        frames: &[&[u8]],
+        slots: &mut [u16],
+        submissions: &mut [(u64, usize)],
+    ) -> Result<usize, DriverError> {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        if frames.is_empty() {
+            return Ok(0);
+        }
+        if frames.len() > slots.len() || frames.len() > submissions.len()
+            || frames.iter().any(|frame| {
+                frame.is_empty() || frame.len() > E1000_MAX_FRAME_SIZE
+            })
+        {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        if frames.iter().any(|frame| frame.len() > self.tx_buffers[0].len()) {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        self.reclaim_tx()?;
+        let available = self.tx_queue.available_slots(
+            self.registers,
+            self.tx_descriptors,
+            &mut slots[..frames.len()],
+        ).map_err(map_queue_error)?;
+        if available != frames.len() {
+            return Err(DriverError::ResourceUnavailable);
+        }
+
+        for (frame_index, frame) in frames.iter().enumerate() {
+            let slot = slots[frame_index] as usize;
+            let buffer = &mut self.tx_buffers[slot];
+            if frame.len() > buffer.len() {
+                return Err(DriverError::InvalidConfiguration);
+            }
+            buffer.as_mut_slice()[..frame.len()].copy_from_slice(frame);
+            submissions[frame_index] = (buffer.dma_address(), frame.len());
+        }
+
+        self.tx_queue.submit_batch(
+            self.registers,
+            self.tx_descriptors,
+            &submissions[..frames.len()],
+        ).map_err(map_queue_error)
+    }
+
     fn reclaim_tx(&mut self) -> Result<(), DriverError> {
         self.tx_queue
             .reap(self.registers, self.tx_descriptors)
