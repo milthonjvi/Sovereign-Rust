@@ -613,6 +613,8 @@ impl<R: E1000Registers> Driver for E1000Device<'_, '_, R> {
     /// A successful return is the point at which the caller may release the
     /// DMA mappings. On error, hardware quiescence is unknown and mappings must
     /// remain pinned until a platform-level reset or equivalent proof completes.
+    /// The separate E1000Interrupt bridge must also be disabled and uninstalled
+    /// by its owner; resetting the MAC does not update that handle's state.
     fn shutdown(&mut self) -> Result<(), DriverError> {
         if self.stopped {
             return Ok(());
