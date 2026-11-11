@@ -16,6 +16,8 @@ use crate::interrupts::dispatch;
 
 const KEYBOARD_VECTOR: u8 = 0x21;
 const MOUSE_VECTOR: u8 = 0x2C;
+/// Hard upper bound on bytes processed by one IRQ callback.
+pub const MAX_IRQ_DRAIN_BUDGET: usize = 32;
 
 struct IrqContextHeader {
     context: AtomicPtr<()>,
@@ -30,7 +32,7 @@ static ACTIVE_PS2_CONTEXT: AtomicPtr<IrqContextHeader> = AtomicPtr::new(ptr::nul
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ps2IrqError {
-    ZeroDrainBudget,
+    InvalidDrainBudget,
     ContextAlreadyInstalled,
     HandlerAlreadyRegistered,
     HandlerNotRegistered,
@@ -84,18 +86,20 @@ impl<const N: usize> Ps2IrqService<N> {
     pub unsafe fn register_legacy_irqs(&'static self) -> Result<(), Ps2IrqError> {
         self.header.context.store(self as *const Self as *mut (), Ordering::Relaxed);
         let header_ptr = &self.header as *const IrqContextHeader as *mut IrqContextHeader;
-        ACTIVE_PS2_CONTEXT
-            .compare_exchange(ptr::null_mut(), header_ptr, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| Ps2IrqError::ContextAlreadyInstalled)?;
-
         if dispatch::register(KEYBOARD_VECTOR, ps2_irq_handler).is_err() {
-            ACTIVE_PS2_CONTEXT.store(ptr::null_mut(), Ordering::Release);
             return Err(Ps2IrqError::HandlerAlreadyRegistered);
         }
         if dispatch::register(MOUSE_VECTOR, ps2_irq_handler).is_err() {
             let _ = dispatch::unregister(KEYBOARD_VECTOR, ps2_irq_handler);
-            ACTIVE_PS2_CONTEXT.store(ptr::null_mut(), Ordering::Release);
             return Err(Ps2IrqError::HandlerAlreadyRegistered);
+        }
+        if ACTIVE_PS2_CONTEXT
+            .compare_exchange(ptr::null_mut(), header_ptr, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            let _ = dispatch::unregister(MOUSE_VECTOR, ps2_irq_handler);
+            let _ = dispatch::unregister(KEYBOARD_VECTOR, ps2_irq_handler);
+            return Err(Ps2IrqError::ContextAlreadyInstalled);
         }
         Ok(())
     }
