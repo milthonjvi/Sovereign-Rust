@@ -1,5 +1,6 @@
 //! Boot framebuffer output and software drawing primitives.
 pub mod color;
+pub mod console;
 pub mod font;
 pub mod info;
 pub mod surface;
