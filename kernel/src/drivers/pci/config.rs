@@ -9,8 +9,63 @@ pub trait ConfigAccess{fn read_u32(&self,address:PciAddress,register:u16)->Resul
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct PciIdentity{pub vendor_id:u16,pub device_id:u16,pub command:u16,pub status:u16,pub revision:u8,pub programming_interface:u8,pub subclass:u8,pub class_code:u8,pub header_type:u8}
 impl PciIdentity{pub fn read<A:ConfigAccess>(io:&A,a:PciAddress)->Result<Option<Self>,ConfigError>{let id=io.read_u32(a,0)?;let vendor=id as u16;if vendor==0||vendor==INVALID_VENDOR_ID{return Ok(None)}let cs=io.read_u32(a,4)?;let c=io.read_u32(a,8)?;let h=io.read_u32(a,12)?;Ok(Some(Self{vendor_id:vendor,device_id:(id>>16)as u16,command:cs as u16,status:(cs>>16)as u16,revision:c as u8,programming_interface:(c>>8)as u8,subclass:(c>>16)as u8,class_code:(c>>24)as u8,header_type:(h>>16)as u8}))} pub const fn is_multifunction(self)->bool{self.header_type&0x80!=0} pub const fn bar_register_count(self)->u8{match self.header_type&0x7f{0=>6,1=>2,2=>1,_=>0}} pub const fn device_class(self)->DeviceClass{match(self.class_code,self.subclass){(1,_)=>DeviceClass::Storage,(2,_)=>DeviceClass::Network,(3,_)=>DeviceClass::Display,(12,3)=>DeviceClass::Usb,(7,_)=>DeviceClass::Serial,_=>DeviceClass::Other}} pub const fn device_info(self,a:PciAddress)->DeviceInfo{DeviceInfo{class:self.device_class(),vendor_id:Some(self.vendor_id),device_id:Some(self.device_id),address:a.bus_address()}}}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct PciFunction{pub address:PciAddress,pub identity:PciIdentity}
-/// Scan one bus into caller-owned storage; no heap allocation is performed.
-pub fn scan_bus<A:ConfigAccess>(io:&A,segment:u16,bus:u8,out:&mut[PciFunction])->Result<usize,ConfigError>{let mut count=0;for device in 0..MAX_DEVICES{let a=PciAddress{segment,bus,device,function:0};let Some(first)=PciIdentity::read(io,a)? else{continue};if count<out.len(){out[count]=PciFunction{address:a,identity:first};count+=1}let limit=if first.is_multifunction(){MAX_FUNCTIONS}else{1};for function in 1..limit{let a=PciAddress{segment,bus,device,function};if let Some(identity)=PciIdentity::read(io,a)?{if count<out.len(){out[count]=PciFunction{address:a,identity};count+=1}}}}Ok(count)}
+/// Summary of a single-bus scan, including devices omitted by a small buffer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BusScanReport {
+    pub written: usize,
+    pub devices_found: u32,
+    pub truncated: bool,
+}
+
+/// Scan one bus and report buffer truncation explicitly; no heap allocation is performed.
+pub fn scan_bus_report<A: ConfigAccess>(
+    io: &A,
+    segment: u16,
+    bus: u8,
+    out: &mut [PciFunction],
+) -> Result<BusScanReport, ConfigError> {
+    let mut report = BusScanReport::default();
+    for device in 0..MAX_DEVICES {
+        let first_address = PciAddress { segment, bus, device, function: 0 };
+        let Some(first_identity) = PciIdentity::read(io, first_address)? else {
+            continue;
+        };
+        record_bus_function(
+            PciFunction { address: first_address, identity: first_identity },
+            &mut report,
+            out,
+        );
+        let function_limit = if first_identity.is_multifunction() { MAX_FUNCTIONS } else { 1 };
+        for function in 1..function_limit {
+            let address = PciAddress { function, ..first_address };
+            if let Some(identity) = PciIdentity::read(io, address)? {
+                record_bus_function(PciFunction { address, identity }, &mut report, out);
+            }
+        }
+    }
+    Ok(report)
+}
+
+fn record_bus_function(function: PciFunction, report: &mut BusScanReport, out: &mut [PciFunction]) {
+    report.devices_found = report.devices_found.saturating_add(1);
+    if report.written < out.len() {
+        out[report.written] = function;
+        report.written += 1;
+    } else {
+        report.truncated = true;
+    }
+}
+
+/// Compatibility scan returning the number stored. Use scan_bus_report when
+/// callers must distinguish a complete scan from output-buffer truncation.
+pub fn scan_bus<A: ConfigAccess>(
+    io: &A,
+    segment: u16,
+    bus: u8,
+    out: &mut [PciFunction],
+) -> Result<usize, ConfigError> {
+    Ok(scan_bus_report(io, segment, bus, out)?.written)
+}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub enum BarKind{Io,MemoryBelow1M,Memory32,Memory64}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct Bar{pub index:u8,pub kind:BarKind,pub prefetchable:bool,pub base:u64,pub raw_low:u32,pub raw_high:Option<u32>}
 impl Bar{pub const fn decode(index:u8,low:u32,high:Option<u32>)->Option<Self>{if low&1!=0{return Some(Self{index,kind:BarKind::Io,prefetchable:false,base:(low&!3)as u64,raw_low:low,raw_high:None})}let ty=(low>>1)&3;if ty==0{Some(Self{index,kind:BarKind::Memory32,prefetchable:low&8!=0,base:(low&!15)as u64,raw_low:low,raw_high:None})}else if ty==1{Some(Self{index,kind:BarKind::MemoryBelow1M,prefetchable:low&8!=0,base:(low&0x000f_fff0)as u64,raw_low:low,raw_high:None})}else if ty==2{match high{Some(hi)=>Some(Self{index,kind:BarKind::Memory64,prefetchable:low&8!=0,base:((hi as u64)<<32)|(low as u64&!15),raw_low:low,raw_high:Some(hi)}),None=>None}}else{None}}}
@@ -48,4 +103,75 @@ pub fn read_bars<A: ConfigAccess>(io: &A, function: PciFunction, out: &mut [Bar]
     #[test] fn bar_decode(){assert_eq!(Bar::decode(0,0x1001,None).unwrap().base,0x1000);assert!(Bar::decode(0,0x1004,None).is_none());assert_eq!(Bar::decode(0,0x100c,Some(1)).unwrap().base,0x1_0000_1000);}
     #[test] fn decodes_below_one_megabyte_bar(){let bar=Bar::decode(0,0x0008_1002,None).unwrap();assert_eq!(bar.kind,BarKind::MemoryBelow1M);assert_eq!(bar.base,0x81000);}
     #[test] fn ecam_offset(){let w=EcamWindow{segment:0,start_bus:32,end_bus:63,physical_base:0xe0000000};let a=PciAddress{segment:0,bus:33,device:2,function:3};assert_eq!(w.offset(a,0x100),Some(0x10_0000+0x1_0000+0x1800+0x100));}
+}
+
+
+#[cfg(test)]
+mod scan_report_tests {
+    use super::*;
+
+    struct MockConfig {
+        functions: [(PciAddress, [u32; 4]); 2],
+    }
+
+    impl ConfigAccess for MockConfig {
+        fn read_u32(&self, address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+            let index = (register / 4) as usize;
+            for (function_address, registers) in self.functions {
+                if function_address == address {
+                    return registers.get(index).copied().ok_or(ConfigError::OutOfRange);
+                }
+            }
+            Ok(if register == 0 { u32::MAX } else { 0 })
+        }
+
+        fn write_u32(&self, _address: PciAddress, _register: u16, _value: u32) -> Result<(), ConfigError> {
+            Err(ConfigError::OutOfRange)
+        }
+    }
+
+    fn empty_function() -> PciFunction {
+        PciFunction {
+            address: PciAddress { segment: 0, bus: 0, device: 0, function: 0 },
+            identity: PciIdentity {
+                vendor_id: 0, device_id: 0, command: 0, status: 0, revision: 0,
+                programming_interface: 0, subclass: 0, class_code: 0, header_type: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn reports_devices_omitted_by_small_output_buffer() {
+        let first = PciAddress { segment: 0, bus: 0, device: 0, function: 0 };
+        let second = PciAddress { segment: 0, bus: 0, device: 1, function: 0 };
+        let io = MockConfig {
+            functions: [
+                (first, [0x5678_1234, 0, 0, 0]),
+                (second, [0x9abc_4321, 0, 0, 0]),
+            ],
+        };
+        let mut output = [empty_function()];
+        let report = scan_bus_report(&io, 0, 0, &mut output).unwrap();
+        assert_eq!(report.written, 1);
+        assert_eq!(report.devices_found, 2);
+        assert!(report.truncated);
+        assert_eq!(output[0].address, first);
+    }
+
+    #[test]
+    fn reports_complete_scan_when_buffer_fits() {
+        let first = PciAddress { segment: 0, bus: 0, device: 0, function: 0 };
+        let second = PciAddress { segment: 0, bus: 0, device: 1, function: 0 };
+        let io = MockConfig {
+            functions: [
+                (first, [0x5678_1234, 0, 0, 0]),
+                (second, [0x9abc_4321, 0, 0, 0]),
+            ],
+        };
+        let mut output = [empty_function(); 2];
+        let report = scan_bus_report(&io, 0, 0, &mut output).unwrap();
+        assert_eq!(report.written, 2);
+        assert_eq!(report.devices_found, 2);
+        assert!(!report.truncated);
+    }
 }
