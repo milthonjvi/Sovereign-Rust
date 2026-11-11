@@ -57,7 +57,7 @@ impl ConfigurationDescriptor{
   if b[0]!=9||b[1]!=CONFIGURATION_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
   let d=Self{total_length:u16::from_le_bytes([b[2],b[3]]),interface_count:b[4],
    configuration_value:b[5],configuration_index:b[6],attributes:b[7],max_power:b[8]};
-  if d.total_length<9||d.interface_count==0||d.configuration_value==0||d.attributes&0x80==0{
+  if d.total_length<9||d.interface_count==0||d.configuration_value==0||d.attributes&0x80==0||d.attributes&0x1f!=0{
    return Err(UsbError::MalformedDescriptor)
   }
   Ok(d)
