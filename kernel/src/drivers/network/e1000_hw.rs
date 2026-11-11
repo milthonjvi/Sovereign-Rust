@@ -299,13 +299,15 @@ impl E1000TxQueue {
         if frames.is_empty() {
             return Ok(0);
         }
+        // Bound validation work by the actual queue capacity before walking
+        // caller-provided frame metadata.
+        if frames.len() > descriptors.len() - 1 - self.pending as usize {
+            return Err(E1000QueueError::TxRingFull);
+        }
         if frames.iter().any(|(address, length)| {
             *address == 0 || *address & 0xf != 0 || *length == 0 || *length > u16::MAX as usize
         }) {
             return Err(E1000QueueError::InvalidFrameLength);
-        }
-        if frames.len() > descriptors.len() - 1 - self.pending as usize {
-            return Err(E1000QueueError::TxRingFull);
         }
 
         let count = descriptors.len();
