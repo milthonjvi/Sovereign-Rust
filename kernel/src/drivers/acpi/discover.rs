@@ -88,3 +88,83 @@ impl AcpiTables {
         Ok(found)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_sdt(signature: [u8; 4], length: usize) -> std::vec::Vec<u8> {
+        let mut bytes = std::vec![0u8; length];
+        bytes[0..4].copy_from_slice(&signature);
+        bytes[4..8].copy_from_slice(&(length as u32).to_le_bytes());
+        bytes[8] = 1;
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        bytes
+    }
+
+    fn make_xsdt(fadt_address: u64) -> std::vec::Vec<u8> {
+        let mut bytes = make_sdt(*b"XSDT", 44);
+        bytes[36..44].copy_from_slice(&fadt_address.to_le_bytes());
+        bytes[9] = 0;
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        bytes
+    }
+
+    fn make_fadt(legacy_dsdt: u32, extended_dsdt: u64) -> std::vec::Vec<u8> {
+        let mut bytes = make_sdt(*b"FACP", 148);
+        bytes[40..44].copy_from_slice(&legacy_dsdt.to_le_bytes());
+        bytes[140..148].copy_from_slice(&extended_dsdt.to_le_bytes());
+        bytes[9] = 0;
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        bytes
+    }
+
+    #[test]
+    fn follows_extended_fadt_dsdt_pointer() {
+        let root = make_xsdt(0x2000);
+        let fadt = make_fadt(0x3000, 0x4000);
+        let dsdt = make_sdt(*b"DSDT", 36);
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(fadt.as_slice()),
+            0x4000 => Some(dsdt.as_slice()),
+            _ => None,
+        }).unwrap();
+
+        assert!(result.used_xsdt);
+        assert_eq!(result.fadt, Some(0x2000));
+        assert_eq!(result.dsdt, Some(0x4000));
+    }
+
+    #[test]
+    fn rejects_fadt_dsdt_pointer_to_wrong_signature() {
+        let root = make_xsdt(0x2000);
+        let fadt = make_fadt(0x3000, 0);
+        let wrong_table = make_sdt(*b"APIC", 36);
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(fadt.as_slice()),
+            0x3000 => Some(wrong_table.as_slice()),
+            _ => None,
+        });
+
+        assert_eq!(result, Err(AcpiError::InvalidSignature));
+    }
+}
