@@ -57,9 +57,7 @@ pub extern "efiapi" fn efi_main(
         }
     };
 
-    if !console.write_ascii("Kernel PT_LOAD segments copied to reserved physical memory.\r\n")
-        || !console.write_ascii("Kernel virtual mappings and handoff are still pending.\r\n")
-    {
+    if !console.write_ascii("Kernel PT_LOAD segments copied to reserved physical memory.\r\n") {
         return EFI_INVALID_PARAMETER;
     }
 
