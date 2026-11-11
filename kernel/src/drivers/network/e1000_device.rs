@@ -10,9 +10,10 @@ use super::device::{
 };
 use super::dma::DmaBuffer;
 use super::e1000::{
-    supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL, REG_RAL0, REG_RAH0,
+    supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL, REG_RAL0, REG_RAH0, REG_MTA_BASE,
 };
 use super::e1000_descriptor::mac_address_from_registers;
+use super::e1000_filter::E1000MulticastFilter;
 use super::e1000_hw::{
     read_link_state, reset, E1000QueueError, E1000Registers, E1000ResetError,
     E1000QueueConfig, E1000RxQueue, E1000TxQueue,
@@ -41,6 +42,7 @@ pub struct E1000Device<'a, 'dma, R: E1000Registers> {
     rx_queue: E1000RxQueue,
     tx_queue: E1000TxQueue,
     interface: NetworkInterfaceInfo,
+    multicast_filter: E1000MulticastFilter,
     ready: bool,
     stopped: bool,
     faulted: bool,
@@ -132,6 +134,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             rx_queue,
             tx_queue,
             interface,
+            multicast_filter: E1000MulticastFilter::empty(),
             ready: false,
             stopped: false,
             faulted: false,
@@ -154,6 +157,44 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         };
         self.interface.link = link;
         Ok(link)
+    }
+
+    /// Replace the hardware multicast filter with the requested group addresses.
+    ///
+    /// The MTA image is updated without enabling promiscuous/all-multicast mode.
+    /// Packets arriving during the register writes may observe an intermediate
+    /// filter; this method is intended for control-plane configuration.
+    pub fn set_multicast_filter(
+        &mut self,
+        addresses: &[super::ethernet::MacAddress],
+    ) -> Result<(), DriverError> {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        let next = E1000MulticastFilter::from_addresses(addresses)
+            .map_err(|_| DriverError::InvalidConfiguration)?;
+        let current_registers = self.multicast_filter.registers();
+        let next_registers = next.registers();
+        let mut changed = false;
+        for index in 0..next_registers.len() {
+            if current_registers[index] == next_registers[index] {
+                continue;
+            }
+            let offset = REG_MTA_BASE + index as u32 * 4;
+            if self.registers.write32(offset, next_registers[index]).is_err() {
+                self.ready = false;
+                self.faulted = true;
+                return Err(DriverError::HardwareFault);
+            }
+            changed = true;
+        }
+        if changed && self.registers.read32(super::e1000::REG_STATUS).is_err() {
+            self.ready = false;
+            self.faulted = true;
+            return Err(DriverError::HardwareFault);
+        }
+        self.multicast_filter = next;
+        Ok(())
     }
 
     /// Enable the interrupt causes configured in an installed E1000 APIC bridge.
