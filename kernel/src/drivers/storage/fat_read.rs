@@ -10,9 +10,36 @@ pub struct FatVolume {
 impl FatVolume {
     pub fn new(bpb: FatBpb, geometry: super::block::BlockGeometry) -> Result<Self, FatError> {
         let geometry = geometry.validate().map_err(FatError::Block)?;
-        if bpb.bytes_per_sector as u32 != geometry.block_size || bpb.total_sectors as u64 > geometry.block_count {
+        let bps = bpb.bytes_per_sector as u32;
+        if bps != geometry.block_size || !(512..=4096).contains(&bps) || !bps.is_power_of_two()
+            || bpb.total_sectors as u64 > geometry.block_count || bpb.total_sectors == 0
+            || bpb.reserved_sectors == 0 || bpb.fat_count == 0 || bpb.sectors_per_fat == 0
+            || bpb.sectors_per_cluster == 0 || !bpb.sectors_per_cluster.is_power_of_two()
+            || bpb.sectors_per_cluster > 128 || bpb.active_fat >= bpb.fat_count {
             return Err(FatError::InvalidTotalSectors);
         }
+        let fat_span = (bpb.fat_count as u32).checked_mul(bpb.sectors_per_fat)
+            .ok_or(FatError::InvalidFatSize)?;
+        let expected_first = (bpb.reserved_sectors as u32).checked_add(fat_span)
+            .and_then(|v| v.checked_add(bpb.root_directory_sectors))
+            .ok_or(FatError::InvalidTotalSectors)?;
+        if expected_first != bpb.first_data_sector || expected_first >= bpb.total_sectors {
+            return Err(FatError::InvalidTotalSectors);
+        }
+        let data_sectors = bpb.total_sectors - expected_first;
+        let clusters = data_sectors / bpb.sectors_per_cluster as u32;
+        let kind = if clusters < 4_085 { FatKind::Fat12 } else if clusters < 65_525 { FatKind::Fat16 } else { FatKind::Fat32 };
+        if data_sectors != bpb.data_sectors || clusters != bpb.cluster_count || kind != bpb.kind
+            || (kind == FatKind::Fat32 && (bpb.root_entry_count != 0 || bpb.root_cluster.map_or(true, |v| v < 2 || v >= clusters + 2)))
+            || (kind != FatKind::Fat32 && (bpb.root_entry_count == 0 || bpb.root_cluster.is_some()))
+            || (bpb.fat_mirroring_enabled && bpb.active_fat != 0) {
+            return Err(FatError::InvalidClusterCount);
+        }
+        let bits = match kind { FatKind::Fat12 => 12u64, FatKind::Fat16 => 16, FatKind::Fat32 => 32 };
+        let required = (clusters as u64 + 2).checked_mul(bits).and_then(|v| v.checked_add(7))
+            .ok_or(FatError::FatTooSmall)? / 8;
+        let available = (bpb.sectors_per_fat as u64).checked_mul(bps as u64).ok_or(FatError::FatTooSmall)?;
+        if available < required { return Err(FatError::FatTooSmall); }
         Ok(Self { bpb, geometry })
     }
     pub const fn cluster_size_bytes(&self) -> usize {
