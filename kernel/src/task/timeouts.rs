@@ -120,6 +120,28 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         Ok(count)
     }
 
+
+    /// Process task wakeups only when the registered timer IRQ signaled work.
+    ///
+    /// The atomic notification is consumed before draining. An IRQ arriving
+    /// during or after the drain leaves the flag set for the next deferred
+    /// pass, so notifications are not lost.
+    ///
+    /// # Safety
+    /// Must run on the CPU that owns this timeout manager, in deferred/task
+    /// context rather than inside the hard interrupt handler.
+    pub unsafe fn collect_pending_wakeups(
+        &self,
+        events: &mut [Option<TimerEvent>],
+        wakeups: &mut [Option<TaskId>],
+    ) -> Result<usize, crate::drivers::api::DriverError> {
+        if !crate::time::take_timer_work_pending() {
+            return Ok(0);
+        }
+        // SAFETY: Same-CPU and deferred-context requirements are inherited.
+        unsafe { self.collect_wakeups(events, wakeups) }
+    }
+
     /// Next monotonic deadline for the current CPU's hardware timer.
     pub fn next_deadline(&self) -> Option<Deadline> {
         self.timers.next_deadline()
