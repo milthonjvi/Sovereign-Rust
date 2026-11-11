@@ -154,7 +154,7 @@ mod command_header_extent_tests {
     #[test]
     fn rejects_command_table_crossing_32_bit_dma_boundary() {
         assert_eq!(
-            command_header(u32::MAX as u64 - 127, 0, false, 5, false),
+            command_header(u32::MAX as u64 - 127, 1, false, 5, false),
             Err(AhciError::UnsupportedAddressing)
         );
     }
@@ -162,7 +162,7 @@ mod command_header_extent_tests {
     #[test]
     fn validates_full_prdt_table_extent() {
         assert_eq!(
-            command_header(u32::MAX as u64 - 255, 8, false, 5, false),
+            command_header(u32::MAX as u64 - 255, 9, false, 5, false),
             Err(AhciError::UnsupportedAddressing)
         );
         assert!(command_header(0x1000, 8, false, 5, false).is_ok());
