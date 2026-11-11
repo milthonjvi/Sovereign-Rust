@@ -4,20 +4,6 @@ use super::event::{InputDeviceId, InputEvent};
 use super::queue::SpscProducer;
 use crate::drivers::usb::hid::{BootKeyboardReport, BootMouseReport, BootMouseReportWheel};
 
-/// Monotonic boot-lifetime IDs; never reuses an ID and aliases no stale event.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct InputDeviceIdAllocator { next: u16, exhausted: bool }
-impl InputDeviceIdAllocator {
-    pub const fn new() -> Self { Self { next: 1, exhausted: false } }
-    pub fn allocate(&mut self) -> Option<InputDeviceId> {
-        if self.exhausted { return None; }
-        let id = InputDeviceId(self.next);
-        if self.next == u16::MAX { self.exhausted = true; } else { self.next += 1; }
-        Some(id)
-    }
-}
-impl Default for InputDeviceIdAllocator { fn default() -> Self { Self::new() } }
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HidPublishStats { pub published: u8, pub dropped: u8 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
