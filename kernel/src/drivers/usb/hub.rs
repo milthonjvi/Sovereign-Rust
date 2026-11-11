@@ -228,7 +228,7 @@ impl HubPortMachine{
   p.observe(HubPortStatus{status:HubPortStatus::CONNECTION|HubPortStatus::ENABLE,change:HubPortStatus::C_RESET});
   assert_eq!(p.take_action(),Some(HubPortAction::ClearResetChange));assert!(p.ready());
  }
- #[test]fn overcurrent_requests_power_off(){let mut p=HubPortMachine::new(1,0);p.start().unwrap();p.observe(HubPortStatus{status:HubPortStatus::OVER_CURRENT,change:0});assert_eq!(p.take_action(),Some(HubPortAction::PowerOff));}
+ #[test]fn overcurrent_requests_power_off_once(){let mut p=HubPortMachine::new(1,0);p.start().unwrap();let status=HubPortStatus{status:HubPortStatus::OVER_CURRENT,change:0};p.observe(status);assert_eq!(p.take_action(),Some(HubPortAction::PowerOff));p.observe(status);assert_eq!(p.take_action(),None);}
 }
 
 #[cfg(test)]
