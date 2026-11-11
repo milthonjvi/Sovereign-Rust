@@ -145,9 +145,14 @@ impl Hpet {
         if timer >= self.capabilities.timer_count {
             return Err(DriverError::InvalidConfiguration);
         }
+        let config_offset = TIMER_CONFIGURATION_BASE + timer as usize * TIMER_STRIDE;
+        let timer_config = self.read_register(config_offset);
+        let timer_supports_64_bit = timer_config & (1 << 5) != 0;
+        if !timer_supports_64_bit && value > u32::MAX as u64 {
+            return Err(DriverError::InvalidConfiguration);
+        }
         let offset = TIMER_COMPARATOR_BASE + timer as usize * TIMER_STRIDE;
-        let compare = if self.capabilities.counter_64_bit { value } else { value & 0xffff_ffff };
-        self.write_register(offset, compare);
+        self.write_register(offset, value);
         Ok(())
     }
 
