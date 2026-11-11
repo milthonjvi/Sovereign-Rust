@@ -563,6 +563,9 @@ impl E1000RxQueue {
         let slot = index as usize;
         // SAFETY: this slot is pinned DMA memory and is CPU-owned until recycled.
         let completed_descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(slot)) };
+        if completed_descriptor.status & super::e1000::RXD_STATUS_DD == 0 {
+            return Err(E1000QueueError::InvalidRing);
+        }
         let rearmed = RxDescriptor::for_buffer(completed_descriptor.buffer_address);
         // SAFETY: write the reset descriptor before advancing the hardware tail.
         unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(slot), rearmed); }
