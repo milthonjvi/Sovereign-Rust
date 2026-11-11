@@ -143,20 +143,20 @@ impl SuperSpeedPortStatus{
 }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,WarmResume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange,ClearWarmResetChange}
+pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,WarmResume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange,ClearWarmResetChange,ClearLinkStateChange,ClearConfigErrorChange}
 impl HubPortAction{
  pub const fn feature(self)->u16{
   match self{
    Self::PowerOn|Self::PowerOff=>8,Self::Reset=>4,Self::WarmReset=>28,Self::Enable=>1,Self::Suspend|Self::Resume=>2,Self::WarmResume=>5,
    Self::ClearConnectionChange=>16,Self::ClearEnableChange=>17,Self::ClearSuspendChange=>18,
-   Self::ClearOverCurrentChange=>19,Self::ClearResetChange=>20,Self::ClearWarmResetChange=>29,
+   Self::ClearOverCurrentChange=>19,Self::ClearResetChange=>20,Self::ClearWarmResetChange=>29,Self::ClearLinkStateChange=>25,Self::ClearConfigErrorChange=>26,
   }
  }
  pub const fn request(self)->u8{
   match self{
    Self::PowerOn|Self::Reset|Self::WarmReset|Self::WarmResume|Self::Enable|Self::Suspend=>HUB_SET_FEATURE,
    Self::PowerOff|Self::Resume|Self::ClearConnectionChange|Self::ClearEnableChange|
-   Self::ClearSuspendChange|Self::ClearOverCurrentChange|Self::ClearResetChange|Self::ClearWarmResetChange=>HUB_CLEAR_FEATURE,
+   Self::ClearSuspendChange|Self::ClearOverCurrentChange|Self::ClearResetChange|Self::ClearWarmResetChange|Self::ClearLinkStateChange|Self::ClearConfigErrorChange=>HUB_CLEAR_FEATURE,
   }
  }
  pub const fn request_type(self)->u8{HUB_PORT_REQUEST_TYPE_OUT}
@@ -245,9 +245,9 @@ pub const HUB_PORT_RESET_TIMEOUT_MS:u32=500;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent,OverCurrentLatched}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool,clear_connection_change:bool,clear_enable_change:bool,clear_suspend_change:bool,clear_over_current_change:bool,clear_reset_change:bool,clear_warm_reset_change:bool,reset_elapsed_ms:u32}
+pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool,clear_connection_change:bool,clear_enable_change:bool,clear_suspend_change:bool,clear_over_current_change:bool,clear_reset_change:bool,clear_link_state_change:bool,clear_config_error_change:bool,clear_warm_reset_change:bool,reset_elapsed_ms:u32}
 impl HubPortMachine{
- pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:false,clear_connection_change:false,clear_enable_change:false,clear_suspend_change:false,clear_over_current_change:false,clear_reset_change:false,clear_warm_reset_change:false,reset_elapsed_ms:0}}
+ pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:false,clear_connection_change:false,clear_enable_change:false,clear_suspend_change:false,clear_over_current_change:false,clear_reset_change:false,clear_link_state_change:false,clear_config_error_change:false,clear_warm_reset_change:false,reset_elapsed_ms:0}}
  pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true,clear_connection_change:false,clear_warm_reset_change:false,reset_elapsed_ms:0}}
  pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
  pub fn elapse_ms(&mut self,ms:u32){
@@ -298,6 +298,8 @@ impl HubPortMachine{
   if status.enabled(){normalized|=HubPortStatus::ENABLE;}
   if status.over_current(){normalized|=HubPortStatus::OVER_CURRENT;}
   if status.reset(){normalized|=HubPortStatus::RESET;}
+  if status.change&(1<<6)!=0{self.clear_link_state_change=true;}
+  if status.change&(1<<7)!=0{self.clear_config_error_change=true;}
   if self.state==HubPortState::Resetting&&status.connected()&&status.enabled()
    &&status.change&SuperSpeedPortStatus::C_BH_RESET!=0{
    self.state=HubPortState::ClearResetChange;
@@ -315,6 +317,8 @@ impl HubPortMachine{
   if self.clear_suspend_change{self.clear_suspend_change=false;return Some(HubPortAction::ClearSuspendChange)}
   if self.clear_over_current_change{self.clear_over_current_change=false;return Some(HubPortAction::ClearOverCurrentChange)}
   if self.clear_reset_change{self.clear_reset_change=false;return Some(HubPortAction::ClearResetChange)}
+  if self.clear_link_state_change{self.clear_link_state_change=false;return Some(HubPortAction::ClearLinkStateChange)}
+  if self.clear_config_error_change{self.clear_config_error_change=false;return Some(HubPortAction::ClearConfigErrorChange)}
   if self.clear_warm_reset_change{
    self.clear_warm_reset_change=false;
    self.state=HubPortState::Ready;
@@ -335,6 +339,8 @@ impl HubPortMachine{
    HubPortAction::ClearSuspendChange=>self.clear_suspend_change=true,
    HubPortAction::ClearOverCurrentChange=>self.clear_over_current_change=true,
    HubPortAction::ClearResetChange=>self.clear_reset_change=true,
+   HubPortAction::ClearLinkStateChange=>self.clear_link_state_change=true,
+   HubPortAction::ClearConfigErrorChange=>self.clear_config_error_change=true,
    HubPortAction::PowerOff if self.state==HubPortState::OverCurrentLatched=>self.state=HubPortState::OverCurrent,
    _=>{}
   }
@@ -500,3 +506,5 @@ mod hub_change_bitmap_ack_tests{
   p.action_failed(action);assert_eq!(p.take_action(),Some(action));
  }
 }
+
+#[cfg(test)]mod superspeed_change_ack_tests{use super::*;#[test]fn link_and_config_changes_are_acknowledged(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0xc0,0]).unwrap());assert_eq!(p.take_action(),Some(HubPortAction::ClearLinkStateChange));assert_eq!(p.take_action(),Some(HubPortAction::ClearConfigErrorChange));assert_eq!(p.take_action(),None);assert_eq!(port_action(1,HubPortAction::ClearLinkStateChange).value,25);assert_eq!(port_action(1,HubPortAction::ClearConfigErrorChange).value,26);}#[test]fn superspeed_change_clear_retries_after_failure(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0x40,0]).unwrap());let a=p.take_action().unwrap();p.action_failed(a);assert_eq!(p.take_action(),Some(a));}}
