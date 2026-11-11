@@ -239,6 +239,20 @@ static COM2_STATS: AtomicRxStatistics = AtomicRxStatistics::new();
 static COM3_STATS: AtomicRxStatistics = AtomicRxStatistics::new();
 static COM4_STATS: AtomicRxStatistics = AtomicRxStatistics::new();
 
+
+/// Snapshot of software receive-queue pressure for one UART.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UartRxPressure {
+    /// Bytes currently waiting for the consumer.
+    pub queued_bytes: usize,
+    /// Maximum usable number of queued bytes.
+    pub capacity: usize,
+    /// Greatest simultaneous occupancy observed since queue construction.
+    pub high_watermark: usize,
+    /// Bytes rejected because the software queue was full.
+    pub dropped_bytes: usize,
+}
+
 /// Errors returned by UART interrupt attachment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UartIrqError {
@@ -535,6 +549,20 @@ pub fn transmit_pending(base: u16) -> Option<usize> {
     binding(base).map(|port| port.tx_queue.len())
 }
 
+
+
+/// Returns a coherent-enough diagnostic snapshot of software RX pressure.
+///
+/// The counters are independent atomic snapshots; concurrent IRQ activity may
+/// advance them between reads. No lock is taken and this function is task-safe.
+pub fn receive_pressure(base: u16) -> Option<UartRxPressure> {
+    binding(base).map(|port| UartRxPressure {
+        queued_bytes: port.queue.len(),
+        capacity: port.queue.capacity(),
+        high_watermark: port.queue.high_watermark(),
+        dropped_bytes: port.queue.dropped_bytes(),
+    })
+}
 
 /// Returns the greatest software RX queue occupancy observed for a legacy UART.
 pub fn receive_high_watermark(base: u16) -> Option<usize> {
