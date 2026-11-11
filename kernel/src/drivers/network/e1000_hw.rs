@@ -343,16 +343,32 @@ impl E1000TxQueue {
         Ok(Some(index as u16))
     }
 
-    /// Reclaim all currently completed descriptors, preserving submission order.
+    /// Reclaim all currently completed descriptors with one DMA read barrier.
+    /// Completion is consumed strictly in submission order.
     pub fn reap<R: E1000Registers>(
         &mut self,
         registers: &mut R,
         descriptors: &[TxDescriptor],
     ) -> Result<usize, E1000QueueError<R::Error>> {
-        let mut completed = 0;
-        while self.reap_one(registers, descriptors)?.is_some() {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        if self.pending == 0 {
+            return Ok(0);
+        }
+        registers.dma_read_barrier();
+        let mut completed = 0usize;
+        while completed < self.pending as usize {
+            let index = self.clean.index() as usize;
+            // SAFETY: volatile read observes device write-back in the pinned DMA ring.
+            let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+            if descriptor.status & TXD_STATUS_DD == 0 {
+                break;
+            }
+            self.clean.advance();
             completed += 1;
         }
+        self.pending -= completed as u16;
         Ok(completed)
     }
 
