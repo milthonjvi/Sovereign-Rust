@@ -30,8 +30,15 @@ pub struct FrameAllocation {
 }
 
 impl FrameAllocation {
-    pub const fn byte_len(self) -> u64 { self.page_count * PAGE_SIZE }
-    pub const fn end(self) -> u64 { self.start + self.page_count * PAGE_SIZE }
+    pub const fn checked_byte_len(self) -> Option<u64> {
+        self.page_count.checked_mul(PAGE_SIZE)
+    }
+    pub const fn checked_end(self) -> Option<u64> {
+        match self.checked_byte_len() {
+            Some(bytes) => self.start.checked_add(bytes),
+            None => None,
+        }
+    }
 }
 
 pub struct FrameAllocator<'map, 'buffer> {
@@ -42,7 +49,7 @@ pub struct FrameAllocator<'map, 'buffer> {
 }
 
 impl<'map, 'buffer> FrameAllocator<'map, 'buffer> {
-    pub fn new(memory: &'map BootMemoryMap<'map, 'buffer>) -> Self {
+    pub fn new(memory: &BootMemoryMap<'map, 'buffer>) -> Self {
         Self {
             regions: memory.usable_regions(),
             current: None,
@@ -141,7 +148,7 @@ mod tests {
     #[test]
     fn allocations_report_exclusive_end_and_size() {
         let allocation = FrameAllocation { start: 0x20_0000, page_count: 8 };
-        assert_eq!(allocation.byte_len(), 0x8000);
-        assert_eq!(allocation.end(), 0x20_8000);
+        assert_eq!(allocation.checked_byte_len(), Some(0x8000));
+        assert_eq!(allocation.checked_end(), Some(0x20_8000));
     }
 }
