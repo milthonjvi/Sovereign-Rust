@@ -211,6 +211,17 @@ mod trb_builder_tests{
 }
 
 
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+#[repr(C,align(16))]
+pub struct EventRingSegmentTableEntry{pub ring_segment_base:u64,pub ring_segment_size:u32,pub reserved:u32}
+impl EventRingSegmentTableEntry{
+ pub fn new(base:u64,trb_count:u32)->Result<Self,XhciError>{
+  if base&0x0f!=0||trb_count==0||trb_count>u16::MAX as u32{return Err(XhciError::InvalidDmaAddress)}
+  Ok(Self{ring_segment_base:base,ring_segment_size:trb_count,reserved:0})
+ }
+}
+
 pub const OP_USBCMD:usize=0x00;
 pub const OP_USBSTS:usize=0x04;
 pub const OP_CRCR:usize=0x18;
@@ -225,7 +236,7 @@ pub const USBSTS_CONTROLLER_NOT_READY:u32=1<<11;
 
 /// Non-blocking xHCI bring-up. DMA memory and MMIO mapping are provided by
 /// kernel memory/PCI layers; every poll returns so the caller can enforce timeout.
-pub struct XhciController{pub state:ControllerState,pub capabilities:CapabilityRegisters,operational_base:usize,pub enabled_slots:u8}
+pub struct XhciController{pub state:ControllerState,pub capabilities:CapabilityRegisters,operational_base:usize,runtime_base:usize,doorbell_base:usize,pub enabled_slots:u8,dma_configured:bool,event_ring_configured:bool}
 impl XhciController{
  pub fn discover<I:RegisterIo>(io:&I)->Result<Self,XhciError>{
   let cap0=io.read32(0)?;let hcs1=io.read32(4)?;
@@ -264,10 +275,29 @@ impl XhciController{
   io.write32(self.op(OP_CRCR)+4,(command_ring>>32)as u32)?;
   io.write32(self.op(OP_CRCR),(command_ring as u32)|1)?;
   io.write32(self.op(OP_CONFIG),slots as u32)?;
-  self.enabled_slots=slots;Ok(())
+  self.enabled_slots=slots;self.dma_configured=true;Ok(())
+ }
+ /// Programs interrupter zero. The caller must have populated the single
+ /// ERST entry at erst_physical with event_ring_physical and trb_count.
+ pub fn configure_event_ring<I:RegisterIo>(&mut self,io:&mut I,erst_physical:u64,event_ring_physical:u64,trb_count:u16)->Result<(),XhciError>{
+  if self.state!=ControllerState::Reset||!self.dma_configured||self.event_ring_configured{return Err(XhciError::InvalidState)}
+  if erst_physical&0x3f!=0||event_ring_physical&0x0f!=0||trb_count==0{return Err(XhciError::InvalidDmaAddress)}
+  let interrupter=self.runtime_base+0x20;
+  io.write32(interrupter+0x04,0)?;
+  io.write32(interrupter+0x08,1)?;
+  io.write32(interrupter+0x10,(erst_physical>>32)as u32)?;
+  io.write32(interrupter+0x0c,erst_physical as u32)?;
+  io.write32(interrupter+0x18,(event_ring_physical>>32)as u32)?;
+  io.write32(interrupter+0x14,event_ring_physical as u32)?;
+  io.write32(interrupter,1<<1)?;
+  self.event_ring_configured=true;Ok(())
+ }
+ pub fn ring_doorbell<I:RegisterIo>(&self,io:&mut I,slot_id:u8,target:u8)->Result<(),XhciError>{
+  if self.state!=ControllerState::Running||slot_id>self.enabled_slots||target>31{return Err(XhciError::InvalidState)}
+  io.write32(self.doorbell_base+(slot_id as usize)*4,target as u32)
  }
  pub fn start<I:RegisterIo>(&mut self,io:&mut I)->Result<(),XhciError>{
-  if self.state!=ControllerState::Reset||self.enabled_slots==0{return Err(XhciError::InvalidState)}
+  if self.state!=ControllerState::Reset||!self.dma_configured||!self.event_ring_configured||self.enabled_slots==0{return Err(XhciError::InvalidState)}
   let command=io.read32(self.op(OP_USBCMD))?;
   io.write32(self.op(OP_USBCMD),command|USBCMD_RUN)?;Ok(())
  }
