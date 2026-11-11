@@ -549,21 +549,22 @@ fn transition_to_kernel(
             // Switch to the already-mapped bootstrap stack before changing
             // CR3. This keeps NMI/exception delivery off the firmware stack
             // throughout the address-space transition window.
+            // Flush firmware global translations while its code mapping is
+            // still active; otherwise a stale global entry could fault on
+            // the very first instruction fetched after the CR3 switch.
+            "mov r9, cr4",
+            "test r9, 0x80",
+            "jz 2f",
+            "btr r9, 7",
+            "mov cr4, r9",
+            "bts r9, 7",
+            "mov cr4, r9",
+            "2:",
             "mov rsp, rcx",
             "mov cr3, rax",
-            "mov rax, cr0",
-            "or rax, 0x10000",
-            "mov cr0, rax",
-            // CR3 reload does not invalidate global TLB entries when PGE is
-            // active. Toggle PGE without disturbing LA57/PCIDE to flush them.
-            "mov rax, cr4",
-            "test rax, 0x80",
-            "jz 2f",
-            "btr rax, 7",
-            "mov cr4, rax",
-            "bts rax, 7",
-            "mov cr4, rax",
-            "2:",
+            "mov r9, cr0",
+            "or r9, 0x10000",
+            "mov cr0, r9",
             "mov rdi, rdx",
             "jmp r8",
             in("rax") page_table_root,
