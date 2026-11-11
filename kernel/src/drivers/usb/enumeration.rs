@@ -40,12 +40,12 @@ pub enum EnumerationStage{
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct EnumerationSession{
- stage:EnumerationStage,address:Option<DeviceAddress>,address_settle_ms:u16,configuration_value:u8,
+ stage:EnumerationStage,address:Option<DeviceAddress>,address_settle_ms:u16,initial_ep0_packet_size:Option<u8>,configuration_value:u8,
  configuration_length:u16,device:Option<DeviceDescriptor>,configuration:Option<ParsedConfiguration>,
 }
 impl EnumerationSession{
  pub const fn new()->Self{Self{stage:EnumerationStage::ReadInitialDeviceDescriptor,
-  address:None,address_settle_ms:0,configuration_value:0,configuration_length:0,device:None,configuration:None}}
+  address:None,address_settle_ms:0,initial_ep0_packet_size:None,configuration_value:0,configuration_length:0,device:None,configuration:None}}
  pub const fn stage(&self)->EnumerationStage{self.stage}
  pub const fn address(&self)->Option<DeviceAddress>{self.address}
  pub const fn device_descriptor(&self)->Option<DeviceDescriptor>{self.device}
@@ -70,7 +70,8 @@ impl EnumerationSession{
   let result=(||{
    match self.stage{
     EnumerationStage::ReadInitialDeviceDescriptor=>{
-     if data.len()<8||data[0]!=18||data[1]!=DESC_DEVICE||!matches!(data[7],8|16|32|64|9){return Err(UsbError::MalformedDescriptor)}
+     if data.len()!=8||data[0]!=18||data[1]!=DESC_DEVICE||!matches!(data[7],8|16|32|64|9){return Err(UsbError::MalformedDescriptor)}
+     self.initial_ep0_packet_size=Some(data[7]);
      self.address=Some(pool.allocate()?);self.address_settle_ms=0;self.stage=EnumerationStage::SetAddress;
     }
     EnumerationStage::SetAddress=>{
@@ -79,7 +80,9 @@ impl EnumerationSession{
     }
     EnumerationStage::AddressSettle=>return Err(UsbError::Unsupported),
     EnumerationStage::ReadDeviceDescriptor=>{
-     let d=DeviceDescriptor::parse(data)?;self.device=Some(d);self.stage=EnumerationStage::ReadConfigurationHeader;
+     let d=DeviceDescriptor::parse(data)?;
+     if self.initial_ep0_packet_size!=Some(d.max_packet_size_0){return Err(UsbError::MalformedDescriptor)}
+     self.device=Some(d);self.stage=EnumerationStage::ReadConfigurationHeader;
     }
     EnumerationStage::ReadConfigurationHeader=>{
      let d=ConfigurationDescriptor::parse(data)?;
@@ -123,7 +126,6 @@ impl EnumerationSession{
   }else{self.address.unwrap_or(DeviceAddress::DEFAULT)};
   let report=match super::control::execute_control(controller,target,setup,buffer){
    Ok(report)=>report,
-   Err(UsbError::BufferTooShort)=>return Err(UsbError::BufferTooShort),
    Err(error)=>{let _=self.release_address(pool);return Err(error);}
   };
   self.complete(&buffer[..report.bytes_transferred],pool)?;
