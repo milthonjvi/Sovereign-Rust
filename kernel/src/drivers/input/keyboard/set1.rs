@@ -19,7 +19,7 @@ impl Set1Decoder {
 }
 fn map_scancode(s: u16, e: bool) -> KeyCode {
  if e { return match s {
-  0x1C => KeyCode::Keypad0, 0x1D => KeyCode::RightCtrl, 0x35 => KeyCode::Slash, 0x38 => KeyCode::RightAlt,
+  0x1C => KeyCode::KeypadEnter, 0x1D => KeyCode::RightCtrl, 0x35 => KeyCode::Slash, 0x38 => KeyCode::RightAlt,
   0x47 => KeyCode::Home, 0x48 => KeyCode::Up, 0x49 => KeyCode::PageUp, 0x4B => KeyCode::Left,
   0x4D => KeyCode::Right, 0x4F => KeyCode::End, 0x50 => KeyCode::Down, 0x51 => KeyCode::PageDown,
   0x52 => KeyCode::Insert, 0x53 => KeyCode::Delete, _ => KeyCode::Unknown(0x100 | s),
