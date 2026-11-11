@@ -24,8 +24,8 @@ impl E1000RxQueue {
         &mut self,
         registers: &mut R,
         descriptors: &[RxDescriptor],
-    ) -> Result<Option<(u16, super::e1000_descriptor::RxCompletion)>, E1000QueueError<R::Error>> {
-        let mut result = [(0u16, super::e1000_descriptor::RxCompletion {
+    ) -> Result<Option<(u16, crate::drivers::network::e1000_descriptor::RxCompletion)>, E1000QueueError<R::Error>> {
+        let mut result = [(0u16, crate::drivers::network::e1000_descriptor::RxCompletion {
             length: 0, end_of_packet: false, errors: 0,
         }); 1];
         if self.poll_batch(registers, descriptors, &mut result)? == 0 {
@@ -41,7 +41,7 @@ impl E1000RxQueue {
         &mut self,
         registers: &mut R,
         descriptors: &[RxDescriptor],
-        output: &mut [(u16, super::e1000_descriptor::RxCompletion)],
+        output: &mut [(u16, crate::drivers::network::e1000_descriptor::RxCompletion)],
     ) -> Result<usize, E1000QueueError<R::Error>> {
         if descriptors.len() != self.cursor_count() {
             return Err(E1000QueueError::InvalidRing);
@@ -58,7 +58,7 @@ impl E1000RxQueue {
             let descriptor = unsafe { descriptors.as_ptr().add(index) };
             // SAFETY: read the device-written DD byte from the pinned ring.
             let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
-            if status & super::e1000::RXD_STATUS_DD == 0 {
+            if status & crate::drivers::network::e1000::RXD_STATUS_DD == 0 {
                 break;
             }
             output[count].0 = index as u16;
@@ -98,7 +98,7 @@ impl E1000RxQueue {
         &mut self,
         registers: &mut R,
         descriptors: &mut [RxDescriptor],
-        completed: &[(u16, super::e1000_descriptor::RxCompletion)],
+        completed: &[(u16, crate::drivers::network::e1000_descriptor::RxCompletion)],
         backup: &mut [RxDescriptor],
     ) -> Result<usize, E1000QueueError<R::Error>> {
         if descriptors.len() != self.cursor_count()
@@ -125,7 +125,7 @@ impl E1000RxQueue {
             let slot = *index as usize;
             // SAFETY: read-only inspection of a pinned DMA descriptor owned by CPU.
             let original = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(slot)) };
-            if original.status & super::e1000::RXD_STATUS_DD == 0 {
+            if original.status & crate::drivers::network::e1000::RXD_STATUS_DD == 0 {
                 return Err(E1000QueueError::InvalidRing);
             }
             backup[offset] = original;
@@ -173,7 +173,7 @@ impl E1000RxQueue {
         let slot = index as usize;
         // SAFETY: this slot is pinned DMA memory and is CPU-owned until recycled.
         let completed_descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(slot)) };
-        if completed_descriptor.status & super::e1000::RXD_STATUS_DD == 0 {
+        if completed_descriptor.status & crate::drivers::network::e1000::RXD_STATUS_DD == 0 {
             return Err(E1000QueueError::InvalidRing);
         }
         let rearmed = RxDescriptor::for_buffer(completed_descriptor.buffer_address);
