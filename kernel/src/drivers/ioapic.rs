@@ -16,6 +16,8 @@ const REG_REDIRECTION_BASE: u8 = 0x10;
 const REDIRECTION_MASK: u32 = 1 << 16;
 const REDIRECTION_ACTIVE_LOW: u32 = 1 << 13;
 const REDIRECTION_LEVEL: u32 = 1 << 15;
+const REDIRECTION_WRITABLE_LOW_MASK: u32 = 0x0001_AFFF;
+const REDIRECTION_WRITABLE_HIGH_MASK: u32 = 0xFF00_0000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IoApicError {
@@ -27,6 +29,7 @@ pub enum IoApicError {
     InvalidPolarity,
     InvalidTriggerMode,
     InvalidFlags,
+    HardwareRejectedWrite,
 }
 
 /// Decoded ACPI interrupt electrical configuration.
@@ -64,6 +67,21 @@ impl InterruptMode {
 #[inline]
 pub const fn valid_redirection_vector(vector: u8) -> bool {
     vector >= 32 && vector != 0xFF
+}
+
+/// Compare only architecturally writable redirection bits. Delivery status
+/// and Remote-IRR are read-only and may change asynchronously.
+#[inline]
+const fn redirection_readback_matches(
+    expected_low: u32,
+    expected_high: u32,
+    actual_low: u32,
+    actual_high: u32,
+) -> bool {
+    (expected_low & REDIRECTION_WRITABLE_LOW_MASK)
+        == (actual_low & REDIRECTION_WRITABLE_LOW_MASK)
+        && (expected_high & REDIRECTION_WRITABLE_HIGH_MASK)
+            == (actual_high & REDIRECTION_WRITABLE_HIGH_MASK)
 }
 
 /// One I/O APIC redirection entry.
@@ -247,8 +265,27 @@ impl IoApicController {
         // the new delivery attributes while it is still masked.
         let previous_low = self.read_register(low_reg);
         self.write_register(low_reg, previous_low | REDIRECTION_MASK);
-        self.write_register(low_reg + 1, entry.high());
-        self.write_register(low_reg, entry.low() | REDIRECTION_MASK);
+        let expected_low = entry.low() | REDIRECTION_MASK;
+        let expected_high = entry.high();
+        self.write_register(low_reg + 1, expected_high);
+        self.write_register(low_reg, expected_low);
+
+        // Read back the programmed fields before making this route eligible
+        // for unmasking. Read-only Delivery Status and Remote-IRR are excluded.
+        let actual_low = self.read_register(low_reg);
+        let actual_high = self.read_register(low_reg + 1);
+        if !redirection_readback_matches(
+            expected_low,
+            expected_high,
+            actual_low,
+            actual_high,
+        ) {
+            // Best-effort fail-safe: leave the source masked and never publish
+            // it in the configured-route bitmap.
+            self.write_register(low_reg, actual_low | REDIRECTION_MASK);
+            return Err(IoApicError::HardwareRejectedWrite);
+        }
+
         self.mark_route_configured(index);
         Ok(())
     }
@@ -447,6 +484,32 @@ mod tests {
         assert!(valid_redirection_vector(32));
         assert!(valid_redirection_vector(0xFE));
         assert!(!valid_redirection_vector(0xFF));
+    }
+
+    #[test]
+    fn readback_verifies_writable_fields_and_ignores_read_only_status() {
+        let expected_low = 0x41 | REDIRECTION_MASK | REDIRECTION_ACTIVE_LOW;
+        let expected_high = 0x0300_0000;
+        // Delivery Status and Remote-IRR may be set by hardware asynchronously.
+        let actual_low = expected_low | (1 << 12) | (1 << 14);
+        assert!(redirection_readback_matches(
+            expected_low,
+            expected_high,
+            actual_low,
+            expected_high,
+        ));
+        assert!(!redirection_readback_matches(
+            expected_low,
+            expected_high,
+            expected_low ^ 1,
+            expected_high,
+        ));
+        assert!(!redirection_readback_matches(
+            expected_low,
+            expected_high,
+            expected_low,
+            expected_high ^ (1 << 24),
+        ));
     }
 
     #[test]
