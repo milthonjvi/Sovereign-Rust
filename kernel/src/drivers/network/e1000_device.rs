@@ -414,3 +414,122 @@ fn ranges_overlap(
         .ok_or(E1000DeviceError::InvalidBufferPool)?;
     Ok(left_start < right_end && right_start < left_end)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drivers::api::{DeviceClass, DeviceInfo};
+    use super::super::e1000::{RXD_STATUS_DD, RXD_STATUS_EOP, TXD_STATUS_DD, REG_TDT, REG_RDT, REG_STATUS};
+    use super::super::e1000_hw::E1000Registers;
+    use std::vec::Vec;
+
+    #[derive(Default)]
+    struct MockRegisters {
+        writes: Vec<(u32, u32)>,
+    }
+
+    impl E1000Registers for MockRegisters {
+        type Error = ();
+
+        fn read32(&mut self, offset: u32) -> Result<u32, Self::Error> {
+            if offset == REG_STATUS {
+                return Ok((1 << 1) | (2 << 6) | 1);
+            }
+            Ok(0)
+        }
+
+        fn write32(&mut self, offset: u32, value: u32) -> Result<(), Self::Error> {
+            self.writes.push((offset, value));
+            Ok(())
+        }
+
+        fn dma_write_barrier(&mut self) {
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+        }
+
+        fn dma_read_barrier(&mut self) {
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        }
+    }
+
+    fn supported_device() -> DeviceInfo {
+        DeviceInfo {
+            class: DeviceClass::Network,
+            vendor_id: Some(PCI_VENDOR_INTEL),
+            device_id: Some(super::super::e1000::DEVICE_82540EM),
+            address: BusAddress::Pci { segment: 0, bus: 0, device: 3, function: 0 },
+        }
+    }
+
+    #[test]
+    fn batch_transmit_copies_and_publishes_with_one_tail_write() {
+        let mut registers = MockRegisters::default();
+        let mut rx_descriptors = [RxDescriptor::for_buffer(0x10000); 8];
+        let mut tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut rx_storage = [[0u8; 2048]; 8];
+        let mut tx_storage = [[0u8; 2048]; 8];
+        let mut rx_buffers = core::array::from_fn(|i|
+            DmaBuffer::new(0x10000 + i as u64 * 2048, &mut rx_storage[i]).unwrap());
+        let mut tx_buffers = core::array::from_fn(|i|
+            DmaBuffer::new(0x20000 + i as u64 * 2048, &mut tx_storage[i]).unwrap());
+        for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
+            descriptor.buffer_address = buffer.dma_address();
+        }
+        let mut device = E1000Device::new(
+            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+        ).unwrap();
+        device.initialize(&supported_device()).unwrap();
+
+        let first = [0x11u8; 64];
+        let second = [0x22u8; 96];
+        let frames: [&[u8]; 2] = [&first, &second];
+        let mut slots = [u16::MAX; 2];
+        let mut submissions = [(0u64, 0usize); 2];
+        assert_eq!(device.transmit_batch(&frames, &mut slots, &mut submissions), Ok(2));
+        assert_eq!(slots, [0, 1]);
+        assert_eq!(device.tx_buffers[0].as_slice()[..64], first);
+        assert_eq!(device.tx_buffers[1].as_slice()[..96], second);
+        assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_TDT).count(), 1);
+        assert!(device.registers.writes.contains(&(REG_TDT, 2)));
+    }
+
+    #[test]
+    fn batch_receive_copies_frames_and_recycles_with_one_tail_write() {
+        let mut registers = MockRegisters::default();
+        let mut rx_descriptors = [RxDescriptor::for_buffer(0x10000); 8];
+        let tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut rx_storage = [[0u8; 2048]; 8];
+        let mut tx_storage = [[0u8; 2048]; 8];
+        rx_storage[0][..64].fill(0x31);
+        rx_storage[1][..96].fill(0x42);
+        for (index, descriptor) in rx_descriptors.iter_mut().enumerate().take(2) {
+            descriptor.buffer_address = 0x10000 + index as u64 * 2048;
+            descriptor.length = if index == 0 { 64 } else { 96 };
+            descriptor.status = RXD_STATUS_DD | RXD_STATUS_EOP;
+        }
+        let mut rx_buffers = core::array::from_fn(|i|
+            DmaBuffer::new(0x10000 + i as u64 * 2048, &mut rx_storage[i]).unwrap());
+        let mut tx_buffers = core::array::from_fn(|i|
+            DmaBuffer::new(0x20000 + i as u64 * 2048, &mut tx_storage[i]).unwrap());
+        let mut device = E1000Device::new(
+            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+        ).unwrap();
+        device.initialize(&supported_device()).unwrap();
+
+        let mut first = [0u8; 128];
+        let mut second = [0u8; 128];
+        let mut outputs: [&mut [u8]; 2] = [&mut first, &mut second];
+        let mut completions = [(0u16, super::super::e1000_descriptor::RxCompletion {
+            length: 0, end_of_packet: false, errors: 0,
+        }); 2];
+        let mut backup = [RxDescriptor::default(); 2];
+        assert_eq!(device.receive_batch(&mut outputs, &mut completions, &mut backup), Ok(2));
+        assert_eq!(&first[..64], &[0x31; 64]);
+        assert_eq!(&second[..96], &[0x42; 96]);
+        assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_RDT).count(), 1);
+        assert!(device.registers.writes.contains(&(REG_RDT, 1)));
+    }
+}
