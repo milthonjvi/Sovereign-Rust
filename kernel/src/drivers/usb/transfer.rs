@@ -23,9 +23,15 @@ impl EndpointAddress{
 impl Endpoint{
  pub fn from_descriptor(b:&[u8])->Result<Self,UsbError>{
   if b.len()<7||b[0]<7||b[1]!=5{return Err(UsbError::MalformedDescriptor)}
-  let transfer_type=match b[3]&3{0=>TransferType::Control,1=>TransferType::Isochronous,2=>TransferType::Bulk,_=>TransferType::Interrupt};
-  let max_packet_size=u16::from_le_bytes([b[4],b[5]])&0x7ff;
-  if max_packet_size==0{return Err(UsbError::MalformedDescriptor)}
+  let raw=u16::from_le_bytes([b[4],b[5]]);
+  let transfer= b[3]&3;
+  let transfer_type=match transfer{0=>return Err(UsbError::MalformedDescriptor),1=>TransferType::Isochronous,2=>TransferType::Bulk,_=>TransferType::Interrupt};
+  let max_packet_size=raw&0x07ff;
+  let multiplier=(raw>>11)&3;
+  if max_packet_size==0||raw&0xe000!=0||multiplier==3||b[2]&0x0f==0||b[2]&0x70!=0
+   ||(transfer!=1&&b[3]&0xfc!=0)||((transfer!=1&&transfer!=3)&&multiplier!=0){
+   return Err(UsbError::MalformedDescriptor)
+  }
   Ok(Self{address:EndpointAddress::from_raw(b[2]),transfer_type,max_packet_size,interval:b[6]})
  }
 }
