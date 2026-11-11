@@ -362,6 +362,10 @@ impl<const N: usize> PitTaskTimeouts<N> {
         })
     }
 
+    pub fn next_deadline(&self) -> Option<Deadline> {
+        self.timers.next_deadline()
+    }
+
     pub fn pending(&self) -> usize {
         self.timers.pending()
     }
