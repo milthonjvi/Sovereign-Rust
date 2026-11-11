@@ -35,30 +35,37 @@ does not yet populate or pass this structure, and the kernel does not yet
 consume it. The kernel must validate all ranges before dereferencing addresses.
 
 A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support
-and enables EFER.NXE only when the processor advertises NX. It is an explicit
-unsafe operation and is not called automatically by the current UEFI entry
-point.
+and enables EFER.NXE only when the processor advertises NX. The UEFI entry
+point invokes it before installing page-table entries that use the NX bit.
 
 The loader also contains a four-level x86_64 page-table builder in
 `loader/src/page_tables.rs`, plus a UEFI `AllocatePages` provider in
 `loader/src/uefi/page_table_memory.rs`. It maps 4 KiB pages, rejects duplicate
 leaf mappings and writable+executable mappings, and requires the caller to
-confirm EFER.NXE is enabled before creating tables. The builder is not yet
-invoked by the entry point and does not switch CR3. The UEFI provider is valid
-only while Boot Services and the firmware's current address mappings remain
-active. A complete transition must map the loader's code, stack, handoff data,
-kernel segments, and memory-map buffer before changing CR3 or exiting firmware.
+confirm EFER.NXE is enabled before creating tables. The UEFI entry point now allocates a bounded contiguous physical span for the
+validated ELF virtual image, copies every non-empty `PT_LOAD` file payload,
+and zeroes the full span first so BSS and inter-segment gaps are initialized.
+ELF segments that share a 4 KiB page are rejected, as are writable+executable
+segments. The entry point then builds a new four-level page-table root and maps
+each kernel segment with its ELF-derived write/execute permissions and NX
+protection. The image allocation and page-table allocations use UEFI
+`AllocatePages` and remain owned by the loader.
 
-This remains a validation stage, not a complete kernel loader. It does not yet
-allocate physical pages, copy segment contents, zero BSS, construct final page
-tables, acquire the final memory map, or call ExitBootServices.
+This is still not a complete handoff. The page-table root is not loaded into
+CR3. The loader has not yet mapped its own executable image, current stack,
+firmware interfaces needed before `ExitBootServices`, handoff structure, or
+final memory-map buffer into the new address space. The kernel does not yet
+consume the Sovereign Boot ABI. The UEFI allocation provider currently accesses
+allocated pages through the firmware's active identity mapping; this assumption
+must be replaced or explicitly guaranteed by the final mapping transition.
 
 The next stages are:
 
-1. Define the physical/virtual mapping policy and build the loader's page tables.
-2. Allocate pages and load validated `PT_LOAD` segments, including zeroing BSS.
-3. Populate the versioned handoff structure and retain all referenced buffers.
-4. Obtain a stable final memory map and call ExitBootServices with retry logic.
+1. Establish and map the loader runtime, stack, boot-info buffer, and required
+   physical/direct-map regions in the new address space.
+2. Populate the versioned handoff structure and retain every referenced buffer.
+3. Acquire a stable final memory map and call `ExitBootServices` with retry logic.
+4. Switch CR3 only after the post-exit transition path is fully mapped.
 5. Transfer control using the agreed x86_64 entry ABI and add the kernel-side consumer.
 
 Until those stages are integrated and tested, the kernel's existing Limine
