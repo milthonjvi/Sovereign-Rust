@@ -59,7 +59,7 @@ impl EhciQueueTransferDescriptor{
   if pid>2||bytes>0x7fff{return Err(UsbError::MalformedDescriptor)}
   let mut buffer=[0u32;5];
   for (i,address) in buffer_pages.iter().enumerate(){
-   if *address>u32::MAX as u64||(i!=0&&address&0xfff!=0){return Err(UsbError::InvalidAddress)}
+   if *address>u32::MAX as u64||(i!=0&&*address&0xfff!=0){return Err(UsbError::InvalidAddress)}
    buffer[i]=*address as u32;
   }
   let token=QTD_STATUS_ACTIVE|((pid as u32)<<8)|(3<<10)|((interrupt as u32)<<15)|
@@ -99,7 +99,7 @@ mod schedule_tests{
   assert_eq!(list.set_queue_head(0,0x4001),Err(UsbError::InvalidAddress));
  }
  #[test]fn qh_and_qtd_have_hardware_required_sizes(){
-  assert_eq!(core::mem::size_of::<EhciQueueHead>(),48);
+  assert_eq!(core::mem::size_of::<EhciQueueHead>(),64);
   assert_eq!(core::mem::align_of::<EhciQueueHead>(),32);
   assert_eq!(core::mem::size_of::<EhciQueueTransferDescriptor>(),32);
  }
