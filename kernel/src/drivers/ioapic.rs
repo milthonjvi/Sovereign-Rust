@@ -124,6 +124,16 @@ impl IoApicController {
         base: NonNull<u8>,
         descriptor: IoApic,
     ) -> Result<Self, IoApicError> {
+        // The register selector/data window is accessed through volatile u32
+        // pointers. Reject an invalid firmware base or an unaligned virtual
+        // mapping before the first MMIO access (which would otherwise be UB).
+        if descriptor.address == 0
+            || descriptor.address & 0x0fff != 0
+            || (base.as_ptr() as usize) & (core::mem::align_of::<u32>() - 1) != 0
+        {
+            return Err(IoApicError::InvalidMapping);
+        }
+
         let mut controller = Self {
             base,
             gsi_base: descriptor.global_system_interrupt_base,
@@ -252,6 +262,37 @@ pub fn resolve_isa_irq(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_invalid_mmio_mapping_before_register_access() {
+        let mut registers = [0u32; 8];
+        let aligned = NonNull::new(registers.as_mut_ptr().cast::<u8>()).unwrap();
+        let valid_descriptor = IoApic {
+            id: 1,
+            address: 0xFEC0_0000,
+            global_system_interrupt_base: 0,
+        };
+
+        // SAFETY: The constructor must reject the unaligned pointer before
+        // touching MMIO; the backing array remains alive for this call.
+        let unaligned = unsafe { NonNull::new_unchecked(aligned.as_ptr().add(1)) };
+        assert!(matches!(
+            unsafe { IoApicController::new(unaligned, valid_descriptor) },
+            Err(IoApicError::InvalidMapping)
+        ));
+
+        let zero_address = IoApic { address: 0, ..valid_descriptor };
+        assert!(matches!(
+            unsafe { IoApicController::new(aligned, zero_address) },
+            Err(IoApicError::InvalidMapping)
+        ));
+
+        let unaligned_physical = IoApic { address: 0xFEC0_0001, ..valid_descriptor };
+        assert!(matches!(
+            unsafe { IoApicController::new(aligned, unaligned_physical) },
+            Err(IoApicError::InvalidMapping)
+        ));
+    }
 
     #[test]
     fn decodes_acpi_polarity_and_trigger_flags() {
