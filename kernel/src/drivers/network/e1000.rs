@@ -55,7 +55,7 @@ pub const DEFAULT_RX_RING_SIZE: usize = 32;
 pub const DEFAULT_TX_RING_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum E1000Error { UnsupportedDevice, InvalidRingSize, MisalignedDmaAddress, DmaAddressTooWide, InvalidDescriptorLength }
+pub enum E1000Error { UnsupportedDevice, InvalidRingSize, NullDmaAddress, MisalignedDmaAddress, DmaAddressTooWide, InvalidDescriptorLength }
 
 pub const fn supports_device(vendor_id: u16, device_id: u16) -> bool {
     vendor_id == PCI_VENDOR_INTEL
@@ -100,6 +100,9 @@ impl RingConfig {
     pub fn new(physical_base: u64, descriptor_count: usize) -> Result<Self, E1000Error> {
         if descriptor_count < 8 || descriptor_count > u16::MAX as usize || !descriptor_count.is_power_of_two() {
             return Err(E1000Error::InvalidRingSize);
+        }
+        if physical_base == 0 {
+            return Err(E1000Error::NullDmaAddress);
         }
         if physical_base % DESCRIPTOR_SIZE as u64 != 0 {
             return Err(E1000Error::MisalignedDmaAddress);
@@ -164,6 +167,7 @@ mod tests {
         assert_eq!(ring.byte_length, 512);
         assert_eq!(ring.base_registers(), (0x1000, 0));
         assert_eq!(RingConfig::new(0x1001, 32), Err(E1000Error::MisalignedDmaAddress));
+        assert_eq!(RingConfig::new(0, 32), Err(E1000Error::NullDmaAddress));
         assert_eq!(RingConfig::new(0x1000, 12), Err(E1000Error::InvalidRingSize));
         assert_eq!(RingConfig::new(u64::MAX - 0xf, 8), Err(E1000Error::DmaAddressTooWide));
     }
