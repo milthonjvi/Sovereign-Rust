@@ -3,4 +3,5 @@
 //! Architecture-specific entry stubs live under arch; policy and handler
 //! registration live here. Interrupt handlers must remain bounded and nonblocking.
 
+pub mod idt;
 pub mod pic;
