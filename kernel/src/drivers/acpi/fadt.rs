@@ -18,6 +18,7 @@ pub struct Fadt {
     pub acpi_disable: u8,
     pub pm1a_control_block: u32,
     pub pm1b_control_block: u32,
+    pub legacy_pm_registers: LegacyPmRegisters,
     pub register_block_lengths: PmRegisterBlockLengths,
     pub flags: u32,
     pub reset_register: Option<GenericAddress>,
@@ -86,6 +87,16 @@ impl Fadt {
             acpi_disable: b[53],
             pm1a_control_block: read_u32(b, 64)?,
             pm1b_control_block: read_u32(b, 68)?,
+            legacy_pm_registers: LegacyPmRegisters {
+                pm1a_event: read_u32(b, 56)?,
+                pm1b_event: read_u32(b, 60)?,
+                pm1a_control: read_u32(b, 64)?,
+                pm1b_control: read_u32(b, 68)?,
+                pm2_control: read_u32(b, 72)?,
+                pm_timer: read_u32(b, 76)?,
+                gpe0: read_u32(b, 80)?,
+                gpe1: read_u32(b, 84)?,
+            },
             register_block_lengths: PmRegisterBlockLengths {
                 pm1_event: b[88],
                 pm1_control: b[89],
@@ -152,6 +163,21 @@ impl Fadt {
         }
         Ok(Some((gas, value)))
     }
+}
+
+/// Legacy System I/O port addresses from the FADT fixed-register fields.
+///
+/// These are raw firmware descriptors, not permission to issue port I/O.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LegacyPmRegisters {
+    pub pm1a_event: u32,
+    pub pm1b_event: u32,
+    pub pm1a_control: u32,
+    pub pm1b_control: u32,
+    pub pm2_control: u32,
+    pub pm_timer: u32,
+    pub gpe0: u32,
+    pub gpe1: u32,
 }
 
 /// Byte lengths declared by the legacy FADT fixed-register block fields.
@@ -433,6 +459,29 @@ mod tests {
             pm1_event: 0, pm1_control: 0, pm2_control: 0,
             pm_timer: 0, gpe0: 0, gpe1: 0,
         }.validate(), Ok(()));
+    }
+
+    #[test]
+    fn parses_all_legacy_pm_register_addresses() {
+        let mut bytes = make_fadt(116, 0, None, None);
+        for (offset, address) in [
+            (56, 0x100u32), (60, 0x104), (64, 0x108), (68, 0x10C),
+            (72, 0x110), (76, 0x114), (80, 0x118), (84, 0x11C),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&address.to_le_bytes());
+        }
+        bytes[9] = 0;
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert_eq!(fadt.legacy_pm_registers.pm1a_event, 0x100);
+        assert_eq!(fadt.legacy_pm_registers.pm1b_event, 0x104);
+        assert_eq!(fadt.legacy_pm_registers.pm1a_control, 0x108);
+        assert_eq!(fadt.legacy_pm_registers.pm1b_control, 0x10C);
+        assert_eq!(fadt.legacy_pm_registers.pm2_control, 0x110);
+        assert_eq!(fadt.legacy_pm_registers.pm_timer, 0x114);
+        assert_eq!(fadt.legacy_pm_registers.gpe0, 0x118);
+        assert_eq!(fadt.legacy_pm_registers.gpe1, 0x11C);
     }
 
     #[test]
