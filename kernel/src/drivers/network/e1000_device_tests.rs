@@ -210,6 +210,7 @@ use super::*;
         let mut tx_storage = [[0u8; 2048]; 8];
         rx_storage[2][..64].fill(0x53);
         rx_storage[3][..64].fill(0x64);
+        rx_storage[3][..64].fill(0x64);
         for (index, descriptor) in rx_descriptors.iter_mut().enumerate() {
             descriptor.buffer_address = 0x10000 + index as u64 * 2048;
             if index < 3 {
