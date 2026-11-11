@@ -216,6 +216,20 @@ impl Ps2Controller {
         Ok(Some(unsafe { io::in8(DATA) }))
     }
 
+    /// Resets keyboard scanning state and enables scan-code reporting.
+    /// The controller's translation bit keeps the device's default Set 2 stream
+    /// compatible with the Set 1 decoder used by this driver.
+    pub fn configure_keyboard(&self) -> Result<(), Ps2Error> {
+        self.send_keyboard_command(0xF5)?;
+        self.send_keyboard_command(0xF4)
+    }
+
+    /// Restores mouse defaults and enables packet reporting.
+    pub fn configure_mouse(&self) -> Result<(), Ps2Error> {
+        self.send_mouse_command(0xF6)?;
+        self.send_mouse_command(0xF4)
+    }
+
     /// Enables IRQ generation only after the caller has installed and unmasked
     /// the corresponding interrupt path.
     ///
