@@ -18,6 +18,7 @@ pub struct Fadt {
     pub acpi_disable: u8,
     pub pm1a_control_block: u32,
     pub pm1b_control_block: u32,
+    pub register_block_lengths: PmRegisterBlockLengths,
     pub flags: u32,
     pub reset_register: Option<GenericAddress>,
     pub reset_value: Option<u8>,
@@ -85,6 +86,14 @@ impl Fadt {
             acpi_disable: b[53],
             pm1a_control_block: read_u32(b, 64)?,
             pm1b_control_block: read_u32(b, 68)?,
+            register_block_lengths: PmRegisterBlockLengths {
+                pm1_event: b[88],
+                pm1_control: b[89],
+                pm2_control: b[90],
+                pm_timer: b[91],
+                gpe0: b[92],
+                gpe1: b[93],
+            },
             flags,
             reset_register,
             reset_value,
@@ -102,6 +111,12 @@ impl Fadt {
     pub fn dsdt_address(&self) -> u64 {
         self.x_dsdt.filter(|address| *address != 0)
             .unwrap_or(self.dsdt as u64)
+    }
+
+    /// Validate the FADT fixed-register block lengths from ACPI 6.5 §5.2.9.
+    /// This is metadata validation only; it does not probe or access hardware.
+    pub fn validate_register_block_lengths(&self) -> Result<(), AcpiError> {
+        self.register_block_lengths.validate()
     }
 
     /// Whether firmware advertises a usable ACPI reset register.
@@ -126,6 +141,37 @@ impl Fadt {
             return Err(AcpiError::InvalidGas);
         }
         Ok(Some((gas, value)))
+    }
+}
+
+/// Byte lengths declared by the legacy FADT fixed-register block fields.
+///
+/// These lengths also describe the corresponding extended GAS blocks when a
+/// nonzero extended address is supplied. Optional PM2/timer/GPE blocks may be
+/// absent; PM1 event/control lengths may be zero on reduced-hardware platforms.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PmRegisterBlockLengths {
+    pub pm1_event: u8,
+    pub pm1_control: u8,
+    pub pm2_control: u8,
+    pub pm_timer: u8,
+    pub gpe0: u8,
+    pub gpe1: u8,
+}
+
+impl PmRegisterBlockLengths {
+    /// Validate size constraints defined by the ACPI register model.
+    pub fn validate(self) -> Result<(), AcpiError> {
+        if (self.pm1_event != 0 && (self.pm1_event < 4 || self.pm1_event % 2 != 0))
+            || (self.pm1_control != 0 && self.pm1_control < 2)
+            || (self.pm2_control != 0 && self.pm2_control < 1)
+            || (self.pm_timer != 0 && self.pm_timer != 4)
+            || self.gpe0 % 2 != 0
+            || self.gpe1 % 2 != 0
+        {
+            return Err(AcpiError::InvalidLength);
+        }
+        Ok(())
     }
 }
 
@@ -333,6 +379,43 @@ mod tests {
             let bytes = make_fadt(length, 0, None, None);
             assert!(Fadt::parse(&bytes).is_ok(), "valid field boundary {length}");
         }
+    }
+
+    #[test]
+    fn validates_fixed_register_block_lengths() {
+        let valid = PmRegisterBlockLengths {
+            pm1_event: 4, pm1_control: 2, pm2_control: 1,
+            pm_timer: 4, gpe0: 8, gpe1: 2,
+        };
+        assert_eq!(valid.validate(), Ok(()));
+        assert_eq!(PmRegisterBlockLengths { pm1_event: 2, ..valid }.validate(), Err(AcpiError::InvalidLength));
+        assert_eq!(PmRegisterBlockLengths { pm1_event: 5, ..valid }.validate(), Err(AcpiError::InvalidLength));
+        assert_eq!(PmRegisterBlockLengths { pm1_control: 1, ..valid }.validate(), Err(AcpiError::InvalidLength));
+        assert_eq!(PmRegisterBlockLengths { pm_timer: 3, ..valid }.validate(), Err(AcpiError::InvalidLength));
+        assert_eq!(PmRegisterBlockLengths { gpe0: 3, ..valid }.validate(), Err(AcpiError::InvalidLength));
+        assert_eq!(PmRegisterBlockLengths {
+            pm1_event: 0, pm1_control: 0, pm2_control: 0,
+            pm_timer: 0, gpe0: 0, gpe1: 0,
+        }.validate(), Ok(()));
+    }
+
+    #[test]
+    fn parses_fadt_register_block_lengths() {
+        let mut bytes = make_fadt(244, 0, None, None);
+        bytes[88..94].copy_from_slice(&[4, 2, 1, 4, 8, 2]);
+        bytes[9] = 0;
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert_eq!(fadt.register_block_lengths.pm1_event, 4);
+        assert_eq!(fadt.validate_register_block_lengths(), Ok(()));
+
+        bytes[91] = 3;
+        bytes[9] = 0;
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert_eq!(fadt.validate_register_block_lengths(), Err(AcpiError::InvalidLength));
     }
 
     #[test]
