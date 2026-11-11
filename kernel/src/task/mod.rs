@@ -4,4 +4,4 @@
 //! context-save/restore. Do not assume SMP before per-CPU state exists.
 
 pub mod timeouts;
-pub use timeouts::{ApicCountdownTaskTimeouts, PitTaskTimeouts, TaskCancelReport, TaskId, TaskTimeouts, TaskWakeupReport};
+pub use timeouts::{ApicCountdownTaskTimeouts, DetectedTaskTimeoutInitError, PitTaskTimeouts, TaskCancelReport, TaskId, TaskTimeouts, TaskWakeupReport};
