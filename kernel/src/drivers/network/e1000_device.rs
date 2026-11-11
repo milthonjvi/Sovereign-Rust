@@ -30,11 +30,11 @@ pub enum E1000DeviceError {
     InvalidMacAddress,
 }
 
-pub struct E1000Device<'a, R: E1000Registers> {
+pub struct E1000Device<'a, 'dma, R: E1000Registers> {
     registers: &'a mut R,
     rx_descriptors: &'a mut [RxDescriptor],
     tx_descriptors: &'a mut [TxDescriptor],
-    rx_buffers: &'a mut [DmaBuffer<'a>],
+    rx_buffers: &'a mut [DmaBuffer<'dma>],
     tx_buffers: &'a mut [DmaBuffer<'a>],
     rx_queue: E1000RxQueue,
     tx_queue: E1000TxQueue,
@@ -43,7 +43,7 @@ pub struct E1000Device<'a, R: E1000Registers> {
     dropping_rx_frame: bool,
 }
 
-impl<'a, R: E1000Registers> E1000Device<'a, R> {
+impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// Bind preinitialized hardware queues to their CPU-visible DMA buffers.
     ///
     /// The descriptor slices must alias the exact pinned DMA ring memory that
@@ -119,7 +119,7 @@ impl<'a, R: E1000Registers> E1000Device<'a, R> {
     }
 }
 
-impl<R: E1000Registers> Driver for E1000Device<'_, R> {
+impl<R: E1000Registers> Driver for E1000Device<'_, '_, R> {
     fn name(&self) -> &'static str {
         "Intel E1000"
     }
@@ -156,7 +156,7 @@ impl<R: E1000Registers> Driver for E1000Device<'_, R> {
     }
 }
 
-impl<R: E1000Registers> NetworkDevice for E1000Device<'_, R> {
+impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
     /// Poll descriptors, discard errored/fragmented frames, copy one complete
     /// frame, then recycle its RX descriptor. No allocation or waiting occurs.
     fn receive(&mut self, output: &mut [u8]) -> Result<Option<usize>, DriverError> {
