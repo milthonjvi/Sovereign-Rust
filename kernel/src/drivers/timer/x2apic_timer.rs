@@ -88,10 +88,12 @@ impl X2ApicTimer {
         apic.configure_one_shot_timer(vector, divide.encoding())
             .map_err(map_x2apic_error)?;
         let hpet_before_start = hpet.read_counter() & mask;
+        compiler_fence(Ordering::SeqCst);
         if apic.load_masked_one_shot_count(u32::MAX).is_err() {
             apic.stop_one_shot_timer();
             return Err(DriverError::InvalidConfiguration);
         }
+        compiler_fence(Ordering::SeqCst);
         let hpet_after_start = hpet.read_counter() & mask;
         let hpet_start = midpoint_masked(hpet_before_start, hpet_after_start, mask);
 
@@ -111,7 +113,9 @@ impl X2ApicTimer {
         }
 
         let hpet_before_end = hpet.read_counter() & mask;
+        compiler_fence(Ordering::SeqCst);
         let current_count = apic.timer_current_count();
+        compiler_fence(Ordering::SeqCst);
         let hpet_after_end = hpet.read_counter() & mask;
         let hpet_end = midpoint_masked(hpet_before_end, hpet_after_end, mask);
         let elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
