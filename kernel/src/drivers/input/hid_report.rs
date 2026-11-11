@@ -320,13 +320,14 @@ pub struct HidReportDecoder {
     previous: [i32; MAX_HID_VALUES],
     initialized: [bool; MAX_HID_VALUES],
     contact_active: bool,
+    resync_required: bool,
     pub dropped_events: u64,
 }
 impl HidReportDecoder {
     pub const fn new(device: InputDeviceId) -> Self {
         Self {
             device, previous: [0; MAX_HID_VALUES], initialized: [false; MAX_HID_VALUES],
-            contact_active: false, dropped_events: 0,
+            contact_active: false, resync_required: false, dropped_events: 0,
         }
     }
     pub const fn device_id(&self) -> InputDeviceId { self.device }
@@ -334,6 +335,7 @@ impl HidReportDecoder {
         self.previous = [0; MAX_HID_VALUES];
         self.initialized = [false; MAX_HID_VALUES];
         self.contact_active = false;
+        self.resync_required = false;
     }
 
     /// Decodes one successful interrupt-IN report. For report-ID descriptors,
@@ -357,6 +359,28 @@ impl HidReportDecoder {
         if payload.len() < expected { return Err(HidReportError::ReportTooShort); }
 
         let mut stats = HidPublishStats::default();
+        if self.resync_required {
+            // Queue overflow can lose an edge. Reset the consumer's per-device
+            // state before replaying the next full report snapshot.
+            let disconnected = InputEvent::DeviceDisconnected { device: self.device };
+            let connected = InputEvent::DeviceConnected { device: self.device };
+            if producer.push(disconnected).is_err() {
+                stats.dropped = 1;
+                self.dropped_events = self.dropped_events.saturating_add(1);
+                return Ok(stats);
+            }
+            stats.published = stats.published.saturating_add(1);
+            if producer.push(connected).is_err() {
+                stats.dropped = stats.dropped.saturating_add(1);
+                self.dropped_events = self.dropped_events.saturating_add(1);
+                return Ok(stats);
+            }
+            stats.published = stats.published.saturating_add(1);
+            self.previous = [0; MAX_HID_VALUES];
+            self.initialized = [false; MAX_HID_VALUES];
+            self.contact_active = false;
+            self.resync_required = false;
+        }
         let mut modifiers = 0u8;
         for field in map.fields[..map.field_count as usize].iter().flatten() {
             if field.report_id != report_id || field.usage_page != 0x07 || !field.is_variable() { continue; }
@@ -374,6 +398,8 @@ impl HidReportDecoder {
         let mut pointer_changed = false;
         let mut pointer_buttons = 0u32;
         let mut pointer_button_seen = false;
+        let mut pointer_wheel_x = 0i16;
+        let mut pointer_wheel_y = 0i16;
 
         for field_index in 0..map.field_count as usize {
             let field = match map.fields[field_index] { Some(f) if f.report_id == report_id => f, _ => continue };
@@ -418,11 +444,23 @@ impl HidReportDecoder {
                     let gamepad = field.application_page == 0x01
                         && (field.application_usage == 0x04 || field.application_usage == 0x05);
                     if gamepad {
-                        let button = if variable { usage } else { value.max(0) as u16 };
-                        if button != 0 && ((!had_old && value != 0) || (had_old && old != value)) {
-                            self.emit(InputEvent::GamepadButton {
-                                device: self.device, button, pressed: value != 0,
-                            }, producer, &mut stats);
+                        if variable {
+                            if usage != 0 && ((!had_old && value != 0) || (had_old && old != value)) {
+                                self.emit(InputEvent::GamepadButton {
+                                    device: self.device, button: usage, pressed: value != 0,
+                                }, producer, &mut stats);
+                            }
+                        } else {
+                            if had_old && old > 0 && old != value {
+                                self.emit(InputEvent::GamepadButton {
+                                    device: self.device, button: old as u16, pressed: false,
+                                }, producer, &mut stats);
+                            }
+                            if value > 0 && (!had_old || old != value) {
+                                self.emit(InputEvent::GamepadButton {
+                                    device: self.device, button: value as u16, pressed: true,
+                                }, producer, &mut stats);
+                            }
                         }
                     } else if field.application_page == 0x01
                         && (field.application_usage == 0x01 || field.application_usage == 0x02) {
@@ -444,6 +482,9 @@ impl HidReportDecoder {
                                 usage_page: 0x0C, usage: value as u16, pressed: true }, producer, &mut stats);
                         }
                     }
+                } else if field.usage_page == 0x0C && usage == 0x0238 {
+                    pointer_wheel_x = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                    pointer_changed = true;
                 } else if field.usage_page == 0x01 {
                     match usage {
                         0x30 | 0x31 if field.is_relative() => {
@@ -451,10 +492,8 @@ impl HidReportDecoder {
                             pointer_changed = true;
                         }
                         0x38 if field.is_relative() => {
-                            self.emit(InputEvent::PointerMotion { device: self.device,
-                                dx: 0, dy: 0, wheel_x: 0,
-                                wheel_y: value.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                                buttons: 0 }, producer, &mut stats);
+                            pointer_wheel_y = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                            pointer_changed = true;
                         }
                         0x30..=0x38 if field.application_usage == 0x04
                             || field.application_usage == 0x05 => {
@@ -578,7 +617,7 @@ impl HidReportDecoder {
         if pointer_changed || pointer_button_seen {
             self.emit(InputEvent::PointerMotion {
                 device: self.device, dx: pointer_x, dy: pointer_y,
-                wheel_x: 0, wheel_y: 0, buttons: pointer_buttons,
+                wheel_x: pointer_wheel_x, wheel_y: pointer_wheel_y, buttons: pointer_buttons,
             }, producer, &mut stats);
         }
         Ok(stats)
@@ -593,6 +632,7 @@ impl HidReportDecoder {
         } else {
             stats.dropped = stats.dropped.saturating_add(1);
             self.dropped_events = self.dropped_events.saturating_add(1);
+            self.resync_required = true;
         }
     }
 }
