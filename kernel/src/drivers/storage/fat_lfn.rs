@@ -220,8 +220,10 @@ where
         Ok(())
     };
     if let Some(mut cluster) = start_cluster {
+        let mut clusters_seen = 0u32;
         loop {
-            if visited as u32 >= volume.bpb.cluster_count { return Err(FatError::ChainTooLong); }
+            if clusters_seen >= volume.bpb.cluster_count { return Err(FatError::ChainTooLong); }
+            clusters_seen += 1;
             read_cluster(device, volume, cluster, cluster_buffer)?;
             process(cluster_buffer)?;
             if stopped { break; }
