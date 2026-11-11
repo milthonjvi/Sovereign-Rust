@@ -261,6 +261,47 @@ fn integer_sqrt(value: u128) -> u128 {
     }
     result
 }
+/// Draw an axis-aligned ellipse outline using integer scan conversion.
+/// Each visible scanline contributes its left and right boundary pixels.
+pub fn stroke_ellipse(
+    target: &mut FramebufferSurface<'_>,
+    center_x: i64,
+    center_y: i64,
+    radius_x: usize,
+    radius_y: usize,
+    color: Color,
+) -> Result<(), FramebufferError> {
+    if radius_x > i64::MAX as usize || radius_y > i64::MAX as usize {
+        return Err(FramebufferError::SizeOverflow);
+    }
+    let info = *target.info();
+    if info.width == 0 || info.height == 0 { return Ok(()); }
+    let rx = radius_x as u128;
+    let ry = radius_y as u128;
+    let cx = center_x as i128;
+    let cy = center_y as i128;
+    if radius_y == 0 {
+        return fill_ellipse(target, center_x, center_y, radius_x, 0, color);
+    }
+    let first_y = (cy - ry as i128).max(0);
+    let last_y = (cy + ry as i128).min(info.height.saturating_sub(1) as i128);
+    if first_y > last_y { return Ok(()); }
+    let ry_squared = ry * ry;
+    for y in first_y..=last_y {
+        let dy = (y - cy).unsigned_abs();
+        if dy > ry { continue; }
+        let horizontal = (rx * integer_sqrt(ry_squared - dy * dy)) / ry;
+        let left = cx - horizontal as i128;
+        let right = cx + horizontal as i128;
+        if left >= 0 && left < info.width as i128 {
+            target.put_pixel(left as usize, y as usize, color)?;
+        }
+        if right != left && right >= 0 && right < info.width as i128 {
+            target.put_pixel(right as usize, y as usize, color)?;
+        }
+    }
+    Ok(())
+}
 /// Fill a triangle using integer scanline intersections.
 ///
 /// Horizontal edges are excluded from edge intersection generation, and each
@@ -394,6 +435,20 @@ mod tests {
         unsafe { FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap() }
     }
 
+    #[test]
+    fn strokes_ellipse_without_filling_its_interior() {
+        use super::stroke_ellipse;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        stroke_ellipse(&mut target, 3, 3, 2, 1, Color::GREEN).unwrap();
+        drop(target);
+        let pixel = |x: usize, y: usize| memory[(y * 8 + x) * 4 + 1] == 255;
+        assert!(pixel(1, 3));
+        assert!(pixel(5, 3));
+        assert!(pixel(3, 2));
+        assert!(pixel(3, 4));
+        assert!(!pixel(3, 3));
+    }
     #[test]
     fn fills_clipped_ellipse_with_symmetric_scanlines() {
         use super::fill_ellipse;
