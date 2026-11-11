@@ -278,6 +278,15 @@ const fn sign_extend(raw: u32, size: usize) -> i32 {
     ((raw << shift) as i32) >> shift
 }
 
+fn field_usage(field: HidInputField, element: usize) -> u16 {
+    if element < field.usage_count as usize {
+        field.usage_list[element]
+    } else if field.usage_max > field.usage_min {
+        field.usage_min.saturating_add(element as u16).min(field.usage_max)
+    } else {
+        field.usage_min
+    }
+}
 fn extract_bits(bytes: &[u8], bit_offset: u32, bit_size: u8) -> Option<u32> {
     if bit_size == 0 || bit_size > 32 { return None; }
     let mut value = 0u32;
@@ -413,11 +422,7 @@ impl HidReportDecoder {
                 let value = decode_signed(raw, field.report_size, field.logical_min);
                 let slot = field.value_slot as usize + element;
                 if slot >= MAX_HID_VALUES { return Err(HidReportError::InvalidField); }
-                let usage = if element < field.usage_count as usize {
-                    field.usage_list[element]
-                } else if field.usage_min <= field.usage_max && field.usage_max != field.usage_min {
-                    field.usage_min.saturating_add(element as u16).min(field.usage_max)
-                } else { field.usage_min };
+                let usage = field_usage(field, element);
                 let old = self.previous[slot];
                 let had_old = self.initialized[slot];
                 let variable = field.is_variable();
@@ -499,8 +504,8 @@ impl HidReportDecoder {
                             || field.application_usage == 0x05 => {
                             let axis = match usage {
                                 0x30 => GamepadAxis::LeftX, 0x31 => GamepadAxis::LeftY,
-                                0x32 => GamepadAxis::Other(2), 0x33 => GamepadAxis::RightX,
-                                0x34 => GamepadAxis::RightY, 0x35 => GamepadAxis::Other(5),
+                                0x32 => GamepadAxis::LeftTrigger, 0x33 => GamepadAxis::RightX,
+                                0x34 => GamepadAxis::RightY, 0x35 => GamepadAxis::RightTrigger,
                                 0x36 => GamepadAxis::Other(6), 0x37 => GamepadAxis::Other(7),
                                 _ => GamepadAxis::Other(8),
                             };
@@ -525,7 +530,7 @@ impl HidReportDecoder {
                         && (field.application_usage == 0x04 || field.application_usage == 0x05)) { continue; }
                 for element in 0..field.report_count as usize {
                     let slot = field.value_slot as usize + element;
-                    let button = if field.is_variable() { field.usage_min.saturating_add(element as u16) }
+                    let button = if field.is_variable() { field_usage(*field, element) }
                         else { self.previous[slot].max(0) as u16 };
                     if self.previous[slot] != 0 && (1..=32).contains(&button) {
                         pointer_buttons |= 1u32 << (button - 1);
@@ -557,11 +562,7 @@ impl HidReportDecoder {
             let is_pen = field.application_page == 0x0D && field.application_usage == 0x02;
             if !is_touch && !is_pen { continue; }
             for element in 0..field.report_count as usize {
-                let usage = if element < field.usage_count as usize {
-                    field.usage_list[element]
-                } else if field.usage_max > field.usage_min {
-                    field.usage_min.saturating_add(element as u16).min(field.usage_max)
-                } else { field.usage_min };
+                let usage = field_usage(*field, element);
                 let bit = field.bit_offset + element as u32 * field.report_size as u32;
                 let raw = extract_bits(payload, bit, field.report_size).ok_or(HidReportError::ReportTooShort)?;
                 let value = decode_signed(raw, field.report_size, field.logical_min);
