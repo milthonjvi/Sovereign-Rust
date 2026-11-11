@@ -120,7 +120,7 @@ mod tests {
     fn routes_keyboard_and_mouse_into_one_ordered_stream() {
         let mut queue = SpscQueue::<InputEvent, 16>::new();
         let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&mut queue, false);
-        pipeline.feed(0, 0x1E);
+        pipeline.feed_data_byte(Ps2DataByte { status: 0, value: 0x1E });
         pipeline.feed(STATUS_AUXILIARY, 0x09);
         pipeline.feed(STATUS_AUXILIARY, 0x04);
         pipeline.feed(STATUS_AUXILIARY, 0x00);
