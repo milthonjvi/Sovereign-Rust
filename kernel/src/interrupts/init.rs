@@ -7,6 +7,8 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
+use crate::arch::x86_64::{cpuid::CpuInfo, x2apic::{self, X2Apic}};
+
 use crate::arch::x86_64::tss;
 use super::{exceptions, idt::Idt, irq, pic::Pic8259};
 
@@ -19,6 +21,25 @@ const STATE_READY: u8 = 2;
 const STATE_FAILED: u8 = 3;
 static STATE: AtomicU8 = AtomicU8::new(STATE_UNINITIALIZED);
 
+const LOCAL_APIC_DISABLED: u8 = 0;
+const LOCAL_APIC_X2APIC: u8 = 1;
+static LOCAL_APIC_MODE: AtomicU8 = AtomicU8::new(LOCAL_APIC_DISABLED);
+
+/// Local APIC backend selected during bootstrap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalApicMode {
+    Disabled,
+    X2Apic,
+}
+
+/// Return the local APIC backend selected during bootstrap.
+pub fn local_apic_mode() -> LocalApicMode {
+    match LOCAL_APIC_MODE.load(Ordering::Acquire) {
+        LOCAL_APIC_X2APIC => LocalApicMode::X2Apic,
+        _ => LocalApicMode::Disabled,
+    }
+}
+
 /// Errors from bootstrap interrupt initialization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InterruptInitError {
@@ -28,6 +49,7 @@ pub enum InterruptInitError {
     IncompleteIdt,
     IrqGateConfiguration,
     PicConfiguration,
+    LocalApicConfiguration,
 }
 
 /// Initialize the bootstrap processor's descriptor and legacy PIC infrastructure.
@@ -71,6 +93,21 @@ unsafe fn initialize_inner() -> Result<(), InterruptInitError> {
         .map_err(|_| InterruptInitError::IrqGateConfiguration)?;
     if idt.present_count() != 256 {
         return Err(InterruptInitError::IncompleteIdt);
+    }
+
+    // Enable the local x2APIC only when the processor advertises it. Every
+    // local vector remains masked; vector 0xFF already has a dedicated IRETQ
+    // gate, and the legacy PIC remains fully masked as a fallback.
+    let features = CpuInfo::detect().features;
+    if features.apic && features.x2apic {
+        // SAFETY: Bootstrap runs at CPL 0; CPUID confirms APIC/x2APIC support.
+        unsafe { x2apic::enable() }
+            .map_err(|_| InterruptInitError::LocalApicConfiguration)?;
+        // SAFETY: x2APIC mode was enabled on this BSP immediately above.
+        let mut local_apic = unsafe { X2Apic::new() };
+        local_apic.initialize_masked(x2apic::SPURIOUS_VECTOR)
+            .map_err(|_| InterruptInitError::LocalApicConfiguration)?;
+        LOCAL_APIC_MODE.store(LOCAL_APIC_X2APIC, Ordering::Release);
     }
 
     // Remap and mask every legacy IRQ before loading the completed IDT.
