@@ -212,3 +212,17 @@ impl HubPortMachine{
  }
  #[test]fn overcurrent_requests_power_off(){let mut p=HubPortMachine::new(1,0);p.start().unwrap();p.observe(HubPortStatus{status:HubPortStatus::OVER_CURRENT,change:0});assert_eq!(p.take_action(),Some(HubPortAction::PowerOff));}
 }
+
+#[cfg(test)]
+mod superspeed_hub_reset_tests{
+ use super::*;
+ #[test]fn superspeed_port_machine_uses_warm_reset_feature(){
+  let mut port=HubPortMachine::new_superspeed(1,0);
+  port.start().unwrap();port.elapse_ms(0);
+  port.observe(HubPortStatus{status:HubPortStatus::CONNECTION,change:0});
+  port.elapse_ms(100);
+  assert_eq!(port.take_action(),Some(HubPortAction::WarmReset));
+  let request=port_action(1,HubPortAction::WarmReset);
+  assert_eq!(request.request,HUB_SET_FEATURE);assert_eq!(request.value,28);
+ }
+}
