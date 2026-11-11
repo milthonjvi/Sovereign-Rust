@@ -14,20 +14,31 @@
 ## Sovereign Boot
 
 The loader lives in `loader/` as an independent workspace package and targets
-`x86_64-unknown-uefi`. Its first milestone defines the UEFI application entry
-point, the firmware system-table ABI fields needed at entry, and an
-allocation-free Simple Text Output Protocol wrapper.
+`x86_64-unknown-uefi`. It currently provides:
 
-The implementation is intentionally staged. The following capabilities remain
-to be implemented before Sovereign Boot can load the kernel:
+1. A UEFI application entry point and validated system-table signature/size.
+2. An allocation-free Simple Text Output Protocol wrapper.
+3. The Boot Services HandleProtocol entry needed to locate firmware protocols.
+4. Loaded Image and Simple File System protocol definitions.
+5. Opening the boot device's FAT volume and looking for
+   `\\EFI\\BOOT\\sovereign-kernel.elf`.
+6. Reading and validating the 64-byte ELF64 header: magic, class, endianness,
+   version, executable/shared-object type, x86_64 machine, header size, and
+   program-header table shape.
 
-1. UEFI Boot Services wrappers and Loaded Image / Simple File System protocols.
-2. Kernel file discovery and bounded ELF64 validation.
-3. Physical page allocation and ELF PT_LOAD segment placement.
-4. A normalized boot-information structure with memory-map ownership.
-5. ExitBootServices with a refreshed memory-map key.
-6. CPU/page-table preparation and transfer to the kernel entry point.
-7. A matching kernel-side Sovereign Boot ABI consumer.
+This is still a discovery/validation stage, not a complete kernel loader. It
+does not yet validate the file's total length against the program-header table,
+load PT_LOAD segments, allocate physical pages, construct final page tables,
+or call ExitBootServices.
+
+The next stages are:
+
+1. Complete bounded ELF parsing and validate every program-header range.
+2. Allocate and load PT_LOAD segments at validated physical/virtual addresses.
+3. Define the versioned Sovereign Boot information structure.
+4. Obtain a stable final memory map and call ExitBootServices with retry logic.
+5. Prepare CPU/page-table state and transfer control to the kernel entry point.
+6. Add a matching kernel-side Sovereign Boot ABI consumer.
 
 Until those stages are integrated and tested, the kernel's existing Limine
 handoff remains in place as a temporary compatibility path. Do not remove
