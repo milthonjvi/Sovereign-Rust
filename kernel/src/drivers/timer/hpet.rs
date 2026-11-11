@@ -23,6 +23,12 @@ const TIMER_FSB_ENABLE: u64 = 1 << 14;
 const TIMER_WRITABLE_CONTROL: u64 =
     TIMER_INTERRUPT_ENABLE | TIMER_PERIODIC_MODE | TIMER_ROUTE_MASK | TIMER_FSB_ENABLE;
 
+/// Return whether a timer's route-capability bitmap advertises an I/O APIC
+/// interrupt route. The bitmap occupies bits 32..63 of the timer config.
+pub const fn route_is_supported(timer_configuration: u64, route: u8) -> bool {
+    route < 32 && ((timer_configuration >> 32) & (1u64 << route)) != 0
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HpetCapabilities {
     pub revision: u8,
@@ -134,6 +140,9 @@ impl Hpet {
         }
         let offset = TIMER_CONFIGURATION_BASE + timer as usize * TIMER_STRIDE;
         let current = self.read_register(offset);
+        if !route_is_supported(current, route) {
+            return Err(DriverError::UnsupportedDevice);
+        }
         let config = (current & !TIMER_WRITABLE_CONTROL)
             | TIMER_INTERRUPT_ENABLE | ((route as u64) << 9);
         self.write_register(offset, config);
@@ -159,7 +168,7 @@ impl Hpet {
         let config_offset = TIMER_CONFIGURATION_BASE + timer as usize * TIMER_STRIDE;
         let current = self.read_register(config_offset);
         const PERIODIC_CAPABLE: u64 = 1 << 4;
-        if current & PERIODIC_CAPABLE == 0 {
+        if current & PERIODIC_CAPABLE == 0 || !route_is_supported(current, route) {
             return Err(DriverError::UnsupportedDevice);
         }
         let timer_supports_64_bit = current & (1 << 5) != 0;
@@ -196,6 +205,16 @@ impl Hpet {
         Ok(())
     }
 
+    /// Clear a pending timer interrupt using the HPET's write-one-to-clear
+    /// general interrupt status register.
+    pub fn clear_timer_interrupt(&mut self, timer: u8) -> Result<(), DriverError> {
+        if timer >= self.capabilities.timer_count {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        self.write_register(GENERAL_INTERRUPT_STATUS, 1u64 << timer);
+        Ok(())
+    }
+
     /// Disable interrupt delivery for one timer while preserving other controls.
     pub fn mask_timer(&mut self, timer: u8) -> Result<(), DriverError> {
         if timer >= self.capabilities.timer_count {
@@ -220,6 +239,15 @@ mod tests {
         assert_eq!(caps.timer_count, 3);
         assert!(caps.counter_64_bit);
         assert_eq!(caps.ticks_to_nanoseconds(10).unwrap(), 1000);
+    }
+
+    #[test]
+    fn validates_timer_interrupt_routes() {
+        let routes = (1u64 << 32) | (1u64 << 40);
+        assert!(route_is_supported(routes, 0));
+        assert!(route_is_supported(routes, 8));
+        assert!(!route_is_supported(routes, 1));
+        assert!(!route_is_supported(routes, 32));
     }
 
     #[test]
