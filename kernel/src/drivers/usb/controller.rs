@@ -2,6 +2,13 @@
 use super::{transfer::{DeviceAddress,Endpoint,SetupPacket,UsbSpeed},UsbError};
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum ControllerKind{Uhci,Ohci,Ehci,Xhci}
+impl ControllerKind{
+ /// PCI class 0x0c, subclass 0x03, programming-interface mapping.
+ pub const fn from_pci(class:u8,subclass:u8,programming_interface:u8)->Option<Self>{
+  if class!=0x0c||subclass!=0x03{return None}
+  match programming_interface{0x00=>Some(Self::Uhci),0x10=>Some(Self::Ohci),0x20=>Some(Self::Ehci),0x30=>Some(Self::Xhci),_=>None}
+ }
+}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum UsbRevision{V1_0,V1_1,V2_0,V3_0,V3_1,V3_2,V4_0}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
