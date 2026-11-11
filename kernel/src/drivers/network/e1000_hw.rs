@@ -87,6 +87,8 @@ pub enum E1000ResetError<E> {
 
 /// Mask interrupts and reset the MAC/DMA engines, waiting for the self-clearing
 /// reset bit before the caller releases or reprograms DMA-visible memory.
+/// This deliberately uses CTRL.RST instead of clearing RCTL.EN and waits for
+/// the platform post-reset settling interval before polling CTRL.
 pub fn reset<R: E1000Registers>(registers: &mut R) -> Result<(), E1000ResetError<R::Error>> {
     registers.write32(REG_IMC, u32::MAX).map_err(E1000ResetError::Register)?;
     let control = registers.read32(REG_CTRL).map_err(E1000ResetError::Register)?;
