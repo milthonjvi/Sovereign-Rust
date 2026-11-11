@@ -11,7 +11,7 @@ use super::{
 };
 
 /// x2APIC countdown task timeout backend for CPUs without TSC-deadline
-/// support. Its precision depends on HPET calibration and the APIC divider.
+/// support. Its precision depends on HPET/TSC calibration and the APIC divider.
 pub struct ApicCountdownTaskTimeouts<S: ClockSource, const N: usize> {
     timers: ApicCountdownQueue<S, N>,
 }
