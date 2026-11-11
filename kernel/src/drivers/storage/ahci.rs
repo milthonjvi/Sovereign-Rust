@@ -541,6 +541,14 @@ impl<const N:usize> AhciCommandTable<N>{
     }
     pub fn set_prdt(&mut self,entries:&[AhciPrdtEntry])->Result<u16,AhciError>{
         if entries.len()>N || entries.len()>u16::MAX as usize{return Err(AhciError::PrdtCapacity);}
+        for entry in entries {
+            let address=(entry.data_base as u64)|((entry.data_base_upper as u64)<<32);
+            if address&0x3!=0 || entry.reserved!=0
+                || entry.byte_count_and_interrupt&0x7FC0_0000!=0 {
+                return Err(AhciError::InvalidTransfer);
+            }
+            address.checked_add(entry.byte_count() as u64).ok_or(AhciError::AddressOverflow)?;
+        }
         self.prdt.fill(AhciPrdtEntry::default());
         self.prdt[..entries.len()].copy_from_slice(entries);
         Ok(entries.len() as u16)
@@ -560,6 +568,26 @@ mod table_tests{
         assert_eq!(table.command_fis[2],0x25);
         assert_eq!(table.command_fis[19],0);
         assert_eq!(core::mem::size_of_val(&table),256);
+    }
+
+    #[test]
+    fn rejects_malformed_prdt_entries_without_mutating_table() {
+        let mut table=AhciCommandTable::<2>::new();
+        let invalid=AhciPrdtEntry{data_base:0x1002,data_base_upper:0,reserved:0,byte_count_and_interrupt:511};
+        assert_eq!(table.set_prdt(&[invalid]),Err(AhciError::InvalidTransfer));
+        assert_eq!(table.prdt[0],AhciPrdtEntry::default());
+
+        let reserved=AhciPrdtEntry{data_base:0x1000,data_base_upper:0,reserved:1,byte_count_and_interrupt:511};
+        assert_eq!(table.set_prdt(&[reserved]),Err(AhciError::InvalidTransfer));
+    }
+
+    #[test]
+    fn accepts_valid_prdt_and_clears_stale_entries() {
+        let mut table=AhciCommandTable::<2>::new();
+        let entry=AhciPrdtEntry{data_base:0x1000,data_base_upper:0,reserved:0,byte_count_and_interrupt:511|(1<<31)};
+        assert_eq!(table.set_prdt(&[entry]),Ok(1));
+        assert_eq!(table.prdt[0],entry);
+        assert_eq!(table.prdt[1],AhciPrdtEntry::default());
     }
 }
 
