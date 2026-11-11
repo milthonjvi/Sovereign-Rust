@@ -342,6 +342,7 @@ impl HidReportDescriptor{
   let mut out=Self{reports:[None;MAX_HID_REPORT_IDS],len:0};
   let mut state=HidGlobalState::EMPTY;
   let mut stack=[HidGlobalState::EMPTY;4];let mut depth=0usize;let mut offset=0usize;
+  let mut uses_unnumbered=false;let mut uses_numbered=false;
   while offset<bytes.len(){
    let prefix=bytes[offset];offset+=1;
    if prefix==0xfe{
@@ -376,6 +377,15 @@ impl HidReportDescriptor{
     }
    }
    if item_type==0&&(tag==8||tag==9||tag==11){
+    // HID report streams use either implicit report ID zero or explicit
+    // non-zero IDs; mixing the two makes the wire layout ambiguous.
+    if state.report_id==0{
+     if uses_numbered{return Err(UsbError::MalformedDescriptor)}
+     uses_unnumbered=true;
+    }else{
+     if uses_unnumbered{return Err(UsbError::MalformedDescriptor)}
+     uses_numbered=true;
+    }
     if state.report_size==0||state.report_count==0{return Err(UsbError::MalformedDescriptor)}
     let bits=state.report_size.checked_mul(state.report_count).ok_or(UsbError::NoResources)?;
     let index=out.find_or_insert(state.report_id)?;
@@ -417,6 +427,10 @@ mod report_descriptor_tests{
   let parsed=HidReportDescriptor::parse(&descriptor).unwrap();
   assert_eq!(parsed.report(1).unwrap().input_bytes(),3);
   assert_eq!(parsed.report(2).unwrap().output_bytes(),5);
+ }
+ #[test]fn rejects_mixing_implicit_and_explicit_report_ids(){
+  let mixed=[0x75,8,0x95,1,0x81,2,0x85,1,0x81,2];
+  assert_eq!(HidReportDescriptor::parse(&mixed),Err(UsbError::MalformedDescriptor));
  }
  #[test]fn validates_global_push_pop_and_malformed_streams(){
   let descriptor=[0x75,8,0xa4,0x95,2,0xb4,0x95,1,0x81,2];
