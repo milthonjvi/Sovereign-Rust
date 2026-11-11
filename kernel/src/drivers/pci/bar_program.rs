@@ -44,7 +44,10 @@ pub unsafe fn program_bar<A: ConfigAccess>(
     allocation: ResourceAllocation,
     measured_size: BarSize,
 ) -> Result<Bar, BarProgramError> {
-    if measured_size.index != allocation.bar_index || measured_size.size != allocation.size {
+    if allocation.address != function.address
+        || measured_size.index != allocation.bar_index
+        || measured_size.size != allocation.size
+    {
         return Err(BarProgramError::AllocationMismatch);
     }
 
@@ -188,6 +191,7 @@ mod tests {
         registers[4] = 0x8000_0008;
         let io = MockConfig { registers: RefCell::new(registers) };
         let allocation = ResourceAllocation {
+            address: function().address,
             bar_index: 0, kind: BarKind::Memory32, prefetchable: true,
             base: 0x9000_0000, size: 0x1000, end: 0x9000_1000,
         };
@@ -208,6 +212,7 @@ mod tests {
         registers[5] = 1;
         let io = MockConfig { registers: RefCell::new(registers) };
         let allocation = ResourceAllocation {
+            address: function().address,
             bar_index: 0, kind: BarKind::Memory64, prefetchable: false,
             base: 0x1_0000_2000, size: 0x2000, end: 0x1_0000_4000,
         };
