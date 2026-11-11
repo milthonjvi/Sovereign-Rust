@@ -83,26 +83,30 @@ pub fn from_gpt(
     output: &mut [Option<Partition>],
 ) -> Result<usize, PartitionError> {
     output.fill(None);
-    let mut count = 0;
-    for entry in entries.iter().flatten() {
-        if count == output.len() { output.fill(None); return Err(PartitionError::OutputFull); }
-        let blocks = entry.last_lba.checked_sub(entry.first_lba)
-            .and_then(|n| n.checked_add(1)).ok_or(PartitionError::InvalidMetadata)?;
-        let partition = Partition {
-            scheme: PartitionScheme::Gpt,
-            first_lba: entry.first_lba,
-            block_count: blocks,
-            kind: PartitionType::Gpt {
-                type_guid: entry.type_guid,
-                unique_guid: entry.unique_guid,
-                attributes: entry.attributes,
-                name: entry.name,
-            },
-        }.validate(geometry)?;
-        output[count] = Some(partition);
-        count += 1;
-    }
-    Ok(count)
+    let result = (|| {
+        let mut count = 0;
+        for entry in entries.iter().flatten() {
+            if count == output.len() { return Err(PartitionError::OutputFull); }
+            let blocks = entry.last_lba.checked_sub(entry.first_lba)
+                .and_then(|n| n.checked_add(1)).ok_or(PartitionError::InvalidMetadata)?;
+            let partition = Partition {
+                scheme: PartitionScheme::Gpt,
+                first_lba: entry.first_lba,
+                block_count: blocks,
+                kind: PartitionType::Gpt {
+                    type_guid: entry.type_guid,
+                    unique_guid: entry.unique_guid,
+                    attributes: entry.attributes,
+                    name: entry.name,
+                },
+            }.validate(geometry)?;
+            output[count] = Some(partition);
+            count += 1;
+        }
+        Ok(count)
+    })();
+    if result.is_err() { output.fill(None); }
+    result
 }
 
 /// Convert non-container MBR primary entries. Extended containers are not
@@ -113,20 +117,24 @@ pub fn from_mbr_primary(
     output: &mut [Option<Partition>],
 ) -> Result<usize, PartitionError> {
     output.fill(None);
-    let mut count = 0;
-    for entry in table.iter() {
-        if entry.is_extended() || entry.is_protective_gpt() { continue; }
-        if count == output.len() { output.fill(None); return Err(PartitionError::OutputFull); }
-        let partition = Partition {
-            scheme: PartitionScheme::MbrPrimary,
-            first_lba: entry.start_lba as u64,
-            block_count: entry.sector_count as u64,
-            kind: PartitionType::Mbr { partition_type: entry.partition_type, bootable: entry.bootable },
-        }.validate(geometry)?;
-        output[count] = Some(partition);
-        count += 1;
-    }
-    Ok(count)
+    let result = (|| {
+        let mut count = 0;
+        for entry in table.iter() {
+            if entry.is_extended() || entry.is_protective_gpt() { continue; }
+            if count == output.len() { return Err(PartitionError::OutputFull); }
+            let partition = Partition {
+                scheme: PartitionScheme::MbrPrimary,
+                first_lba: entry.start_lba as u64,
+                block_count: entry.sector_count as u64,
+                kind: PartitionType::Mbr { partition_type: entry.partition_type, bootable: entry.bootable },
+            }.validate(geometry)?;
+            output[count] = Some(partition);
+            count += 1;
+        }
+        Ok(count)
+    })();
+    if result.is_err() { output.fill(None); }
+    result
 }
 
 /// Convert EBR logical partitions (whose LBAs are already absolute).
@@ -136,19 +144,23 @@ pub fn from_mbr_logical(
     output: &mut [Option<Partition>],
 ) -> Result<usize, PartitionError> {
     output.fill(None);
-    let mut count = 0;
-    for entry in entries.iter().flatten() {
-        if count == output.len() { output.fill(None); return Err(PartitionError::OutputFull); }
-        let partition = Partition {
-            scheme: PartitionScheme::MbrLogical,
-            first_lba: entry.start_lba,
-            block_count: entry.sector_count as u64,
-            kind: PartitionType::Mbr { partition_type: entry.partition_type, bootable: entry.bootable },
-        }.validate(geometry)?;
-        output[count] = Some(partition);
-        count += 1;
-    }
-    Ok(count)
+    let result = (|| {
+        let mut count = 0;
+        for entry in entries.iter().flatten() {
+            if count == output.len() { return Err(PartitionError::OutputFull); }
+            let partition = Partition {
+                scheme: PartitionScheme::MbrLogical,
+                first_lba: entry.start_lba,
+                block_count: entry.sector_count as u64,
+                kind: PartitionType::Mbr { partition_type: entry.partition_type, bootable: entry.bootable },
+            }.validate(geometry)?;
+            output[count] = Some(partition);
+            count += 1;
+        }
+        Ok(count)
+    })();
+    if result.is_err() { output.fill(None); }
+    result
 }
 
 /// A block-device view constrained to one partition. All caller LBAs are
