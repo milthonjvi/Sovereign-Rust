@@ -997,6 +997,47 @@ mod tests {
     }
 
     #[test]
+    fn wide_ellipses_scan_on_the_major_axis() {
+        use super::{fill_ellipse, stroke_ellipse};
+
+        let mut fill_memory = [0u8; 220 * 5 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 220,
+            height: 5,
+            pitch: 220 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the backing array exactly covers the declared framebuffer.
+        let mut fill_target = unsafe {
+            FramebufferSurface::from_mapped(
+                fill_memory.as_mut_ptr(), fill_memory.len(), info,
+            ).unwrap()
+        };
+        fill_ellipse(&mut fill_target, 110, 2, 100, 2, Color::RED).unwrap();
+        drop(fill_target);
+        // At y=1 the true horizontal radius is about 86.6 pixels. A
+        // row-oriented sqrt truncated before scaling used to lose 36 pixels.
+        assert_eq!(fill_memory[(1 * 220 + 30) * 4], 255);
+        assert_eq!(fill_memory[(1 * 220 + 190) * 4], 255);
+        assert_eq!(fill_memory[(1 * 220 + 10) * 4], 0);
+
+        let mut stroke_memory = [0u8; 220 * 5 * 4];
+        // SAFETY: the backing array exactly covers the declared framebuffer.
+        let mut stroke_target = unsafe {
+            FramebufferSurface::from_mapped(
+                stroke_memory.as_mut_ptr(), stroke_memory.len(), info,
+            ).unwrap()
+        };
+        stroke_ellipse(&mut stroke_target, 110, 2, 100, 2, Color::GREEN).unwrap();
+        drop(stroke_target);
+        assert_eq!(stroke_memory[(1 * 220 + 30) * 4 + 1], 255);
+        assert_eq!(stroke_memory[(1 * 220 + 190) * 4 + 1], 255);
+        assert_eq!(stroke_memory[(1 * 220 + 10) * 4 + 1], 0);
+    }
+
+    #[test]
     fn rejects_unrepresentable_ellipse_radius_before_writing() {
         use super::fill_ellipse;
         let mut memory = [0u8; 8 * 8 * 4];
