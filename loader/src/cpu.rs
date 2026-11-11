@@ -8,6 +8,10 @@ const EFER_MSR: u32 = 0xC000_0080;
 const EFER_NXE: u64 = 1 << 11;
 const CPUID_NX: u32 = 1 << 20;
 
+/// Proof token produced only after EFER.NXE is confirmed active.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NxeEnabled(());
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CpuFeatureError {
     ExtendedCpuidUnavailable,
@@ -20,7 +24,7 @@ pub enum CpuFeatureError {
 /// Must execute at CPL0 on x86_64 with a valid MSR-capable CPU. The caller
 /// must ensure firmware execution is not concurrently using incompatible
 /// assumptions about EFER state.
-pub unsafe fn enable_nxe() -> Result<(), CpuFeatureError> {
+pub unsafe fn enable_nxe() -> Result<NxeEnabled, CpuFeatureError> {
     // SAFETY: CPUID is available in long mode and does not mutate machine state.
     let maximum = unsafe { __cpuid(CPUID_EXTENDED_MAX) }.eax;
     if maximum < CPUID_EXTENDED_FEATURES {
@@ -58,5 +62,5 @@ pub unsafe fn enable_nxe() -> Result<(), CpuFeatureError> {
             );
         }
     }
-    Ok(())
+    Ok(NxeEnabled(()))
 }
