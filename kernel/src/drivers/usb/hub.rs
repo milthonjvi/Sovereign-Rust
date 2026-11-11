@@ -324,7 +324,10 @@ impl HubPortMachine{
    self.reset_elapsed_ms=0;
    self.clear_warm_reset_change=true;
   }
-  self.observe(HubPortStatus{status:normalized,change:status.change});
+  // SuperSpeed has no C_PORT_ENABLE or C_PORT_SUSPEND bits. Passing the raw
+  // change word into the USB 2.0 state machine would misread reserved bits 1-2.
+  let normalized_change=status.change&(HubPortStatus::C_CONNECTION|HubPortStatus::C_OVER_CURRENT|HubPortStatus::C_RESET);
+  self.observe(HubPortStatus{status:normalized,change:normalized_change});
  }
  pub fn take_action(&mut self)->Option<HubPortAction>{
   if self.clear_connection_change{
@@ -530,3 +533,5 @@ mod hub_change_bitmap_ack_tests{
 
 #[cfg(test)]mod reset_change_retry_no_duplicate_tests{use super::*;#[test]fn failed_reset_change_clear_retries_without_second_clear(){let mut p=HubPortMachine::new(1,0);p.start().unwrap();p.elapse_ms(0);p.observe(HubPortStatus{status:HubPortStatus::CONNECTION,change:0});p.elapse_ms(100);assert_eq!(p.take_action(),Some(HubPortAction::Reset));p.observe(HubPortStatus{status:HubPortStatus::CONNECTION|HubPortStatus::ENABLE,change:HubPortStatus::C_RESET});let a=p.take_action().unwrap();assert_eq!(a,HubPortAction::ClearResetChange);p.action_failed(a);assert_eq!(p.take_action(),Some(HubPortAction::ClearResetChange));assert_eq!(p.take_action(),None);}#[test]fn failed_warm_reset_change_clear_retries_without_replaying_reset(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0,0]).unwrap());p.elapse_ms(100);assert_eq!(p.take_action(),Some(HubPortAction::WarmReset));p.observe_superspeed(SuperSpeedPortStatus::parse(&[3,0,0x20,0]).unwrap());let a=p.take_action().unwrap();assert_eq!(a,HubPortAction::ClearWarmResetChange);p.action_failed(a);assert_eq!(p.take_action(),Some(HubPortAction::ClearWarmResetChange));assert_eq!(p.take_action(),None);}}
 #[cfg(test)]mod changed_port_iterator_tests{use super::*;#[test]fn iterates_changed_ports_in_ascending_order(){let b=HubChangeBitmap::parse(&[0b1010_0101,0b0000_0010],9).unwrap();assert!(b.hub_changed());let mut i=b.changed_ports();assert_eq!(i.next(),Some(2));assert_eq!(i.next(),Some(6));assert_eq!(i.next(),Some(9));assert_eq!(i.next(),None);assert_eq!(b.changed_port_count(),3);}#[test]fn empty_bitmap_iterator_stays_exhausted(){let b=HubChangeBitmap::parse(&[0],7).unwrap();let mut i=b.changed_ports();assert_eq!(i.next(),None);assert_eq!(i.next(),None);assert_eq!(b.changed_port_count(),0);}}
+
+#[cfg(test)]mod superspeed_reserved_change_bits_tests{use super::*;#[test]fn reserved_usb2_change_positions_do_not_emit_actions(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0x06,0]).unwrap());assert_eq!(p.take_action(),None);}#[test]fn superspeed_connection_overcurrent_and_reset_bits_are_preserved(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0x19,0]).unwrap());assert_eq!(p.take_action(),Some(HubPortAction::ClearConnectionChange));assert_eq!(p.take_action(),Some(HubPortAction::ClearOverCurrentChange));assert_eq!(p.take_action(),Some(HubPortAction::ClearResetChange));}}
