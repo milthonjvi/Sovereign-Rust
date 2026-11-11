@@ -137,3 +137,36 @@ impl RingCursor {
 
 /// Compile-time layout checks also guard against accidental ABI changes.
 pub const fn descriptor_alignment() -> usize { align_of::<RxDescriptor>() }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_qemu_e1000() {
+        assert!(supports_device(PCI_VENDOR_INTEL, DEVICE_82540EM));
+        assert!(!supports_device(0x1234, DEVICE_82540EM));
+        assert!(!supports_device(PCI_VENDOR_INTEL, 0xffff));
+    }
+
+    #[test]
+    fn descriptor_abi_is_sixteen_bytes() {
+        assert_eq!(size_of::<RxDescriptor>(), 16);
+        assert_eq!(size_of::<TxDescriptor>(), 16);
+    }
+
+    #[test]
+    fn ring_config_checks_alignment_and_size() {
+        let ring = RingConfig::new(0x1000, 32).unwrap();
+        assert_eq!(ring.byte_length, 512);
+        assert_eq!(ring.base_registers(), (0x1000, 0));
+        assert_eq!(RingConfig::new(0x1001, 32), Err(E1000Error::MisalignedDmaAddress));
+        assert_eq!(RingConfig::new(0x1000, 12), Err(E1000Error::InvalidRingSize));
+    }
+
+    #[test]
+    fn ring_cursor_wraps_at_power_of_two_boundary() {
+        let mut cursor = RingCursor::new(8).unwrap();
+        for expected in 1..8 { assert_eq!(cursor.advance(), expected); }
+        assert_eq!(cursor.advance(), 0);
+    }
+}
