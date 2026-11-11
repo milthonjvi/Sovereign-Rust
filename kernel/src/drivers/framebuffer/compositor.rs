@@ -16,7 +16,7 @@ use super::surface::FramebufferSurface;
 
 /// Stable handle for a layer slot during its lifetime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LayerId(usize);
+pub struct LayerId { slot: usize, generation: u64 }
 
 #[derive(Clone, Copy)]
 struct Layer<'a> {
@@ -51,6 +51,8 @@ pub struct Compositor<'a, const LAYERS: usize, const DIRTY: usize> {
     /// Slot indices ordered from back to front; LayerId remains a stable slot.
     order: [usize; LAYERS],
     order_len: usize,
+    generations: [u64; LAYERS],
+    retired: [bool; LAYERS],
     dirty: DirtyRegionSet<DIRTY>,
 }
 
@@ -65,6 +67,8 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
             layers: [None; LAYERS],
             order: [0; LAYERS],
             order_len: 0,
+            generations: [0; LAYERS],
+            retired: [false; LAYERS],
             dirty,
         })
     }
@@ -93,25 +97,31 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         y: i64,
         opacity: u8,
     ) -> Result<LayerId, CompositorError> {
-        let index = self.layers.iter().position(Option::is_none)
+        let index = (0..LAYERS)
+            .find(|&slot| self.layers[slot].is_none() && !self.retired[slot])
             .ok_or(CompositorError::NoLayerCapacity)?;
         self.layers[index] = Some(Layer { image, x, y, opacity, visible: true });
         self.order[self.order_len] = index;
         self.order_len += 1;
         self.mark_layer_bounds(image, x, y);
-        Ok(LayerId(index))
+        Ok(LayerId { slot: index, generation: self.generations[index] })
     }
 
     /// Remove a layer and invalidate the area it previously occupied.
     pub fn remove_layer(&mut self, id: LayerId) -> Result<(), CompositorError> {
         let layer = self.layer(id)?;
         let old = *layer;
-        self.layers[id.0] = None;
-        if let Some(position) = self.order[..self.order_len].iter().position(|&slot| slot == id.0) {
+        self.layers[id.slot] = None;
+        if let Some(position) = self.order[..self.order_len].iter().position(|&slot| slot == id.slot) {
             for index in position..self.order_len - 1 {
                 self.order[index] = self.order[index + 1];
             }
             self.order_len -= 1;
+        }
+        if let Some(next_generation) = self.generations[id.slot].checked_add(1) {
+            self.generations[id.slot] = next_generation;
+        } else {
+            self.retired[id.slot] = true;
         }
         self.mark_layer_bounds(old.image, old.x, old.y);
         Ok(())
@@ -139,9 +149,9 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         self.mark_layer_bounds(a.image, a.x, a.y);
         self.mark_layer_bounds(b.image, b.x, b.y);
         let first_position = self.order[..self.order_len].iter()
-            .position(|&slot| slot == first.0).ok_or(CompositorError::InvalidLayer)?;
+            .position(|&slot| slot == first.slot).ok_or(CompositorError::InvalidLayer)?;
         let second_position = self.order[..self.order_len].iter()
-            .position(|&slot| slot == second.0).ok_or(CompositorError::InvalidLayer)?;
+            .position(|&slot| slot == second.slot).ok_or(CompositorError::InvalidLayer)?;
         self.order.swap(first_position, second_position);
         Ok(())
     }
@@ -271,7 +281,10 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
     }
 
     fn layer(&self, id: LayerId) -> Result<&Layer<'a>, CompositorError> {
-        self.layers.get(id.0)
+        if self.generations.get(id.slot).copied() != Some(id.generation) {
+            return Err(CompositorError::InvalidLayer);
+        }
+        self.layers.get(id.slot)
             .and_then(Option::as_ref)
             .ok_or(CompositorError::InvalidLayer)
     }
@@ -321,12 +334,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stale_layer_handle_after_removal() {
+    fn rejects_stale_layer_handle_after_slot_reuse() {
         let pixels = [Color::opaque(1, 2, 3)];
         let image = ImageView::new(&pixels, 1, 1, 1).unwrap();
         let mut compositor = Compositor::<1, 2>::new(8, 8, Color::BLACK).unwrap();
-        let id = compositor.add_layer(image, 0, 0, 255).unwrap();
-        compositor.remove_layer(id).unwrap();
-        assert_eq!(compositor.set_visible(id, false), Err(CompositorError::InvalidLayer));
+        let stale = compositor.add_layer(image, 0, 0, 255).unwrap();
+        compositor.remove_layer(stale).unwrap();
+        let current = compositor.add_layer(image, 1, 1, 255).unwrap();
+        assert_ne!(stale, current);
+        assert_eq!(compositor.set_visible(stale, false), Err(CompositorError::InvalidLayer));
+        assert!(compositor.set_visible(current, false).is_ok());
     }
 }
