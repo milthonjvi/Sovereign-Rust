@@ -146,7 +146,7 @@ pub struct E1000InitInfo {
 /// addresses, RX buffers must be unique/non-overlapping and each provide at
 /// least 2048 writable bytes,
 /// all rings and buffers must be DMA-mapped and pinned, the descriptor slices
-/// must alias the physical ring bases supplied in queues, and PCI bus mastering
+/// must alias the device-visible DMA ring bases supplied in queues, and PCI bus mastering
 /// must already be enabled. The platform must provide coherent DMA or implement
 /// cache maintenance in its barrier methods. After successful initialization,
 /// the caller must keep every ring and buffer mapping pinned until `reset()`
