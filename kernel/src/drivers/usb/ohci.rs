@@ -89,3 +89,97 @@ mod descriptor_tests{
   assert_eq!(core::mem::align_of::<OhciHcca>(),256);assert_eq!(core::mem::size_of::<OhciHcca>(),256);
  }
 }
+
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum OhciState{Discovered,Resetting,Reset,Running,Failed}
+pub trait OhciRegisterIo{fn read32(&self,offset:usize)->Result<u32,UsbError>;fn write32(&mut self,offset:usize,value:u32)->Result<(),UsbError>;}
+pub struct OhciController{pub state:OhciState,pub revision:u8,pub port_count:u8,hcca_configured:bool}
+impl OhciController{
+ pub fn discover<I:OhciRegisterIo>(io:&I)->Result<Self,UsbError>{
+  let revision=io.read32(REVISION)? as u8;
+  if revision<0x10{return Err(UsbError::Unsupported)}
+  let ports=(io.read32(RH_DESCRIPTOR_A)?&0xff)as u8;
+  if ports==0{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{state:OhciState::Discovered,revision,port_count:ports,hcca_configured:false})
+ }
+ pub fn request_reset<I:OhciRegisterIo>(&mut self,io:&mut I)->Result<(),UsbError>{
+  if self.state!=OhciState::Discovered{return Err(UsbError::Unsupported)}
+  io.write32(COMMAND_STATUS,1)?;self.state=OhciState::Resetting;Ok(())
+ }
+ pub fn poll_reset<I:OhciRegisterIo>(&mut self,io:&I)->Result<bool,UsbError>{
+  if self.state!=OhciState::Resetting{return Err(UsbError::Unsupported)}
+  if io.read32(COMMAND_STATUS)?&1==0{self.state=OhciState::Reset;return Ok(true)}
+  Ok(false)
+ }
+ /// Programs DMA-backed HCCA and control/bulk endpoint-descriptor schedule heads.
+ pub unsafe fn configure_schedules<I:OhciRegisterIo>(&mut self,io:&mut I,hcca:u64,control_head:u64,bulk_head:u64)->Result<(),UsbError>{
+  if self.state!=OhciState::Reset||self.hcca_configured{return Err(UsbError::Unsupported)}
+  if hcca>u32::MAX as u64||hcca&0xff!=0||control_head>u32::MAX as u64||control_head&0xf!=0||bulk_head>u32::MAX as u64||bulk_head&0xf!=0{return Err(UsbError::InvalidAddress)}
+  io.write32(HCCA,hcca as u32)?;io.write32(CONTROL_HEAD_ED,control_head as u32)?;
+  io.write32(BULK_HEAD_ED,bulk_head as u32)?;
+  self.hcca_configured=true;Ok(())
+ }
+ pub fn start<I:OhciRegisterIo>(&mut self,io:&mut I)->Result<(),UsbError>{
+  if self.state!=OhciState::Reset||!self.hcca_configured{return Err(UsbError::Unsupported)}
+  io.write32(CONTROL,HCFS_OPERATIONAL|(1<<3)|(1<<4))?;
+  io.write32(INTERRUPT_ENABLE,(1<<31)|(1<<1)|(1<<6))?;Ok(())
+ }
+ pub fn poll_running<I:OhciRegisterIo>(&mut self,io:&I)->Result<bool,UsbError>{
+  if self.state!=OhciState::Reset{return Err(UsbError::Unsupported)}
+  if io.read32(CONTROL)?&CONTROL_HCFS_MASK==HCFS_OPERATIONAL{self.state=OhciState::Running;return Ok(true)}
+  Ok(false)
+ }
+ pub fn port_status<I:OhciRegisterIo>(&self,io:&I,port:u8)->Result<super::controller::PortStatus,UsbError>{
+  if self.state!=OhciState::Running{return Err(UsbError::ControllerUnavailable)}
+  if port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
+  let status=OhciPortStatus::parse(io.read32(RH_PORT_STATUS_BASE+(port as usize-1)*4)?);
+  Ok(super::controller::PortStatus{connected:status.connected,enabled:status.enabled,suspended:status.suspended,
+   over_current:status.over_current,speed:if status.connected{Some(if status.low_speed{super::transfer::UsbSpeed::Low}else{super::transfer::UsbSpeed::Full})}else{None}})
+ }
+ pub fn request_port_reset<I:OhciRegisterIo>(&self,io:&mut I,port:u8)->Result<(),UsbError>{
+  if self.state!=OhciState::Running||port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
+  let offset=RH_PORT_STATUS_BASE+(port as usize-1)*4;
+  if io.read32(offset)?&1==0{return Err(UsbError::ControllerUnavailable)}
+  io.write32(offset,1<<4)
+ }
+ pub fn port_reset_complete<I:OhciRegisterIo>(&self,io:&I,port:u8)->Result<bool,UsbError>{
+  if port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
+  let status=io.read32(RH_PORT_STATUS_BASE+(port as usize-1)*4)?;
+  Ok(status&(1<<4)==0&&status&(1<<1)!=0)
+ }
+ pub fn clear_port_changes<I:OhciRegisterIo>(&self,io:&mut I,port:u8,changes:u32)->Result<(),UsbError>{
+  const MASK:u32=(1<<16)|(1<<17)|(1<<18)|(1<<19)|(1<<20);
+  if port==0||port>self.port_count||changes&!MASK!=0{return Err(UsbError::InvalidAddress)}
+  io.write32(RH_PORT_STATUS_BASE+(port as usize-1)*4,changes)
+ }
+}
+
+#[cfg(test)]
+mod controller_tests{
+ use super::*;
+ struct FakeOhci{registers:[u32;64]}
+ impl FakeOhci{fn new()->Self{Self{registers:[0;64]}}}
+ impl OhciRegisterIo for FakeOhci{
+  fn read32(&self,offset:usize)->Result<u32,UsbError>{self.registers.get(offset/4).copied().ok_or(UsbError::BufferTooShort)}
+  fn write32(&mut self,offset:usize,value:u32)->Result<(),UsbError>{
+   let index=offset/4;if index>=self.registers.len(){return Err(UsbError::BufferTooShort)}
+   self.registers[index]=value;
+   if offset==COMMAND_STATUS&&value&1!=0{self.registers[index]&=!1;}
+   Ok(())
+  }
+ }
+ #[test]fn resets_configures_hcca_and_enters_operational_state(){
+  let mut io=FakeOhci::new();io.registers[0]=0x10;io.registers[RH_DESCRIPTOR_A/4]=2;
+  let mut h=OhciController::discover(&io).unwrap();
+  h.request_reset(&mut io).unwrap();assert!(h.poll_reset(&io).unwrap());
+  unsafe{h.configure_schedules(&mut io,0x1000,0x2000,0x3000)}.unwrap();
+  h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());
+  assert_eq!(h.state,OhciState::Running);
+ }
+ #[test]fn rejects_misaligned_hcca(){
+  let mut io=FakeOhci::new();io.registers[0]=0x10;io.registers[RH_DESCRIPTOR_A/4]=1;
+  let mut h=OhciController::discover(&io).unwrap();h.state=OhciState::Reset;
+  assert_eq!(unsafe{h.configure_schedules(&mut io,0x1001,0x2000,0x3000)},Err(UsbError::InvalidAddress));
+ }
+}
