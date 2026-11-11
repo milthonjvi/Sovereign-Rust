@@ -2,6 +2,10 @@
 //!
 //! Hardware timer drivers provide counters and interrupt sources. This layer
 //! owns clock conversion, bounded timeout queues, and deferred event delivery.
+//!
+//! Backend preference is TSC-deadline, then calibrated x2APIC one-shot when
+//! TSC-deadline is unavailable, then legacy PIT only while PIC IRQ0 routing
+//! remains active. All interrupt paths defer queue draining to task context.
 
 pub mod clock;
 pub mod deadline;
