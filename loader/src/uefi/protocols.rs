@@ -31,7 +31,7 @@ pub struct EfiSimpleFileSystemProtocol {
     ) -> EfiStatus>,
 }
 
-/// EFI_FILE_PROTOCOL prefix through Read, retaining specification slot order.
+/// EFI_FILE_PROTOCOL prefix through GetInfo, preserving specification slot order.
 #[repr(C)]
 pub struct EfiFileProtocol {
     pub revision: u64,
@@ -49,6 +49,18 @@ pub struct EfiFileProtocol {
         buffer_size: *mut usize,
         buffer: *mut c_void,
     ) -> EfiStatus>,
+    _write: usize,
+    _get_position: usize,
+    pub set_position: Option<unsafe extern "efiapi" fn(
+        this: *mut EfiFileProtocol,
+        position: u64,
+    ) -> EfiStatus>,
+    pub get_info: Option<unsafe extern "efiapi" fn(
+        this: *mut EfiFileProtocol,
+        information_type: *const EfiGuid,
+        buffer_size: *mut usize,
+        buffer: *mut c_void,
+    ) -> EfiStatus>,
 }
 
 pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: EfiGuid = EfiGuid {
@@ -61,6 +73,14 @@ pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: EfiGuid = EfiGuid {
 pub const EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID: EfiGuid = EfiGuid {
     data1: 0x964E_5B22,
     data2: 0x6459,
+    data3: 0x11D2,
+    data4: [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
+};
+
+/// EFI_FILE_INFO GUID.
+pub const EFI_FILE_INFO_GUID: EfiGuid = EfiGuid {
+    data1: 0x0957_6E92,
+    data2: 0x6D3F,
     data3: 0x11D2,
     data4: [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
 };
