@@ -4,6 +4,7 @@
 //! PCI, DMA, MMIO, and interrupt services before hardware access is enabled.
 
 pub mod block;
+pub mod fat;
 pub mod gpt;
 pub mod mbr;
 
@@ -19,3 +20,5 @@ pub use partition::{
 
 pub mod volume;
 pub use volume::{VolumeError, VolumeTable};
+
+pub use fat::{parse_bpb, probe_fat, FatBpb, FatError, FatKind};
