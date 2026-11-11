@@ -54,6 +54,60 @@ impl<'a> FramebufferConsole<'a> {
         (self.columns, self.rows)
     }
 
+    /// Current text colors (foreground, background).
+    pub const fn colors(&self) -> (Color, Color) {
+        (self.foreground, self.background)
+    }
+
+    /// Change the colors used by subsequent output.
+    ///
+    /// Existing framebuffer contents are not repainted.
+    pub fn set_colors(&mut self, foreground: Color, background: Color) {
+        self.foreground = foreground;
+        self.background = background;
+    }
+
+    /// Write a string using temporary colors, then restore the previous colors.
+    ///
+    /// Newline and scrolling behavior is identical to `write_str`.
+    pub fn write_str_with_colors(
+        &mut self,
+        text: &str,
+        foreground: Color,
+        background: Color,
+    ) {
+        let previous = self.colors();
+        self.set_colors(foreground, background);
+        self.write_str(text);
+        self.set_colors(previous.0, previous.1);
+    }
+
+    /// Write a line using temporary colors, then restore the previous colors.
+    pub fn write_line_with_colors(
+        &mut self,
+        text: &str,
+        foreground: Color,
+        background: Color,
+    ) {
+        let previous = self.colors();
+        self.set_colors(foreground, background);
+        self.write_line(text);
+        self.set_colors(previous.0, previous.1);
+    }
+
+    /// Write one character using temporary colors, then restore the previous colors.
+    pub fn write_char_with_colors(
+        &mut self,
+        character: char,
+        foreground: Color,
+        background: Color,
+    ) {
+        let previous = self.colors();
+        self.set_colors(foreground, background);
+        self.write_char(character);
+        self.set_colors(previous.0, previous.1);
+    }
+
     /// Write a UTF-8 string. Unsupported non-ASCII characters use the font's
     /// replacement glyph.
     pub fn write_str(&mut self, text: &str) {
@@ -157,7 +211,7 @@ impl<'a> FramebufferConsole<'a> {
             x,
             y,
             FONT_ADVANCE,
-            FONT_LINE_HEIGHT.max(FONT_HEIGHT),
+            FONT_LINE_HEIGHT,
             self.background,
         );
     }
