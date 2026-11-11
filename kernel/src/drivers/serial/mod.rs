@@ -4,7 +4,7 @@
 
 mod irq;
 mod rx;
-pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, UartIrqError};
+pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, receive_statistics, UartIrqError, UartRxStatistics};
 pub use rx::UartRxBuffer;
 
 use crate::arch::x86_64::io;
