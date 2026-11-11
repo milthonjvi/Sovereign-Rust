@@ -238,11 +238,47 @@ impl Uart16550 {
         Err(UartError::Timeout)
     }
 
+    /// Returns the hardware transmit FIFO depth selected during initialization.
+    #[inline]
+    const fn tx_fifo_depth(&self) -> usize {
+        match self.fifo {
+            UartFifo::None => 1,
+            UartFifo::Bytes16 => 16,
+            UartFifo::Bytes64 => 64,
+        }
+    }
+
+    /// Transmits a slice in FIFO-sized bursts instead of polling once per byte.
+    ///
+    /// The THRE bit indicates that the transmit holding register/FIFO can accept
+    /// a new burst. The method waits with a bounded spin count for each burst and
+    /// reports the exact prefix accepted by the UART if a timeout occurs.
     pub fn write(&self, bytes: &[u8]) -> Result<usize, (usize, UartError)> {
+        if let Err(error) = self.ensure_initialized() {
+            return Err((0, error));
+        }
+        let burst = self.tx_fifo_depth();
         let mut written = 0;
-        for &byte in bytes {
-            if let Err(error) = self.write_byte(byte) { return Err((written, error)); }
-            written += 1;
+        while written < bytes.len() {
+            let mut ready = false;
+            for _ in 0..self.poll_limit {
+                // SAFETY: This instance exclusively owns the UART register range.
+                if unsafe { io::in8(self.port(LSR)) } & THR_EMPTY != 0 {
+                    ready = true;
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            if !ready {
+                return Err((written, UartError::Timeout));
+            }
+
+            let count = core::cmp::min(burst, bytes.len() - written);
+            for &byte in &bytes[written..written + count] {
+                // SAFETY: THRE indicated that the selected FIFO can accept a burst.
+                unsafe { io::out8(self.port(DATA), byte) };
+            }
+            written += count;
         }
         Ok(written)
     }
@@ -364,6 +400,17 @@ mod tests {
     }
 
     #[test]
+    fn transmit_burst_depth_matches_detected_fifo() {
+        // SAFETY: Construction does not access hardware.
+        let mut uart = unsafe { Uart16550::new(0x3F8, UartConfig::default()) };
+        assert_eq!(uart.tx_fifo_depth(), 1);
+        uart.fifo = UartFifo::Bytes16;
+        assert_eq!(uart.tx_fifo_depth(), 16);
+        uart.fifo = UartFifo::Bytes64;
+        assert_eq!(uart.tx_fifo_depth(), 64);
+    }
+
+    #[test]
     fn validates_ports_baud_and_frame_format() {
         // SAFETY: Validation does not access hardware.
         let bad_port = unsafe { Uart16550::new(0x1234, UartConfig::default()) };
@@ -396,9 +443,6 @@ mod tests {
 
 impl core::fmt::Write for Uart16550 {
     fn write_str(&mut self, text: &str) -> core::fmt::Result {
-        for byte in text.bytes() {
-            self.write_byte(byte).map_err(|_| core::fmt::Error)?;
-        }
-        Ok(())
+        self.write(text.as_bytes()).map(|_| ()).map_err(|_| core::fmt::Error)
     }
 }
