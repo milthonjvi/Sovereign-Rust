@@ -41,7 +41,12 @@ impl BarResource {
             Some(value) => value,
             None => return Err(ResourceError::AddressOverflow),
         };
-        if !matches!(bar.kind, BarKind::Memory64) && end > (1u64 << 32) {
+        let width_limit = match bar.kind {
+            BarKind::MemoryBelow1M => 1u64 << 20,
+            BarKind::Memory32 | BarKind::Io => 1u64 << 32,
+            BarKind::Memory64 => u64::MAX,
+        };
+        if end > width_limit {
             return Err(ResourceError::AddressWidthExceeded);
         }
         Ok(Self { index: bar.index, kind: bar.kind, prefetchable: bar.prefetchable, base: bar.base, size, end })
@@ -88,6 +93,13 @@ mod tests {
     fn rejects_misaligned_base_and_32_bit_overflow() {
         assert_eq!(BarResource::new(memory32(0x1800), 0x1000), Err(ResourceError::MisalignedBase));
         assert_eq!(BarResource::new(memory32(0xffff_f000), 0x2000), Err(ResourceError::AddressWidthExceeded));
+    }
+
+    #[test]
+    fn validates_below_one_megabyte_limit() {
+        let bar = Bar { index: 0, kind: BarKind::MemoryBelow1M, prefetchable: false, base: 0x80000, raw_low: 0x80002, raw_high: None };
+        assert!(BarResource::new(bar, 0x10000).is_ok());
+        assert_eq!(BarResource::new(bar, 0x20000), Err(ResourceError::AddressWidthExceeded));
     }
 
     #[test]
