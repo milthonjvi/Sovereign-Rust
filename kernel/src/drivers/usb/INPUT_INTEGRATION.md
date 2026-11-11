@@ -46,6 +46,7 @@ USB-side APIs already present:
 - `drivers::usb::hid_transport::find_interface` for generic report-protocol HID interfaces.
 - `drivers::usb::hid_transport::HidInterfaceInfo::interrupt_in_service_info` to obtain endpoint metadata plus speed-aware service intervals and payload limits.
 - `drivers::usb::hid_transport::HidInterruptEndpoint::read_report` to poll a selected endpoint without duplicating USB transfer validation.
+- `drivers::usb::hid::HidDescriptor::find_in_configuration` to locate a class descriptor by interface and alternate setting in the raw configuration descriptor.
 - `drivers::usb::hid_transport::read_report_descriptor` to fetch the complete Report descriptor through the validated control-transfer path.
 - `drivers::usb::hid::BootHidInterface::read_report` for bounded raw report transport.
 - `drivers::usb::hid::get_report_descriptor` to construct the class-independent Report Descriptor request.
@@ -165,7 +166,7 @@ metadata should be requested from this module rather than duplicated in Input.
 
 The USB module now exposes `hid_transport::find_interface(configuration, interface_number, alternate_setting)`. It deliberately accepts non-boot HID interfaces (subclass/protocol zero included) and returns only transport metadata. `HidInterfaceInfo::interrupt_in_count` and `interrupt_in_endpoint` enumerate every interrupt-IN endpoint belonging to that interface. Input can therefore support report-protocol keyboards, mice, touchscreens, tablets, gamepads and vendor-defined collections without USB implementing their semantics.
 
-For the HID class descriptor, use `hid::HidDescriptor::parse` to obtain the Report Descriptor length, then `hid::get_report_descriptor(interface_number, report_length)` to build the request. The report parser in USB only accounts for per-report bit lengths and IDs; usage interpretation, logical ranges, collection semantics and normalized event publication remain Input responsibilities.
+For the HID class descriptor, retain the raw configuration descriptor during enumeration and use `hid::HidDescriptor::find_in_configuration(raw_configuration, interface_number, alternate_setting)`. `ParsedConfiguration` currently retains the standard interface/endpoint tree, not arbitrary class-specific descriptor bytes. Pass the resulting descriptor to `hid_transport::read_report_descriptor`; it issues the GET_DESCRIPTOR request and validates the complete transfer. Usage interpretation, logical ranges, collection semantics and normalized event publication remain Input responsibilities.
 
 
 ## Periodic scheduling metadata
@@ -173,3 +174,6 @@ For the HID class descriptor, use `hid::HidDescriptor::parse` to obtain the Repo
 Use `interrupt_in_service_info(configuration, ordinal, device.speed)` instead of assuming that the raw `bInterval` value means milliseconds. The returned `HidInterruptEndpoint` distinguishes Full/Low Speed frame intervals from High/SuperSpeed microframe intervals, reports High Speed transactions per opportunity, and retains SuperSpeed burst and bytes-per-interval data. The Input adapter should use this metadata to schedule polling; it should not reinterpret USB descriptor fields independently.
 
 For Report Protocol devices, retrieve the HID class descriptor from the interface's class-specific descriptor records in the raw configuration descriptor, parse it with `HidDescriptor::parse`, then call `read_report_descriptor`. That helper enforces the declared descriptor length and uses the common control-transfer completion checks. The raw Report descriptor's usages and collections remain Input-owned semantics.
+
+
+The raw configuration blob should be retained by the USB enumeration/device layer for class drivers that need class-specific descriptors. Do not try to reconstruct HID class descriptors from `ParsedConfiguration`, because that parsed representation intentionally stores only standard interface and endpoint metadata.
