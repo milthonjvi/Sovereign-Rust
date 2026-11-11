@@ -169,6 +169,22 @@ pub fn stroke_polygon(
     }
 }
 
+/// Stroke an open polyline by connecting consecutive vertices.
+///
+/// Unlike `stroke_polygon`, this function does not connect the last vertex
+/// back to the first. The caller owns the vertex slice; no allocation occurs.
+pub fn stroke_polyline(
+    target: &mut FramebufferSurface<'_>,
+    vertices: &[(i64, i64)],
+    color: Color,
+) {
+    for segment in vertices.windows(2) {
+        let start = segment[0];
+        let end = segment[1];
+        target.draw_line(start.0, start.1, end.0, end.1, color);
+    }
+}
+
 /// Fill an axis-aligned ellipse using integer scan conversion.
 ///
 /// Radii larger than i64::MAX are rejected before any framebuffer writes.
@@ -692,6 +708,20 @@ mod tests {
         drop(target);
         assert!(memory.iter().all(|byte| *byte == 0));
     }
+    #[test]
+    fn strokes_open_polyline_without_closing_last_segment() {
+        use super::stroke_polyline;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        stroke_polyline(&mut target, &[(1, 1), (5, 1), (5, 5)], Color::GREEN);
+        drop(target);
+        let pixel = |x: usize, y: usize| memory[(y * 8 + x) * 4 + 1] == 255;
+        assert!(pixel(3, 1));
+        assert!(pixel(5, 3));
+        assert!(!pixel(3, 3));
+        assert!(!pixel(1, 3));
+    }
+
     #[test]
     fn strokes_closed_polygon_edges() {
         let mut memory = [0u8; 8 * 8 * 4];
