@@ -138,6 +138,7 @@ mod tests {
             (1, 6),
             Color::RED,
         ).unwrap();
+        drop(target);
 
         assert_eq!(memory[(1 * 8 + 1) * 4..(1 * 8 + 1) * 4 + 4], [255, 0, 0, 0]);
         assert_eq!(memory[(2 * 8 + 2) * 4..(2 * 8 + 2) * 4 + 4], [255, 0, 0, 0]);
@@ -171,6 +172,7 @@ mod tests {
             (1, 5),
             Color::GREEN,
         ).unwrap();
+        drop(target);
         assert_eq!(memory[(1 * 8 + 1) * 4..(1 * 8 + 1) * 4 + 4], [0, 255, 0, 0]);
     }
 }
