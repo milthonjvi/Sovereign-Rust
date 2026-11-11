@@ -128,7 +128,14 @@ impl<'a> ResourcePool<'a> {
     /// Allocations are released in reverse order per window. This makes it
     /// possible for a caller to undo BAR assignment when a later programming
     /// or mapping step fails without introducing a heap-backed free list.
-    pub fn release_last(&mut self, allocation: ResourceAllocation) -> Result<(), AllocationError> {
+    /// Roll back the most recent allocation in its window.
+    ///
+    /// # Safety
+    /// The allocation must be the exact value previously returned by allocate
+    /// for this pool and must not have been released before. The caller must
+    /// not forge or alter its fields. Violating this contract can cause the
+    /// allocator to reuse an address range that is still assigned to a device.
+    pub unsafe fn release_last(&mut self, allocation: ResourceAllocation) -> Result<(), AllocationError> {
         if allocation.size == 0
             || !allocation.size.is_power_of_two()
             || allocation.base & (allocation.size - 1) != 0
@@ -268,9 +275,9 @@ mod tests {
         let first = pool.allocate(ResourceRequest::new(address, 0, BarKind::Memory32, false, 0x1000).unwrap()).unwrap();
         let second = pool.allocate(ResourceRequest::new(address, 1, BarKind::Memory32, false, 0x2000).unwrap()).unwrap();
 
-        assert_eq!(pool.release_last(first), Err(AllocationError::NotLastAllocation));
-        pool.release_last(second).unwrap();
-        pool.release_last(first).unwrap();
+        assert_eq!(unsafe { pool.release_last(first) }, Err(AllocationError::NotLastAllocation));
+        unsafe { pool.release_last(second).unwrap(); }
+        unsafe { pool.release_last(first).unwrap(); }
         assert_eq!(pool.windows[0].remaining(), 0x10000);
     }
 
@@ -283,8 +290,8 @@ mod tests {
         let address = PciAddress { segment: 0, bus: 0, device: 1, function: 0 };
         let allocation = pool.allocate(ResourceRequest::new(address, 0, BarKind::Memory32, false, 0x1000).unwrap()).unwrap();
         let malformed = ResourceAllocation { end: allocation.end + 0x1000, ..allocation };
-        assert_eq!(pool.release_last(malformed), Err(AllocationError::InvalidAllocation));
-        pool.release_last(allocation).unwrap();
+        assert_eq!(unsafe { pool.release_last(malformed) }, Err(AllocationError::InvalidAllocation));
+        unsafe { pool.release_last(allocation).unwrap(); }
     }
 
 }
