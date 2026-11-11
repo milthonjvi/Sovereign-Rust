@@ -103,6 +103,32 @@ impl<'a> FramebufferConsole<'a> {
         self.draw_cursor_if_visible();
     }
 
+    /// Clear from the insertion point through the bottom of the console.
+    ///
+    /// The insertion position is preserved.
+    pub fn clear_to_end_of_screen(&mut self) {
+        self.erase_cursor_if_visible();
+        let x = self.column * FONT_ADVANCE;
+        let y = self.row * FONT_LINE_HEIGHT;
+        let pixel_width = self.columns * FONT_ADVANCE;
+        let pixel_height = (self.rows - self.row) * FONT_LINE_HEIGHT;
+        self.surface.fill_rect(
+            x,
+            y,
+            pixel_width.saturating_sub(x),
+            pixel_height,
+            self.background,
+        );
+        self.draw_cursor_if_visible();
+    }
+
+    /// Clear the entire console and return the insertion point to the origin.
+    ///
+    /// This is an explicit screen operation equivalent to the existing clear method.
+    pub fn clear_screen(&mut self) {
+        self.clear();
+    }
+
     /// Whether the insertion cursor is currently rendered.
     pub const fn cursor_visible(&self) -> bool {
         self.cursor_visible
