@@ -362,6 +362,13 @@ impl ExtendedPmRegisters {
             if length == 0 || gas.bit_width as u16 != (length as u16) * 8 {
                 return Err(AcpiError::InvalidGas);
             }
+            let end = gas.address.checked_add(length as u64)
+                .ok_or(AcpiError::UnsupportedAddress)?;
+            if gas.address_space == GenericAddress::ADDRESS_SPACE_SYSTEM_IO
+                && (gas.address > u16::MAX as u64 || end > 0x1_0000)
+            {
+                return Err(AcpiError::UnsupportedAddress);
+            }
         }
         Ok(())
     }
@@ -785,6 +792,35 @@ mod tests {
         assert_eq!(registers.validate_against_lengths(
             PmRegisterBlockLengths { pm1_control: 0, ..lengths }
         ), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn rejects_extended_system_io_blocks_outside_x86_port_space() {
+        let empty = GenericAddress {
+            address_space: GenericAddress::ADDRESS_SPACE_SYSTEM_IO,
+            bit_width: 0, bit_offset: 0,
+            access_size: GenericAddress::ACCESS_UNDEFINED, address: 0,
+        };
+        let mut registers = ExtendedPmRegisters {
+            pm1a_event: empty, pm1b_event: empty,
+            pm1a_control: GenericAddress {
+                address_space: GenericAddress::ADDRESS_SPACE_SYSTEM_IO,
+                bit_width: 16, bit_offset: 0,
+                access_size: GenericAddress::ACCESS_WORD, address: 0xFFFF,
+            },
+            pm1b_control: empty, pm2_control: empty,
+            pm_timer: empty, gpe0: empty, gpe1: empty,
+        };
+        let lengths = PmRegisterBlockLengths {
+            pm1_event: 0, pm1_control: 2, pm2_control: 0,
+            pm_timer: 0, gpe0: 0, gpe1: 0,
+        };
+        assert_eq!(
+            registers.validate_against_lengths(lengths),
+            Err(AcpiError::UnsupportedAddress),
+        );
+        registers.pm1a_control.address = 0xFFFE;
+        assert_eq!(registers.validate_against_lengths(lengths), Ok(()));
     }
 
     #[test]
