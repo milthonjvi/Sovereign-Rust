@@ -211,9 +211,13 @@ impl E1000TxQueue {
             .map_err(|_| E1000QueueError::InvalidFrameLength)?;
         descriptors[index] = descriptor;
         registers.dma_write_barrier();
-        let next = self.cursor.advance();
+        let next = (index + 1) & (descriptors.len() - 1);
+        if let Err(error) = registers.write32(REG_TDT, next as u32) {
+            descriptors[index].status = TXD_STATUS_DD;
+            return Err(E1000QueueError::Register(error));
+        }
+        self.cursor.advance();
         self.pending += 1;
-        registers.write32(REG_TDT, next as u32).map_err(E1000QueueError::Register)?;
         Ok(index as u16)
     }
 
@@ -273,10 +277,14 @@ impl E1000RxQueue {
             return Ok(None);
         };
 
-        let buffer_dma = descriptors[index].buffer_address;
+        let completed_descriptor = descriptors[index];
+        let buffer_dma = completed_descriptor.buffer_address;
         descriptors[index] = RxDescriptor::for_buffer(buffer_dma);
         registers.dma_write_barrier();
-        registers.write32(REG_RDT, index as u32).map_err(E1000QueueError::Register)?;
+        if let Err(error) = registers.write32(REG_RDT, index as u32) {
+            descriptors[index] = completed_descriptor;
+            return Err(E1000QueueError::Register(error));
+        }
         self.cursor.advance();
         Ok(Some((index as u16, completion)))
     }
