@@ -165,6 +165,120 @@ pub fn initialize<R: E1000Registers>(
     })
 }
 
+/// Runtime error returned by allocation-free RX/TX queue operations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum E1000QueueError<E> {
+    Register(E),
+    InvalidRing,
+    InvalidFrameLength,
+    TxRingFull,
+}
+
+/// Single-producer/single-consumer software state for a legacy TX ring.
+/// Keep one instance per hardware queue and serialize access to it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct E1000TxQueue {
+    cursor: RingCursor,
+}
+
+impl E1000TxQueue {
+    pub fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
+        Ok(Self { cursor: RingCursor::new(descriptor_count)? })
+    }
+
+    /// Submit a DMA-mapped frame. The caller must keep its buffer alive until
+    /// the corresponding descriptor's DD bit is observed by reap().
+    pub fn submit<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &mut [TxDescriptor],
+        buffer_dma: u64,
+        length: usize,
+    ) -> Result<u16, E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        if length == 0 || length > u16::MAX as usize || buffer_dma == 0 {
+            return Err(E1000QueueError::InvalidFrameLength);
+        }
+        let index = self.cursor.index() as usize;
+        if descriptors[index].status & TXD_STATUS_DD == 0 {
+            return Err(E1000QueueError::TxRingFull);
+        }
+        let descriptor = super::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
+            .map_err(|_| E1000QueueError::InvalidFrameLength)?;
+        descriptors[index] = descriptor;
+        registers.dma_write_barrier();
+        let next = self.cursor.advance();
+        registers.write32(REG_TDT, next as u32).map_err(E1000QueueError::Register)?;
+        Ok(index as u16)
+    }
+
+    /// Count and release completed descriptors in order. The caller may free
+    /// the associated DMA buffers only after this reports their completion.
+    pub fn reap(&mut self, registers: &mut R, descriptors: &[TxDescriptor])
+        -> Result<usize, E1000QueueError<R::Error>>
+    where
+        R: E1000Registers,
+    {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        let mut completed = 0;
+        for descriptor in descriptors {
+            registers.dma_read_barrier();
+            if descriptor.status & TXD_STATUS_DD != 0 {
+                completed += 1;
+            }
+        }
+        Ok(completed)
+    }
+
+    const fn cursor_count(&self) -> usize {
+        self.cursor.mask() as usize + 1
+    }
+}
+
+/// Consumer cursor for the device's legacy RX descriptor ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct E1000RxQueue {
+    cursor: RingCursor,
+}
+
+impl E1000RxQueue {
+    pub fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
+        Ok(Self { cursor: RingCursor::new(descriptor_count)? })
+    }
+
+    /// Consume one completed descriptor and return it to hardware. The packet
+    /// remains in its DMA buffer; the caller must inspect/copy it before reuse.
+    pub fn poll<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &mut [RxDescriptor],
+    ) -> Result<Option<(u16, super::e1000_descriptor::RxCompletion)>, E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        let index = self.cursor.index() as usize;
+        registers.dma_read_barrier();
+        let Some(completion) = descriptors[index].completion() else {
+            return Ok(None);
+        };
+
+        let buffer_dma = descriptors[index].buffer_address;
+        descriptors[index] = RxDescriptor::for_buffer(buffer_dma);
+        registers.dma_write_barrier();
+        registers.write32(REG_RDT, index as u32).map_err(E1000QueueError::Register)?;
+        self.cursor.advance();
+        Ok(Some((index as u16, completion)))
+    }
+
+    const fn cursor_count(&self) -> usize {
+        self.cursor.mask() as usize + 1
+    }
+}
+
 fn validate_queue(queues: &E1000QueueConfig) -> Result<(), ()> {
     for ring in [queues.rx, queues.tx] {
         if ring.descriptor_count < 8
