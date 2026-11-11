@@ -103,6 +103,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_supported_device_id_outside_ethernet_class() {
+        let mut function = function(0x8086, DEVICE_82540EM, 0);
+        function.identity.class_code = 0x03;
+        assert_eq!(E1000PciDevice::from_function(&function), Err(E1000PciError::UnsupportedDevice));
+    }
+
+    #[test]
     fn selects_a_decoded_mmio_bar_without_touching_pci_configuration() {
         let nic = E1000PciDevice::from_function(&function(0x8086, DEVICE_82574L, 0)).unwrap();
         let bars = [
