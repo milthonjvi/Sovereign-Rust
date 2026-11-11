@@ -38,6 +38,18 @@ impl Fadt {
             return Err(AcpiError::InvalidLength);
         }
 
+        // Known FADT fields are optional by table length, but a table must
+        // never end in the middle of a multi-byte field. This also prevents
+        // partially supplied GAS and 64-bit pointers from being mistaken for
+        // absent fields.
+        if (b.len() > 116 && b.len() < 128)
+            || (b.len() > 132 && b.len() < 140)
+            || (b.len() > 140 && b.len() < 148)
+            || (b.len() > 148 && b.len() < 244)
+        {
+            return Err(AcpiError::InvalidLength);
+        }
+
         let flags = read_u32(b, 112)?;
         let reset_register = if b.len() >= 128 {
             Some(GenericAddress::parse(&b[116..128])?)
@@ -304,6 +316,23 @@ mod tests {
         malformed[9] = checksum;
         let fadt = Fadt::parse(&malformed).unwrap();
         assert_eq!(fadt.extended_pm_registers.unwrap().validate(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn rejects_fadt_lengths_that_truncate_known_fields() {
+        for length in [117usize, 127, 133, 139, 141, 147, 149, 243] {
+            let bytes = make_fadt(length, 0, None, None);
+            assert_eq!(
+                Fadt::parse(&bytes),
+                Err(AcpiError::InvalidLength),
+                "unexpected acceptance of FADT length {length}"
+            );
+        }
+
+        for length in [116usize, 128, 129, 132, 140, 148, 244] {
+            let bytes = make_fadt(length, 0, None, None);
+            assert!(Fadt::parse(&bytes).is_ok(), "valid field boundary {length}");
+        }
     }
 
     #[test]
