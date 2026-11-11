@@ -123,6 +123,23 @@ impl<const N: usize> TimerQueue<N> {
         Some(self.remove_at(0))
     }
 
+    /// Drain expired events into caller-provided storage.
+    ///
+    /// Writes at most output.len() entries and returns the number written.
+    /// Only output[..count] is modified. If more events are expired than fit,
+    /// remaining events stay queued for the next pass. Complexity is O(K log N).
+    pub fn drain_expired(&mut self, now_ns: u64, output: &mut [Option<TimerEvent>]) -> usize {
+        let mut written = 0;
+        while written < output.len() {
+            let Some(event) = self.heap.get(0).and_then(|slot| *slot).map(|node| node.event) else {
+                break;
+            };
+            if !event.deadline.is_expired(now_ns) { break; }
+            output[written] = Some(self.remove_at(0));
+            written += 1;
+        }
+        written
+    }
     /// Remove every event. Returns the number discarded.
     pub fn clear(&mut self) -> usize {
         let old_len = self.len;
@@ -171,6 +188,22 @@ mod tests {
         q.insert(event(1, 1)).unwrap();
         assert_eq!(q.insert(event(1, 2)), Err(TimerQueueError::DuplicateId));
         assert_eq!(q.insert(event(2, 2)), Err(TimerQueueError::Full));
+    }
+    #[test]
+    fn drains_expired_events_in_order_and_respects_output_capacity() {
+        let mut q = TimerQueue::<5>::new();
+        q.insert(event(1, 10)).unwrap();
+        q.insert(event(2, 20)).unwrap();
+        q.insert(event(3, 30)).unwrap();
+        let mut output = [None; 2];
+        assert_eq!(q.drain_expired(25, &mut output), 2);
+        assert_eq!(output[0].unwrap().id, TimerId(1));
+        assert_eq!(output[1].unwrap().id, TimerId(2));
+        assert_eq!(q.len(), 1);
+        let mut remaining = [None; 1];
+        assert_eq!(q.drain_expired(30, &mut remaining), 1);
+        assert_eq!(remaining[0].unwrap().id, TimerId(3));
+        assert!(q.is_empty());
     }
     #[test]
     fn clear_resets_queue() {
