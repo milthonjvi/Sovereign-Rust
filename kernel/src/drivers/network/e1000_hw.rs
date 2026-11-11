@@ -57,6 +57,7 @@ pub enum E1000InitError<E> {
     InvalidRingConfiguration,
     BusMasterDisabled,
     MissingMacAddress,
+    InvalidMacAddress,
     InvalidDescriptorBuffers,
 }
 
@@ -201,8 +202,10 @@ pub unsafe fn initialize<R: E1000Registers>(
     let ral = registers.read32(REG_RAL0).map_err(E1000InitError::Register)?;
     let rah = registers.read32(REG_RAH0).map_err(E1000InitError::Register)?;
     let mac = mac_address_from_registers(ral, rah)
-        .filter(|address| address.is_unicast())
         .ok_or(E1000InitError::MissingMacAddress)?;
+    if !mac.is_unicast() {
+        return Err(E1000InitError::InvalidMacAddress);
+    }
 
     program_ring(registers, REG_RDBAL, REG_RDBAH, REG_RDLEN, REG_RDH, REG_RDT, queues.rx)
         .map_err(E1000InitError::Register)?;
