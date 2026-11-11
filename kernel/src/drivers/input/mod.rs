@@ -24,6 +24,6 @@ pub use mux::{InputEventMux, InputSourceId, SourcedInputEvent};
 
 pub use usb_hid_adapter::{HidInputError, HidPublishStats, UsbBootKeyboardAdapter, UsbBootMouseAdapter};
 
-pub use hid_report::{HidInputField, HidReportDecoder, HidReportError, HidReportMap, MAX_HID_INPUT_FIELDS, MAX_HID_VALUES};
+pub use hid_report::{HidInputField, HidReportDecoder, HidReportError, HidReportMap, MAX_HID_COLLECTIONS, MAX_HID_INPUT_FIELDS, MAX_HID_VALUES};
 
 pub use device::{InputDeviceRegistry, InputDeviceRegistryError, MAX_INPUT_DEVICES};
