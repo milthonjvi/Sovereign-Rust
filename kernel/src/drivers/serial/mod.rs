@@ -89,8 +89,8 @@ pub struct UartRxRecoveryReport {
     /// Bytes explicitly read from the UART data register before reset.
     pub discarded_bytes: usize,
     /// True when the drain budget was consumed and the final LSR sample still
-    /// reported unread data. A hardware FIFO reset may then discard more bytes.
-    pub data_pending_before_reset: bool,
+    /// reported unread data. A subsequent hardware FIFO reset may discard more bytes.
+    pub data_pending_after_drain: bool,
     /// True when an RX FIFO reset command was issued to a FIFO-capable UART.
     pub fifo_reset_issued: bool,
 }
@@ -358,7 +358,7 @@ impl Uart16550 {
             discarded += 1;
         }
 
-        let data_pending_before_reset = if discarded == MAX_RX_RECOVERY_DRAIN {
+        let data_pending_after_drain = if discarded == MAX_RX_RECOVERY_DRAIN {
             // SAFETY: This instance exclusively owns LSR while IRQ mode is detached.
             unsafe { io::in8(self.port(LSR)) } & DATA_READY != 0
         } else {
@@ -375,7 +375,7 @@ impl Uart16550 {
 
         Ok(UartRxRecoveryReport {
             discarded_bytes: discarded,
-            data_pending_before_reset,
+            data_pending_after_drain,
             fifo_reset_issued,
         })
     }
