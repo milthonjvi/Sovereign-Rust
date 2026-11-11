@@ -63,6 +63,25 @@ impl AcpiTables {
     where
         F: FnMut(u64) -> Option<&'a [u8]>,
     {
+        Self::discover_with_mappers(rsdp, |address| map_table(address), |address| {
+            map_table(address)
+        })
+    }
+
+    /// Discover ACPI tables with distinct SDT and FACS mapping policies.
+    ///
+    /// FACS is not an SDT: it has no checksum and uses a different minimum
+    /// header size. Keeping its mapper separate prevents accidental use of the
+    /// SDT mapping contract for firmware control structures.
+    pub fn discover_with_mappers<'a, F, G>(
+        rsdp: &Rsdp,
+        mut map_table: F,
+        mut map_facs: G,
+    ) -> Result<Self, AcpiError>
+    where
+        F: FnMut(u64) -> Option<&'a [u8]>,
+        G: FnMut(u64) -> Option<&'a [u8]>,
+    {
         let root = rsdp.root_table_address()?;
         let (root_address, root_table) = match root {
             RootTableAddress::Xsdt(address) => {
@@ -108,7 +127,7 @@ impl AcpiTables {
             // an SDT checksum, so validate it with the dedicated parser.
             let facs_address = fadt.firmware_control_address();
             if facs_address != 0 {
-                let facs_bytes = map_table(facs_address)
+                let facs_bytes = map_facs(facs_address)
                     .ok_or(AcpiError::UnsupportedAddress)?;
                 let _facs = Facs::parse(facs_address, facs_bytes)?;
                 found.facs = Some(facs_address);
@@ -126,8 +145,7 @@ impl AcpiTables {
             }
         }
 
-        Ok(found)
-    }
+        Ok(found)    }
 }
 
 #[cfg(test)]
