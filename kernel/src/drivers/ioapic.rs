@@ -393,11 +393,24 @@ impl IoApicController {
         Ok(())
     }
 
-    /// Change only the mask bit, preserving vector, destination and trigger mode.
-    pub fn set_masked(&mut self, gsi: u32, masked: bool) -> Result<(), IoApicError> {
+    /// Mask one GSI while preserving its vector, destination and trigger mode.
+    pub fn mask(&mut self, gsi: u32) -> Result<(), IoApicError> {
+        self.set_masked_internal(gsi, true)
+    }
+
+    /// Enable delivery for a route that was configured through this controller.
+    ///
+    /// # Safety
+    /// The caller must have registered a valid interrupt handler for the route's
+    /// vector, initialized the destination local APIC, and ensured the target
+    /// CPU can receive this vector. The handler must remain valid for the
+    /// lifetime of the unmasked route.
+    pub unsafe fn unmask(&mut self, gsi: u32) -> Result<(), IoApicError> {
+        self.set_masked_internal(gsi, false)
+    }
+
+    fn set_masked_internal(&mut self, gsi: u32, masked: bool) -> Result<(), IoApicError> {
         let index = self.redirection_index(gsi)?;
-        // Never enable a firmware-leftover or otherwise unvalidated route.
-        // Masking remains permitted during early initialization.
         if !masked && !self.route_is_configured(index) {
             return Err(IoApicError::RouteNotConfigured);
         }
@@ -407,8 +420,8 @@ impl IoApicController {
         self.write_register(low_reg, low);
         let actual = self.read_register(low_reg);
         if (actual & REDIRECTION_MASK != 0) != masked {
-            // If an unmask operation failed, make a best-effort attempt to
-            // restore the safe state before reporting the hardware fault.
+            // Fail safe: any mask-state transition that did not read back as
+            // requested is followed by a best-effort attempt to mask the line.
             self.write_register(low_reg, actual | REDIRECTION_MASK);
             let _ = self.read_register(low_reg);
             return Err(IoApicError::HardwareRejectedWrite);
