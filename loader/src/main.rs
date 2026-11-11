@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod boot_info;
 mod uefi;
 
 use core::{mem, panic::PanicInfo};
