@@ -795,12 +795,13 @@ mod tests {
         descriptors[0].status = super::super::e1000::RXD_STATUS_DD;
         descriptors[1].status = 0;
         assert_eq!(queue.poll_batch(&mut regs, &descriptors, &mut completions), Ok(1));
-        // A forged second entry must not cause the valid first descriptor to be rearmed.
-        completions[1].0 = 1;
-        let mut backup = [RxDescriptor::default(); 2];
-        assert_eq!(queue.recycle_batch(&mut regs, &mut descriptors, &completions, &mut backup),
+        // Simulate corrupted ownership metadata after polling. The queue must
+        // reject the recycle without advancing RDT or changing software state.
+        descriptors[0].status = 0;
+        let mut backup = [RxDescriptor::default(); 1];
+        assert_eq!(queue.recycle_batch(&mut regs, &mut descriptors, &completions[..1], &mut backup),
             Err(E1000QueueError::InvalidRing));
-        assert_eq!(descriptors[0].status, super::super::e1000::RXD_STATUS_DD);
+        assert_eq!(descriptors[0].status, 0);
         assert_eq!(regs.writes.iter().filter(|(register, _)| *register == REG_RDT).count(), 0);
     }
 
