@@ -172,6 +172,7 @@ fn enqueue_bus(
         queue[*queue_tail] = QueuedBus { number: bus, subordinate_limit };
         *queue_tail += 1;
     }
+}
 
 #[cfg(test)]
 mod tests {
@@ -319,6 +320,4 @@ mod tests {
         assert_eq!(report.buses_scanned, 2);
         assert!(!output[..report.written].iter().any(|function| function.address.bus == 2));
     }
-}
-
 }
