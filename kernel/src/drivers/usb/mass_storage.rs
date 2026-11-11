@@ -21,7 +21,7 @@ pub fn find_mass_storage_interface(config:&ParsedConfiguration)->Option<MassStor
   for ep in config.endpoints[start..end].iter().flatten(){
    if ep.attributes&3!=TransferType::Bulk as u8{continue}
    let endpoint=Endpoint{address:EndpointAddress::from_raw(ep.address),transfer_type:TransferType::Bulk,max_packet_size:ep.max_packet_size,interval:ep.interval};
-   if ep.address&0x80!=0{input=Some(endpoint)}else{output=Some(endpoint)}
+   if ep.address&0x80!=0{if input.is_some(){return None}input=Some(endpoint)}else{if output.is_some(){return None}output=Some(endpoint)}
   }
   if let (Some(bulk_in),Some(bulk_out))=(input,output){return Some(MassStorageInterface{interface_number:d.number,bulk_in,bulk_out})}
  }
