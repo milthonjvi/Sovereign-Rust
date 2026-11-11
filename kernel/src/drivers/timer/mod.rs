@@ -8,6 +8,9 @@ pub mod apic;
 pub mod hpet;
 pub mod pit;
 
-pub use apic::{ApicDivide, ApicTimerMode, LocalApicTimer, periodic_initial_count};
+pub use apic::{
+    ApicDivide, ApicTimerMode, LocalApicTimer, calibrated_periodic_initial_count,
+    calibrate_bus_clock_hz, periodic_initial_count,
+};
 pub use hpet::{Hpet, HpetCapabilities};
 pub use pit::{Pit, PitConfig};
