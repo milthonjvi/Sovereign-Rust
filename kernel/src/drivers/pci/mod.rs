@@ -1,6 +1,6 @@
 //! PCI and PCI Express bus support.
-//! Discovery is read-only; BAR sizing, bus mastering and interrupt routing are
-//! separate privileged operations coordinated with kernel services.
+//! Discovery and capability decoding are passive; BAR sizing/programming,
+//! Command-register changes, and interrupt activation are explicit operations.
 pub mod bar_probe;
 pub mod bar_program;
 pub mod capabilities;
