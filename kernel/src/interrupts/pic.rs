@@ -179,6 +179,38 @@ impl Pic8259 {
         }
     }
 
+    /// Detects spurious IRQ7/IRQ15 using the PIC in-service registers.
+    ///
+    /// A spurious IRQ7 requires no EOI. A spurious IRQ15 requires an EOI to
+    /// the master PIC only because the cascade request reached the master.
+    /// Returns false for ordinary IRQ lines and genuine IRQ7/IRQ15 requests.
+    pub fn acknowledge_spurious(&self, irq: u8) -> Result<bool, PicError> {
+        self.ensure_initialized()?;
+        match irq {
+            7 => {
+                // SAFETY: This handle owns the master PIC command port.
+                unsafe {
+                    io::out8(MASTER_COMMAND, ISR_READ);
+                    Ok(io::in8(MASTER_COMMAND) & (1 << 7) == 0)
+                }
+            }
+            15 => {
+                // SAFETY: This handle owns both PIC command ports.
+                unsafe {
+                    io::out8(SLAVE_COMMAND, ISR_READ);
+                    let spurious = io::in8(SLAVE_COMMAND) & (1 << 7) == 0;
+                    if spurious {
+                        // The master accepted the cascade IRQ; acknowledge it.
+                        io::out8(MASTER_COMMAND, PIC_EOI);
+                    }
+                    Ok(spurious)
+                }
+            }
+            0..=6 | 8..=14 => Ok(false),
+            _ => Err(PicError::InvalidIrq),
+        }
+    }
+
     /// Reads the in-service register from both PICs.
     pub fn in_service(&self) -> Result<u16, PicError> {
         self.ensure_initialized()?;
