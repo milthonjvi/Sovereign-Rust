@@ -322,11 +322,14 @@ pub fn issue_command<R:AhciRegisterIo>(
     let ci=port_register(base,0x38)?;
     let issued=io.read32(ci)?;
     if issued&bit!=0{return Err(AhciError::SlotBusy);}
-    if ncq{
-        let sact=port_register(base,0x34)?;
-        let active=io.read32(sact)?;
+    let sact=port_register(base,0x34)?;
+    let active=io.read32(sact)?;
+    if ncq {
         if active&bit!=0{return Err(AhciError::SlotBusy);}
         io.write32(sact,active|bit)?;
+    } else if active!=0 {
+        // A non-NCQ command must not overlap any outstanding NCQ command.
+        return Err(AhciError::SlotBusy);
     }
     io.write32(ci,issued|bit)
 }
@@ -385,6 +388,15 @@ mod port_tests {
         regs.0[0x10/4]=1<<27;
         assert_eq!(command_complete(&mut regs,0,3,true),Err(AhciError::DeviceFault));
     }
+    #[test]
+    fn non_ncq_submission_waits_for_all_ncq_commands_to_finish() {
+        let mut regs=Registers([0;64]);
+        regs.0[0x18/4]=(1<<0)|(1<<15);
+        regs.0[0x34/4]=1<<2;
+        assert_eq!(issue_command(&mut regs,0,1,false,1),Err(AhciError::SlotBusy));
+        assert_eq!(regs.0[0x38/4],0);
+    }
+
     #[test]
     fn non_staggered_start_clears_stale_spinup_request() {
         let mut regs=Registers([0;64]);
