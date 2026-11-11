@@ -3,6 +3,10 @@
 //! The hard IRQ path performs one atomic store only. Expiration processing,
 //! queue locking, and task wakeup handoff must run later in task/softirq context.
 //! The common APIC dispatcher remains responsible for EOI.
+//!
+//! The notification flag is currently a bootstrap-CPU mechanism. Do not enable
+//! this single global signal for multiple APIC timer CPUs until it is replaced
+//! by per-CPU pending state and a corresponding deferred worker on each CPU.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
