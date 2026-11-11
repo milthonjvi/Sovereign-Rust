@@ -412,3 +412,35 @@ mod table_tests{
         assert_eq!(core::mem::size_of_val(&table),256);
     }
 }
+
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum AhciDeviceType{Ata,Atapi,PortMultiplier,EnclosureManagement,Unknown(u32)}
+impl AhciDeviceType{
+    pub const fn from_signature(signature:u32)->Self{
+        match signature{
+            0x0000_0101=>Self::Ata,
+            0xEB14_0101=>Self::Atapi,
+            0x9669_0101=>Self::PortMultiplier,
+            0xC33C_0101=>Self::EnclosureManagement,
+            other=>Self::Unknown(other),
+        }
+    }
+}
+/// Return None unless PxSSTS.DET reports an established device link.
+pub fn detect_port_device<R:AhciRegisterIo>(io:&mut R,base:u32)->Result<Option<AhciDeviceType>,AhciError>{
+    let status=io.read32(port_register(base,0x28)?)?;
+    if status&0x0F!=3{return Ok(None);}
+    let signature=io.read32(port_register(base,0x24)?)?;
+    Ok(Some(AhciDeviceType::from_signature(signature)))
+}
+
+#[cfg(test)]
+mod detection_tests{
+    use super::*;
+    #[test]fn classifies_ata_and_atapi_signatures(){
+        assert_eq!(AhciDeviceType::from_signature(0x0000_0101),AhciDeviceType::Ata);
+        assert_eq!(AhciDeviceType::from_signature(0xEB14_0101),AhciDeviceType::Atapi);
+        assert_eq!(AhciDeviceType::from_signature(0x1234_5678),AhciDeviceType::Unknown(0x1234_5678));
+    }
+}
