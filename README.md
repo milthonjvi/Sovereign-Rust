@@ -27,13 +27,13 @@ to privileged CPU operations and transitions that require it.
   for x86_64 `ET_EXEC` images, including file length, program-header bounds,
   `PT_LOAD` file/memory ranges, alignment, canonical virtual ranges, and executable entry point.
 
-The loader now allocates a bounded contiguous physical span for the ELF image,
-copies each validated `PT_LOAD` payload, zeroes BSS and inter-segment gaps, and
-constructs a separate four-level page-table root with per-segment permissions
-and NX protection. It does not yet map its own runtime/stack and handoff buffers,
-switch CR3, acquire the final memory map, call ExitBootServices, or transfer
-control to the kernel. The kernel still consumes its existing Limine handoff;
-Limine has not been removed.
+The loader now allocates and populates the ELF image, zeroes BSS, constructs
+per-segment high-half mappings with NX/W^X protections, and identity-maps its
+loaded image, a bounded current-stack window, the boot-info page, and a reserved
+UEFI memory-map buffer. It captures a memory-map snapshot and populates the
+versioned Sovereign boot-info ABI. It does not yet switch CR3, perform the final
+GetMemoryMap/ExitBootServices sequence, or transfer control to the kernel. The
+kernel still consumes its existing Limine handoff; Limine has not been removed.
 
 ## Build
 
