@@ -144,6 +144,58 @@ mod tests {
     #[repr(align(4096))]
     struct Aligned([u8; ECAM_BUS_SIZE]);
 
+    fn finalize_checksum(table: &mut [u8]) {
+        table[9] = 0;
+        let sum = table.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte));
+        table[9] = 0u8.wrapping_sub(sum);
+    }
+
+    fn write_entry(table: &mut [u8], offset: usize, base: u64, segment: u16, start: u8, end: u8) {
+        table[offset..offset + 8].copy_from_slice(&base.to_le_bytes());
+        table[offset + 8..offset + 10].copy_from_slice(&segment.to_le_bytes());
+        table[offset + 10] = start;
+        table[offset + 11] = end;
+    }
+
+    #[test]
+    fn parses_mcfg_window_and_checks_full_ecam_span() {
+        let mut table = [0u8; MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE];
+        table[..4].copy_from_slice(b"MCFG");
+        table[4..8].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        write_entry(&mut table, MCFG_HEADER_SIZE, 0xe000_0000, 0, 0, 3);
+        finalize_checksum(&mut table);
+        let mut windows = [EcamWindow { segment: 9, start_bus: 9, end_bus: 9, physical_base: 9 }; 1];
+        assert_eq!(parse_mcfg(&table, &mut windows), Ok(1));
+        assert_eq!(windows[0], EcamWindow {
+            segment: 0, start_bus: 0, end_bus: 3, physical_base: 0xe000_0000,
+        });
+    }
+
+    #[test]
+    fn rejects_overlapping_segment_ranges_without_partial_output() {
+        let mut table = [0u8; MCFG_HEADER_SIZE + 2 * MCFG_ENTRY_SIZE];
+        table[..4].copy_from_slice(b"MCFG");
+        table[4..8].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        write_entry(&mut table, MCFG_HEADER_SIZE, 0xe000_0000, 0, 0, 31);
+        write_entry(&mut table, MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE, 0xf000_0000, 0, 31, 63);
+        finalize_checksum(&mut table);
+        let sentinel = EcamWindow { segment: 9, start_bus: 9, end_bus: 9, physical_base: 9 };
+        let mut windows = [sentinel; 2];
+        assert_eq!(parse_mcfg(&table, &mut windows), Err(McfgError::InvalidEntry));
+        assert_eq!(windows, [sentinel; 2]);
+    }
+
+    #[test]
+    fn rejects_ecam_physical_span_overflow() {
+        let mut table = [0u8; MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE];
+        table[..4].copy_from_slice(b"MCFG");
+        table[4..8].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        write_entry(&mut table, MCFG_HEADER_SIZE, u64::MAX & !0x000f_ffff, 0, 0, 0);
+        finalize_checksum(&mut table);
+        let mut windows = [EcamWindow { segment: 0, start_bus: 0, end_bus: 0, physical_base: 0 }; 1];
+        assert_eq!(parse_mcfg(&table, &mut windows), Err(McfgError::InvalidEntry));
+    }
+
     #[test]
     fn physical_address_rejects_bus_outside_window() {
         let w = EcamWindow { segment: 0, start_bus: 4, end_bus: 4, physical_base: 0xe000_0000 };
