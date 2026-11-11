@@ -268,12 +268,16 @@ impl E1000TxQueue {
         let start = self.cursor.index() as usize;
         for offset in 0..frames.len() {
             let index = (start + offset) & (count - 1);
-            // SAFETY: the caller provides a pinned DMA ring exclusively owned by this queue.
-            let current = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
-            if current.status & TXD_STATUS_DD == 0 {
+            let descriptor = unsafe { descriptors.as_ptr().add(index) };
+            // SAFETY: inspect only the device-written ownership byte in the pinned ring.
+            let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+            if status & TXD_STATUS_DD == 0 {
                 return Err(E1000QueueError::TxRingFull);
             }
         }
+        // The DD observations above establish completion; acquire all device
+        // writes before the caller's buffers/descriptors are reused.
+        registers.dma_read_barrier();
 
         for (offset, &(buffer_dma, length)) in frames.iter().enumerate() {
             let index = (start + offset) & (count - 1);
@@ -319,15 +323,15 @@ impl E1000TxQueue {
         if self.pending as usize >= descriptors.len() - 1 {
             return Ok(None);
         }
-        registers.dma_read_barrier();
         let index = self.cursor.index() as usize;
-        // SAFETY: this is a read-only ownership check on the pinned DMA ring.
-        let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
-        if descriptor.status & TXD_STATUS_DD != 0 {
-            Ok(Some(index as u16))
-        } else {
-            Ok(None)
+        let descriptor = unsafe { descriptors.as_ptr().add(index) };
+        // SAFETY: read the device-written ownership byte from the pinned ring.
+        let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+        if status & TXD_STATUS_DD == 0 {
+            return Ok(None);
         }
+        registers.dma_read_barrier();
+        Ok(Some(index as u16))
     }
 
     /// Collect consecutive free producer slots with one DMA read barrier.
@@ -383,12 +387,13 @@ impl E1000TxQueue {
             return Ok(None);
         }
         let index = self.clean.index() as usize;
-        registers.dma_read_barrier();
-        // SAFETY: volatile read observes device write-back in the pinned DMA ring.
-        let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
-        if descriptor.status & TXD_STATUS_DD == 0 {
+        let descriptor = unsafe { descriptors.as_ptr().add(index) };
+        // SAFETY: read the device-written ownership byte from the pinned ring.
+        let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+        if status & TXD_STATUS_DD == 0 {
             return Ok(None);
         }
+        registers.dma_read_barrier();
         self.clean.advance();
         self.pending -= 1;
         Ok(Some(index as u16))
@@ -407,17 +412,20 @@ impl E1000TxQueue {
         if self.pending == 0 {
             return Ok(0);
         }
-        registers.dma_read_barrier();
         let mut completed = 0usize;
         while completed < self.pending as usize {
             let index = self.clean.index() as usize;
-            // SAFETY: volatile read observes device write-back in the pinned DMA ring.
-            let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
-            if descriptor.status & TXD_STATUS_DD == 0 {
+            let descriptor = unsafe { descriptors.as_ptr().add(index) };
+            // SAFETY: read the device-written ownership byte from the pinned ring.
+            let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+            if status & TXD_STATUS_DD == 0 {
                 break;
             }
             self.clean.advance();
             completed += 1;
+        }
+        if completed != 0 {
+            registers.dma_read_barrier();
         }
         self.pending -= completed as u16;
         Ok(completed)
@@ -474,19 +482,32 @@ impl E1000RxQueue {
         if limit == 0 {
             return Ok(0);
         }
-        registers.dma_read_barrier();
         let mut count = 0;
         while count < limit {
             let index = self.cursor.index() as usize;
-            // SAFETY: volatile read observes device write-back in the pinned DMA ring.
-            let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
-            let Some(completion) = descriptor.completion() else {
+            let descriptor = unsafe { descriptors.as_ptr().add(index) };
+            // SAFETY: read the device-written DD byte from the pinned ring.
+            let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+            if status & super::e1000::RXD_STATUS_DD == 0 {
                 break;
-            };
-            output[count] = (index as u16, completion);
+            }
+            output[count].0 = index as u16;
             self.cursor.advance();
             self.outstanding += 1;
             count += 1;
+        }
+        if count == 0 {
+            return Ok(0);
+        }
+        // DD is written after the packet and descriptor metadata. Acquire the
+        // device writes before reading lengths/errors or exposing RX buffers.
+        registers.dma_read_barrier();
+        for item in output.iter_mut().take(count) {
+            let index = item.0 as usize;
+            // SAFETY: DD was observed and the DMA read barrier has completed.
+            let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+            let completion = descriptor.completion().ok_or(E1000QueueError::InvalidRing)?;
+            item.1 = completion;
         }
         Ok(count)
     }
