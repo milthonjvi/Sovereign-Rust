@@ -36,6 +36,7 @@ pub enum Ps2Error {
     NotInitialized,
     DeviceRejected(u8),
     UnsupportedMouseId(u8),
+    UnexpectedResponseSource { expected_auxiliary: bool, actual_auxiliary: bool },
 }
 
 /// Result of controller diagnostics. A port test value of zero means success.
@@ -135,6 +136,31 @@ impl Ps2Controller {
         Ok(unsafe { io::in8(DATA) })
     }
 
+    /// Reads a device response and verifies the i8042 auxiliary-source bit.
+    /// This prevents a pending keyboard byte from being mistaken for a mouse
+    /// ACK (or vice versa) during command transactions.
+    fn read_device_response(&self, auxiliary: bool) -> Result<u8, Ps2Error> {
+        for _ in 0..self.poll_limit {
+            // SAFETY: The controller status port is exclusively owned.
+            let status = unsafe { io::in8(STATUS_COMMAND) };
+            if status & OUTPUT_FULL == 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            // SAFETY: OUTPUT_FULL guarantees a byte is available.
+            let value = unsafe { io::in8(DATA) };
+            let actual_auxiliary = status & (1 << 5) != 0;
+            if actual_auxiliary != auxiliary {
+                return Err(Ps2Error::UnexpectedResponseSource {
+                    expected_auxiliary: auxiliary,
+                    actual_auxiliary,
+                });
+            }
+            return Ok(value);
+        }
+        Err(Ps2Error::Timeout)
+    }
+
     fn drain_output(&self) {
         for _ in 0..self.poll_limit {
             // SAFETY: The controller status/data ports are exclusively owned.
@@ -210,7 +236,7 @@ impl Ps2Controller {
         for _ in 0..3 {
             if auxiliary { self.command(CMD_WRITE_MOUSE)?; }
             self.write_data(value)?;
-            match self.read_data()? {
+            match self.read_device_response(auxiliary)? {
                 0xFA => return Ok(()),
                 0xFE => continue,
                 response => return Err(Ps2Error::DeviceRejected(response)),
@@ -274,7 +300,7 @@ impl Ps2Controller {
             self.send_mouse_command(rate)?;
         }
         self.send_mouse_command(0xF2)?;
-        let device_id = self.read_data()?;
+        let device_id = self.read_device_response(true)?;
         let protocol = match device_id {
             0 => Ps2MouseProtocol::Standard,
             3 => Ps2MouseProtocol::Wheel,
