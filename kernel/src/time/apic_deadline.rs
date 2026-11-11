@@ -41,6 +41,7 @@ pub enum BootstrapTimerInitError {
 pub struct TimerProcessReport {
     pub expired: usize,
     pub reprogram_error: Option<DriverError>,
+    pub buffer_unavailable: bool,
 }
 
 /// Per-CPU timer queue driven by the local APIC TSC-deadline facility.
@@ -187,6 +188,14 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         &self,
         output: &mut [Option<TimerEvent>],
     ) -> TimerProcessReport {
+        if output.is_empty() {
+            super::interrupt::signal_timer_work_pending();
+            return TimerProcessReport {
+                expired: 0,
+                reprogram_error: None,
+                buffer_unavailable: true,
+            };
+        }
         let expired = self.service.drain_expired(output);
         // SAFETY: Same-CPU requirement is part of this method's contract.
         let reprogram_error = unsafe { self.reprogram() }.err();
@@ -196,7 +205,7 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
             // another attempt to arm the local comparator.
             super::interrupt::signal_timer_work_pending();
         }
-        TimerProcessReport { expired, reprogram_error }
+        TimerProcessReport { expired, reprogram_error, buffer_unavailable: false }
     }
 
     /// Reprogram the hardware from the current queue head.
