@@ -85,7 +85,8 @@ pub struct E1000InitInfo {
 ///
 /// Safety is delegated to the platform accessor and caller: the MMIO window
 /// must refer to this device, RX descriptors must contain valid DMA buffer
-/// addresses, RX buffers must each provide at least 2048 writable bytes,
+/// addresses, RX buffers must be unique/non-overlapping and each provide at
+/// least 2048 writable bytes,
 /// all rings and buffers must be DMA-mapped and pinned, the descriptor slices
 /// must alias the physical ring bases supplied in queues, and PCI bus mastering
 /// must already be enabled. The platform must provide coherent DMA or implement
@@ -214,6 +215,8 @@ impl E1000TxQueue {
     }
 
     /// Submit one DMA-mapped frame and publish its descriptor to hardware.
+    /// Frame bytes must already be present in the buffer and remain immutable
+    /// until reap_one() returns the descriptor index.
     pub fn submit<R: E1000Registers>(
         &mut self,
         registers: &mut R,
@@ -517,7 +520,7 @@ mod tests {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1_0000_1000, 0x1_0000_2000).unwrap();
         let mut rx = [RxDescriptor::default(); 32];
-        let rx_buffers = [0x4000u64; 32];
+        let rx_buffers = core::array::from_fn(|index| 0x4000u64 + index as u64 * 2048);
         let mut tx = [TxDescriptor::default(); 32];
         let info = initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true).unwrap();
         assert_eq!(info.mac, MacAddress([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]));
