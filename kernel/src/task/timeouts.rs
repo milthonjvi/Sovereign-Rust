@@ -243,6 +243,7 @@ mod tests {
             TimerProcessReport {
                 expired: 1,
                 reprogram_error: Some(crate::drivers::api::DriverError::HardwareFault),
+                buffer_unavailable: false,
             },
         );
 
