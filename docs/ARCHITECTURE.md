@@ -42,11 +42,12 @@ A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support
 and enables EFER.NXE only when the processor advertises NX. The UEFI entry
 point invokes it before installing page-table entries that use the NX bit.
 
-The loader also contains a four-level x86_64 page-table builder in
+The loader also contains a four-/five-level x86_64 page-table builder in
 `loader/src/page_tables.rs`, plus a UEFI `AllocatePages` provider in
-`loader/src/uefi/page_table_memory.rs`. It maps 4 KiB pages, rejects duplicate
-leaf mappings and writable+executable mappings, and requires the caller to
-confirm EFER.NXE is enabled before creating tables. The UEFI entry point now allocates a bounded contiguous physical span for the
+`loader/src/uefi/page_table_memory.rs`. It detects the active CR4.LA57 mode and builds the matching four- or
+five-level hierarchy. It maps 4 KiB pages, rejects duplicate leaf mappings
+and writable+executable mappings, and requires a verified EFER.NXE token
+before creating tables. The UEFI entry point now allocates a bounded contiguous physical span for the
 validated ELF virtual image, copies every non-empty `PT_LOAD` file payload,
 and zeroes the full span first so BSS and inter-segment gaps are initialized.
 ELF segments that share a 4 KiB page are rejected, as are writable+executable
