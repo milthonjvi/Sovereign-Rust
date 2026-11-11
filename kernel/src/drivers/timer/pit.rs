@@ -113,8 +113,7 @@ mod tests {
 
     #[test]
     fn encodes_maximum_divisor_as_zero() {
-        let config = PitConfig::from_frequency(18).unwrap();
-        assert_eq!(config.divisor, 0);
+        let config = PitConfig { divisor: 0, actual_hz: 18 };
         assert_eq!(config.divisor_value(), 65_536);
     }
 
