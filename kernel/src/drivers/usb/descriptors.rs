@@ -11,6 +11,7 @@ impl DeviceDescriptor {
  pub const LENGTH:usize=18;
  pub fn parse(b:&[u8])->Result<Self,UsbError>{
   if b.len()<18{return Err(UsbError::BufferTooShort)}
+  if b.len()!=18{return Err(UsbError::MalformedDescriptor)}
   if b[0]!=18||b[1]!=DEVICE_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
   let w=|i:usize|u16::from_le_bytes([b[i],b[i+1]]);
   let d=Self{usb_release:w(2),device_class:b[4],device_subclass:b[5],device_protocol:b[6],
@@ -77,7 +78,7 @@ pub struct InterfaceDescriptor{
 }
 impl InterfaceDescriptor{
  fn parse(b:&[u8])->Result<Self,UsbError>{
-  if b.len()<9||b[0]!=9||b[1]!=INTERFACE_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  if b.len()!=9||b[0]!=9||b[1]!=INTERFACE_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
   Ok(Self{number:b[2],alternate_setting:b[3],endpoint_count:b[4],class:b[5],
    subclass:b[6],protocol:b[7],string_index:b[8]})
  }
@@ -90,7 +91,7 @@ pub struct ParsedEndpoint{
 }
 impl ParsedEndpoint{
  fn parse(b:&[u8])->Result<Self,UsbError>{
-  if b.len()<7||b[0]!=7||b[1]!=ENDPOINT_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  if b.len()!=7||b[0]!=7||b[1]!=ENDPOINT_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
   let raw=u16::from_le_bytes([b[4],b[5]]);
   let packet=raw&0x07ff;
   let mult=((raw>>11)&3) as u8;
@@ -139,6 +140,7 @@ impl ParsedConfiguration{
   let descriptor=ConfigurationDescriptor::parse(bytes)?;
   let total=descriptor.total_length as usize;
   if bytes.len()<total{return Err(UsbError::BufferTooShort)}
+  if bytes.len()>total{return Err(UsbError::MalformedDescriptor)}
   let mut out=Self{descriptor,interfaces:[None;MAX_INTERFACES],endpoints:[None;MAX_ENDPOINTS],interface_len:0,endpoint_len:0};
   let mut current:Option<usize>=None;
   let mut first=true;
@@ -146,7 +148,7 @@ impl ParsedConfiguration{
   for item in DescriptorIter::new(&bytes[..total]){
    let item=item?;
    if first{
-    if item.descriptor_type!=CONFIGURATION_DESCRIPTOR||item.bytes[0]<9{return Err(UsbError::MalformedDescriptor)}
+    if item.descriptor_type!=CONFIGURATION_DESCRIPTOR||item.bytes.len()!=9{return Err(UsbError::MalformedDescriptor)}
     first=false;
     continue
    }
@@ -243,6 +245,14 @@ mod configuration_tests{
    2,0x24,
    6,0x30,1,0,0,0];
   assert_eq!(ParsedConfiguration::parse(&bytes),Err(UsbError::MalformedDescriptor));
+ }
+ #[test]fn rejects_trailing_bytes_outside_declared_configuration(){
+  let bytes=[9,2,9,0,1,1,0,0x80,50,0];
+  assert_eq!(ParsedConfiguration::parse(&bytes),Err(UsbError::MalformedDescriptor));
+ }
+ #[test]fn rejects_extended_standard_interface_and_endpoint_lengths(){
+  assert_eq!(InterfaceDescriptor::parse(&[10,4,0,0,0,0xff,0,0,0,0]),Err(UsbError::MalformedDescriptor));
+  assert_eq!(ParsedEndpoint::parse(&[8,5,0x81,2,0,2,0,0]),Err(UsbError::MalformedDescriptor));
  }
  #[test]fn rejects_configuration_with_truncated_descriptor(){
   let bytes=[9,2,12,0,1,1,0,0x80,50,9,4,0];
