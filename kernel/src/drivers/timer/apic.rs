@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_zero_count_for_countdown_modes() {
+    fn rejects_frequency_above_calibrated_clock() {
         // Register access is intentionally not exercised by this pure helper test;
         // configuration validation is covered by the API's explicit preconditions.
         assert_eq!(periodic_initial_count(100_000_000, 1_000_000_000, ApicDivide::By1),
