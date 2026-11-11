@@ -278,6 +278,24 @@ impl Fadt {
         self.pm_hardware_mode() == PmHardwareMode::LegacyFixedHardware
     }
 
+    /// Return the S4BIOS request value only when the complete legacy S4BIOS
+    /// handshake is available. Hardware Reduced ACPI does not implement the
+    /// legacy/S4BIOS transition, even if ignored legacy FADT fields or a
+    /// present FACS happen to contain nonzero values.
+    pub const fn s4bios_request_value(
+        &self,
+        facs: &super::facs::Facs,
+    ) -> Option<u8> {
+        if self.pm_hardware_mode() == PmHardwareMode::LegacyFixedHardware
+            && self.s4bios_request != 0
+            && facs.supports_s4_bios()
+        {
+            Some(self.s4bios_request)
+        } else {
+            None
+        }
+    }
+
     /// Select the PM model advertised by the FADT.
     pub const fn pm_hardware_mode(&self) -> PmHardwareMode {
         if self.flags & FADT_HW_REDUCED_ACPI != 0 { PmHardwareMode::HardwareReduced }
@@ -1604,6 +1622,35 @@ mod tests {
         b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
         let malformed = Fadt::parse(&b).unwrap();
         assert_eq!(malformed.validated_sleep_registers(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn s4bios_requires_legacy_mode_request_and_facs_capability() {
+        let mut facs_bytes = std::vec![0u8; 64];
+        facs_bytes[0..4].copy_from_slice(b"FACS");
+        facs_bytes[4..8].copy_from_slice(&64u32.to_le_bytes());
+        facs_bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
+        let facs = super::super::facs::Facs::parse(0x4000, &facs_bytes).unwrap();
+
+        let mut legacy = make_fadt(148, 0, None, None);
+        legacy[54] = 0xA5;
+        legacy[9] = 0;
+        legacy[9] = 0u8.wrapping_sub(
+            legacy.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+        );
+        let legacy = Fadt::parse(&legacy).unwrap();
+        assert_eq!(legacy.s4bios_request_value(&facs), Some(0xA5));
+
+        // Hardware Reduced ignores the legacy S4BIOS request field and does
+        // not expose the S4BIOS transition even if a FACS advertises S4BIOS_F.
+        let mut reduced = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
+        reduced[54] = 0xA5;
+        reduced[9] = 0;
+        reduced[9] = 0u8.wrapping_sub(
+            reduced.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+        );
+        let reduced = Fadt::parse(&reduced).unwrap();
+        assert_eq!(reduced.s4bios_request_value(&facs), None);
     }
 
     #[test]
