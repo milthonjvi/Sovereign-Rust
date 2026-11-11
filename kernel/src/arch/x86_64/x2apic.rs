@@ -214,6 +214,26 @@ impl X2Apic {
         Ok(())
     }
 
+    /// Load a countdown while its LVT source is still masked.
+    ///
+    /// This is intended for calibration: the counter runs without delivering
+    /// an interrupt, then the caller stops it before normal activation.
+    pub fn load_masked_one_shot_count(
+        &mut self,
+        initial_count: u32,
+    ) -> Result<(), X2ApicError> {
+        let lvt = self.read_register(REG_LVT_TIMER) as u32;
+        if initial_count == 0
+            || lvt & LVT_MASKED == 0
+            || lvt & (LVT_TIMER_PERIODIC | LVT_TIMER_TSC_DEADLINE) != 0
+            || !valid_tsc_deadline_vector((lvt & LVT_TIMER_VECTOR_MASK) as u8)
+        {
+            return Err(X2ApicError::InvalidTimerConfiguration);
+        }
+        self.write_register(REG_TIMER_INITIAL_COUNT, initial_count as u64);
+        Ok(())
+    }
+
     /// Arm or restart the configured one-shot countdown.
     ///
     /// # Safety
