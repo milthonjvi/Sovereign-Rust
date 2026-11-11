@@ -5,6 +5,7 @@ pub mod controller;
 pub mod cdc;
 pub mod control;
 pub mod descriptors;
+pub mod dma;
 pub mod enumeration;
 pub mod ehci;
 pub mod hub;
