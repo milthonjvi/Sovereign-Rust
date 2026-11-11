@@ -213,6 +213,9 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         if frames.is_empty() {
             return Ok(0);
         }
+        if frames.len() > self.tx_descriptors.len() - 1 {
+            return Err(DriverError::ResourceUnavailable);
+        }
         if frames.len() > slots.len() || frames.len() > submissions.len()
             || frames.iter().any(|frame| {
                 frame.is_empty() || frame.len() > E1000_MAX_FRAME_SIZE
