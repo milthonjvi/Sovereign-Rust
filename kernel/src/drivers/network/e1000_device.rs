@@ -148,6 +148,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             Ok(link) => link,
             Err(_) => {
                 self.ready = false;
+                self.faulted = true;
                 return Err(DriverError::HardwareFault);
             }
         };
@@ -204,6 +205,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             ) {
                 if queue_error_is_fatal(&error) {
                     self.ready = false;
+                    self.faulted = true;
                 }
                 return Err(map_queue_error(error));
             }
@@ -248,6 +250,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             Err(error) => {
                 if queue_error_is_fatal(&error) {
                     self.ready = false;
+                    self.faulted = true;
                 }
                 return Err(map_queue_error(error));
             }
@@ -283,6 +286,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             Err(error) => {
                 if queue_error_is_fatal(&error) {
                     self.ready = false;
+                    self.faulted = true;
                 }
                 Err(map_queue_error(error))
             }
@@ -319,6 +323,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             Err(error) => {
                 if queue_error_is_fatal(&error) {
                     self.ready = false;
+                    self.faulted = true;
                 }
                 return Err(map_queue_error(error));
             }
@@ -358,6 +363,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             // Fail closed: the descriptors remain CPU-owned after a failed RDT
             // write, and the caller must reinitialize the device before polling.
             self.ready = false;
+            self.faulted = true;
             return Err(map_queue_error(error));
         }
         Ok(delivered)
@@ -370,6 +376,7 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
                 // A failed RDT write leaves software ownership unchanged. Stop
                 // the adapter so a later poll cannot skip the unrecycled slot.
                 self.ready = false;
+                self.faulted = true;
                 Err(map_queue_error(error))
             }
         }
@@ -453,6 +460,7 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
                 Err(error) => {
                     if queue_error_is_fatal(&error) {
                         self.ready = false;
+                        self.faulted = true;
                     }
                     return Err(map_queue_error(error));
                 }
@@ -513,6 +521,7 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
             Err(error) => {
                 if queue_error_is_fatal(&error) {
                     self.ready = false;
+                    self.faulted = true;
                 }
                 return Err(map_queue_error(error));
             }
