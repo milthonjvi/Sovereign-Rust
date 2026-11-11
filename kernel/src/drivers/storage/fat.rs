@@ -47,7 +47,7 @@ pub fn parse_bpb(sector: &[u8], device_block_size: u32) -> Result<FatBpb, FatErr
     let fat16 = le16(sector, 22) as u32;
     let fat32 = le32(sector, 36);
     let spf = if fat16 != 0 { fat16 } else { fat32 };
-    if spf == 0 || (fat16 != 0 && fat32 != 0) { return Err(FatError::InvalidFatSize); }
+    if spf == 0 { return Err(FatError::InvalidFatSize); }
     let root_bytes = (root_entries as u32).checked_mul(32).ok_or(FatError::InvalidRootDirectory)?;
     let root_secs = root_bytes.checked_add(bps as u32 - 1).ok_or(FatError::InvalidRootDirectory)? / bps as u32;
     let fats_secs = (fats as u32).checked_mul(spf).ok_or(FatError::InvalidFatSize)?;
@@ -105,8 +105,31 @@ mod tests {
     }
     #[test] fn parses_fat16_layout() {
         let p=parse_bpb(&fat16_boot(),512).unwrap();
-        assert_eq!(p.kind,FatKind::Fat16); assert_eq!(p.first_data_sector,73);
-        assert_eq!(p.cluster_count,9_927); assert_eq!(p.volume_id,0x1234_5678);
+        assert_eq!(p.kind,FatKind::Fat16); assert_eq!(p.first_data_sector,113);
+        assert_eq!(p.cluster_count,9_887); assert_eq!(p.volume_id,0x1234_5678);
+    }
+
+    #[test] fn parses_fat12_layout() {
+        let mut b=[0u8;512]; b[0..3].copy_from_slice(&[0xEB,0x3C,0x90]);
+        b[11..13].copy_from_slice(&512u16.to_le_bytes()); b[13]=1;
+        b[14..16].copy_from_slice(&1u16.to_le_bytes()); b[16]=2;
+        b[17..19].copy_from_slice(&224u16.to_le_bytes()); b[19..21].copy_from_slice(&2880u16.to_le_bytes());
+        b[22..24].copy_from_slice(&9u16.to_le_bytes()); b[510]=0x55; b[511]=0xAA;
+        let p=parse_bpb(&b,512).unwrap(); assert_eq!(p.kind,FatKind::Fat12);
+    }
+    #[test] fn parses_fat32_layout() {
+        let mut b=[0u8;512]; b[0..3].copy_from_slice(&[0xEB,0x58,0x90]);
+        b[11..13].copy_from_slice(&512u16.to_le_bytes()); b[13]=1;
+        b[14..16].copy_from_slice(&32u16.to_le_bytes()); b[16]=2;
+        b[32..36].copy_from_slice(&70_000u32.to_le_bytes());
+        b[36..40].copy_from_slice(&600u32.to_le_bytes());
+        b[44..48].copy_from_slice(&2u32.to_le_bytes());
+        b[48..50].copy_from_slice(&1u16.to_le_bytes()); b[50..52].copy_from_slice(&6u16.to_le_bytes());
+        b[67..71].copy_from_slice(&0x8765_4321u32.to_le_bytes());
+        b[510]=0x55; b[511]=0xAA;
+        let p=parse_bpb(&b,512).unwrap(); assert_eq!(p.kind,FatKind::Fat32);
+        assert_eq!(p.root_cluster,Some(2)); assert_eq!(p.fs_info_sector,Some(1));
+        assert_eq!(p.backup_boot_sector,Some(6)); assert_eq!(p.volume_id,0x8765_4321);
     }
     #[test] fn rejects_bad_signature_jump_sector_and_cluster() {
         let mut b=fat16_boot(); b[510]=0;
