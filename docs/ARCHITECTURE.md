@@ -37,7 +37,8 @@ memory-map, and optional framebuffer responses. The linker keeps protocol
 requests in a writable ELF load segment because the bootloader writes response
 pointers into those structures. The kernel entry disables interrupts, detects
 CPU capabilities with CPUID, and establishes the baseline CR0/CR4 state needed
-for SSE2. It deliberately leaves AVX/XSAVE, APIC routing, IDT installation,
+for SSE2, enables supervisor write-protect (CR0.WP), and enables NXE when the
+CPU advertises NX. It deliberately leaves AVX/XSAVE, APIC routing, IDT installation,
 page-table replacement, and interrupt enablement to later stages.
 
 The kernel is linked as an ELF64 higher-half image for `x86_64-unknown-none`.
