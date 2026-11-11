@@ -621,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn requires_pm2_control_block_to_be_one_byte_when_present() {
+    fn accepts_pm2_control_blocks_of_one_or_more_bytes() {
         let valid = PmRegisterBlockLengths {
             pm1_event: 4, pm1_control: 2, pm2_control: 1,
             pm_timer: 4, gpe0: 8, gpe1: 2,
@@ -629,7 +629,11 @@ mod tests {
         assert_eq!(valid.validate(), Ok(()));
         assert_eq!(
             PmRegisterBlockLengths { pm2_control: 2, ..valid }.validate(),
-            Err(AcpiError::InvalidLength),
+            Ok(()),
+        );
+        assert_eq!(
+            PmRegisterBlockLengths { pm2_control: 0, ..valid }.validate(),
+            Ok(()),
         );
     }
 
