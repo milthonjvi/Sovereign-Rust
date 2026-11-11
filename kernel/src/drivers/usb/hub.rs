@@ -6,7 +6,10 @@ pub const HUB_DESCRIPTOR_SS:u8=0x2a;
 pub struct HubDescriptor{pub ports:u8,pub characteristics:u16,pub power_on_to_good:u8,pub controller_current:u8}
 impl HubDescriptor{
  pub fn parse(b:&[u8])->Result<Self,UsbError>{
-  if b.len()<7||b[0]<7||b[1]!=HUB_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  if b.len()<7||b[1]!=HUB_DESCRIPTOR||b[2]==0{return Err(UsbError::MalformedDescriptor)}
+  let bitmap_bytes=((b[2] as usize+1)+7)/8;
+  let required=7+bitmap_bytes*2;
+  if b[0] as usize<required||b.len()<required{return Err(UsbError::BufferTooShort)}
   Ok(Self{ports:b[2],characteristics:u16::from_le_bytes([b[3],b[4]]),power_on_to_good:b[5],controller_current:b[6]})
  }
 }
@@ -14,7 +17,10 @@ impl HubDescriptor{
 pub struct SuperSpeedHubDescriptor{pub ports:u8,pub characteristics:u16,pub power_on_to_good:u8,pub controller_current:u8,pub header_decode_latency:u8,pub hub_delay:u16}
 impl SuperSpeedHubDescriptor{
  pub fn parse(b:&[u8])->Result<Self,UsbError>{
-  if b.len()<10||b[0]<10||b[1]!=HUB_DESCRIPTOR_SS{return Err(UsbError::MalformedDescriptor)}
+  if b.len()<10||b[1]!=HUB_DESCRIPTOR_SS||b[2]==0{return Err(UsbError::MalformedDescriptor)}
+  let bitmap_bytes=((b[2] as usize+1)+7)/8;
+  let required=10+bitmap_bytes;
+  if b[0] as usize<required||b.len()<required{return Err(UsbError::BufferTooShort)}
   Ok(Self{ports:b[2],characteristics:u16::from_le_bytes([b[3],b[4]]),power_on_to_good:b[5],controller_current:b[6],header_decode_latency:b[7],hub_delay:u16::from_le_bytes([b[8],b[9]])})
  }
 }
@@ -110,5 +116,21 @@ mod request_tests{
   let reset=port_action(2,HubPortAction::Reset);
   assert_eq!(reset.request_type,0x23);assert_eq!(reset.request,3);
   assert_eq!(reset.value,4);assert_eq!(reset.index,2);
+ }
+}
+
+#[cfg(test)]
+mod descriptor_length_tests{
+ use super::*;
+ #[test]fn rejects_truncated_usb2_hub_bitmaps(){
+  assert_eq!(HubDescriptor::parse(&[9,0x29,4,0,0,10,0]),Err(UsbError::BufferTooShort));
+ }
+ #[test]fn accepts_usb2_hub_descriptor_with_complete_bitmaps(){
+  let d=HubDescriptor::parse(&[9,0x29,4,0,0,10,0,0,0]).unwrap();
+  assert_eq!(d.ports,4);
+ }
+ #[test]fn accepts_superspeed_hub_descriptor_with_removable_bitmap(){
+  let d=SuperSpeedHubDescriptor::parse(&[11,0x2a,4,0,0,10,0,1,0,0,0]).unwrap();
+  assert_eq!(d.ports,4);assert_eq!(d.header_decode_latency,1);
  }
 }
