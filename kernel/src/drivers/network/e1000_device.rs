@@ -17,7 +17,7 @@ use super::e1000_hw::{
     REG_IMC, REG_RCTL, REG_TCTL,
 };
 use super::ethernet::MacAddress;
-use super::e1000_irq::E1000Interrupt;
+use super::e1000_irq::{E1000Interrupt, E1000_ICR_LSC, E1000_ICR_TXDW};
 
 /// Maximum Ethernet frame accepted by this non-jumbo adapter (header included,
 /// FCS excluded because RCTL.SECRC strips it). Includes one 802.1Q VLAN tag.
@@ -144,6 +144,30 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             return Err(DriverError::NotReady);
         }
         interrupt.take_causes(self.registers).map_err(map_interrupt_error)
+    }
+
+    /// Service one coalesced interrupt in deferred context. Link changes are
+    /// reflected immediately and completed TX descriptors are reclaimed; RX
+    /// packets remain available to receive()/receive_batch() for caller delivery.
+    pub fn service_interrupt(
+        &mut self,
+        interrupt: &E1000Interrupt,
+    ) -> Result<Option<u32>, DriverError> {
+        let Some(causes) = self.take_interrupt_causes(interrupt)? else {
+            return Ok(None);
+        };
+        if causes & E1000_ICR_LSC != 0 {
+            self.refresh_link_state()?;
+        }
+        if causes & E1000_ICR_TXDW != 0 {
+            let mut no_slots = [];
+            self.tx_queue.reclaim_and_available_slots(
+                self.registers,
+                self.tx_descriptors,
+                &mut no_slots,
+            ).map_err(map_queue_error)?;
+        }
+        Ok(Some(causes))
     }
 
     /// Copy and publish several frames as one hardware batch.
