@@ -10,7 +10,7 @@ use core::{mem, panic::PanicInfo};
 use crate::boot_info::{SovereignBootInfo, BOOT_INFO_MAGIC, BOOT_INFO_VERSION, MEMORY_MAP_FORMAT_UEFI};
 use crate::page_tables::{PagePermissions, PageTableBuilder, PageTableError, PageTableMemory};
 use uefi::{
-    allocate_loader_pages, load_kernel_file, Console, EfiBootServices, EfiHandle, EfiMemoryMapBuffer,
+    allocate_loader_pages, inspect_loaded_image, load_kernel_file, Console, EfiBootServices, EfiHandle, EfiMemoryMapBuffer,
     EfiStatus, EfiSystemTable, UefiPageTableMemory, DEFAULT_MEMORY_MAP_PAGES,
     EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_OUT_OF_RESOURCES, EFI_SUCCESS, EFI_UNSUPPORTED,
     EFI_SYSTEM_TABLE_SIGNATURE,
@@ -110,15 +110,36 @@ pub extern "efiapi" fn efi_main(
         Err(_) => return EFI_COMPROMISED_DATA,
     };
 
-    // Map the loader image RX and its current stack RW/NX so a later
-    // post-ExitBootServices CR3 switch can execute a minimal transition stub.
+    // Inspect the loaded PE image and preserve section-level W^X permissions.
+    // Headers are read-only/NX; executable sections are RX; data sections RW/NX.
+    // SAFETY: LoadedImageProtocol supplied this resident image range.
+    let loader_layout = match unsafe {
+        inspect_loaded_image(loaded_kernel.loader_image_base, loaded_kernel.loader_image_size)
+    } {
+        Ok(layout) => layout,
+        Err(_) => return EFI_COMPROMISED_DATA,
+    };
     if let Err(error) = map_identity_range(
         &mut page_tables,
         loaded_kernel.loader_image_base,
-        loaded_kernel.loader_image_size,
-        PagePermissions::KERNEL_READ_EXECUTE,
+        loader_layout.headers_size,
+        PagePermissions::KERNEL_READ_ONLY,
     ) {
         return page_table_error_status(error);
+    }
+    for section in loader_layout.sections.iter().take(loader_layout.section_count) {
+        let section_base = match loaded_kernel.loader_image_base.checked_add(section.relative_address) {
+            Some(address) => address,
+            None => return EFI_COMPROMISED_DATA,
+        };
+        if let Err(error) = map_identity_range(
+            &mut page_tables,
+            section_base,
+            section.size,
+            section.permissions,
+        ) {
+            return page_table_error_status(error);
+        }
     }
     let stack_pointer = current_stack_pointer();
     let stack_start = match stack_pointer.checked_sub(256 * 1024) {
