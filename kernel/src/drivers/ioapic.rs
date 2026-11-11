@@ -36,6 +36,16 @@ const fn decode_redirection_count(version_register: u32) -> Result<u32, IoApicEr
     }
 }
 
+/// Reject a GSI interval whose exclusive end cannot be represented.
+#[inline]
+const fn validate_gsi_interval(base: u32, count: u32) -> Result<(), IoApicError> {
+    if base.checked_add(count).is_some() {
+        Ok(())
+    } else {
+        Err(IoApicError::GsiRangeOverflow)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IoApicError {
     InvalidMapping,
@@ -215,9 +225,7 @@ impl IoApicController {
             return Err(IoApicError::ControllerIdMismatch);
         }
         controller.redirection_count = decode_redirection_count(version)?;
-        if controller.gsi_base.checked_add(controller.redirection_count).is_none() {
-            return Err(IoApicError::GsiRangeOverflow);
-        }
+        validate_gsi_interval(controller.gsi_base, controller.redirection_count)?;
         Ok(controller)
     }
 
@@ -407,8 +415,11 @@ mod tests {
 
     #[test]
     fn rejects_gsi_interval_overflow_without_wrapping() {
-        let base = u32::MAX - 7;
-        assert!(base.checked_add(8).is_none());
+        assert_eq!(
+            validate_gsi_interval(u32::MAX - 7, 8),
+            Err(IoApicError::GsiRangeOverflow)
+        );
+        assert_eq!(validate_gsi_interval(0, 120), Ok(()));
     }
 
     #[test]
