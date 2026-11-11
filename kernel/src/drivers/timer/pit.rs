@@ -167,6 +167,7 @@ impl Pit {
             crate::interrupts::init::unregister_legacy_irq(0, pit_irq_handler)
         }.map_err(PitIrqError::Interrupt)?;
         PIT_FREQUENCY_HZ.store(0, Ordering::Release);
+        PIT_WORK_PENDING.store(false, Ordering::Release);
         PIT_IRQ_ACTIVE.store(false, Ordering::Release);
         self.config = None;
         Ok(())
