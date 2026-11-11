@@ -298,6 +298,13 @@ fn decode_signed(raw: u32, size: u8, logical_min: i32) -> i32 {
         ((raw << shift) as i32) >> shift
     } else { raw as i32 }
 }
+fn normalize_absolute(value: i32, min: i32, max: i32) -> u16 {
+    if max <= min { return value.clamp(0, u16::MAX as i32) as u16; }
+    let clamped = value.clamp(min, max) as i64;
+    let span = (max as i64) - (min as i64);
+    (((clamped - min as i64) * u16::MAX as i64) / span)
+        .clamp(0, u16::MAX as i64) as u16
+}
 fn normalize_axis(value: i32, min: i32, max: i32) -> i16 {
     if max <= min { return value.clamp(i16::MIN as i32, i16::MAX as i32) as i16; }
     let clamped = value.clamp(min, max) as i64;
@@ -312,19 +319,21 @@ pub struct HidReportDecoder {
     device: InputDeviceId,
     previous: [i32; MAX_HID_VALUES],
     initialized: [bool; MAX_HID_VALUES],
+    contact_active: bool,
     pub dropped_events: u64,
 }
 impl HidReportDecoder {
     pub const fn new(device: InputDeviceId) -> Self {
         Self {
             device, previous: [0; MAX_HID_VALUES], initialized: [false; MAX_HID_VALUES],
-            dropped_events: 0,
+            contact_active: false, dropped_events: 0,
         }
     }
     pub const fn device_id(&self) -> InputDeviceId { self.device }
     pub fn reset(&mut self) {
         self.previous = [0; MAX_HID_VALUES];
         self.initialized = [false; MAX_HID_VALUES];
+        self.contact_active = false;
     }
 
     /// Decodes one successful interrupt-IN report. For report-ID descriptors,
@@ -481,6 +490,87 @@ impl HidReportDecoder {
                     }
                 }
             }
+        }
+        // Digitizer collections use Generic Desktop X/Y plus Digitizer-page
+        // usages for tip, pressure, range and contact identity. Decode them
+        // separately from relative mouse axes.
+        let mut touch_x = 0u16;
+        let mut touch_y = 0u16;
+        let mut touch_pressure = 0u16;
+        let mut touch_contact = 0u16;
+        let mut touch_tip = false;
+        let mut touch_seen = false;
+        let mut pen_x = 0u16;
+        let mut pen_y = 0u16;
+        let mut pen_pressure = 0u16;
+        let mut pen_tilt_x = 0i16;
+        let mut pen_tilt_y = 0i16;
+        let mut pen_tip = false;
+        let mut pen_in_range = false;
+        let mut pen_buttons = 0u32;
+        let mut pen_seen = false;
+        for field in map.fields[..map.field_count as usize].iter().flatten() {
+            if field.report_id != report_id { continue; }
+            let is_touch = field.application_page == 0x0D && field.application_usage == 0x04;
+            let is_pen = field.application_page == 0x0D && field.application_usage == 0x02;
+            if !is_touch && !is_pen { continue; }
+            for element in 0..field.report_count as usize {
+                let usage = if element < field.usage_count as usize {
+                    field.usage_list[element]
+                } else if field.usage_max > field.usage_min {
+                    field.usage_min.saturating_add(element as u16).min(field.usage_max)
+                } else { field.usage_min };
+                let bit = field.bit_offset + element as u32 * field.report_size as u32;
+                let raw = extract_bits(payload, bit, field.report_size).ok_or(HidReportError::ReportTooShort)?;
+                let value = decode_signed(raw, field.report_size, field.logical_min);
+                if is_touch {
+                    touch_seen = true;
+                    match (field.usage_page, usage) {
+                        (0x01, 0x30) => touch_x = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x01, 0x31) => touch_y = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x0D, 0x30) => touch_pressure = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x0D, 0x42) => touch_tip = value != 0,
+                        (0x0D, 0x51) => touch_contact = value.max(0) as u16,
+                        _ => {}
+                    }
+                } else {
+                    pen_seen = true;
+                    match (field.usage_page, usage) {
+                        (0x01, 0x30) => pen_x = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x01, 0x31) => pen_y = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x0D, 0x30) => pen_pressure = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x0D, 0x32) => pen_in_range = value != 0,
+                        (0x0D, 0x42) => pen_tip = value != 0,
+                        (0x0D, 0x3D) => pen_tilt_x = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        (0x0D, 0x3E) => pen_tilt_y = value.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        (0x09, button @ 1..=32) if value != 0 => pen_buttons |= 1u32 << (button - 1),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if touch_seen {
+            let phase = if touch_tip && !self.contact_active {
+                Some(super::event::ContactPhase::Down)
+            } else if touch_tip {
+                Some(super::event::ContactPhase::Move)
+            } else if self.contact_active {
+                Some(super::event::ContactPhase::Up)
+            } else { None };
+            if let Some(phase) = phase {
+                self.emit(InputEvent::TouchContact {
+                    device: self.device, contact: touch_contact, phase,
+                    x: touch_x, y: touch_y, pressure: touch_pressure,
+                }, producer, &mut stats);
+            }
+            self.contact_active = touch_tip;
+        }
+        if pen_seen {
+            self.emit(InputEvent::Tablet {
+                device: self.device, x: pen_x, y: pen_y, pressure: pen_pressure,
+                tilt_x: pen_tilt_x, tilt_y: pen_tilt_y, buttons: pen_buttons,
+                in_range: pen_in_range, tip: pen_tip,
+            }, producer, &mut stats);
         }
         if pointer_changed || pointer_button_seen {
             self.emit(InputEvent::PointerMotion {
