@@ -45,6 +45,8 @@ const BREAK_INTERRUPT: u8 = 1 << 4;
 const FIFO_ERROR: u8 = 1 << 7;
 const MAX_DRAIN_PER_PORT: usize = 64;
 const RX_CAPACITY: usize = 1024;
+// Keep room for a complete 64-byte hardware FIFO and bytes already in flight.
+const MAX_RX_BACKPRESSURE_HEADROOM: usize = 64;
 
 const COM1_BIT: u8 = 1 << 0;
 const COM2_BIT: u8 = 1 << 1;
@@ -99,6 +101,10 @@ const fn rts_should_deassert(occupancy: usize, high: usize) -> bool {
 #[inline]
 const fn rts_should_assert(occupancy: usize, low: usize) -> bool {
     occupancy <= low
+}
+#[inline]
+const fn valid_rts_watermarks(high: usize, low: usize, capacity: usize) -> bool {
+    high != 0 && high <= capacity.saturating_sub(MAX_RX_BACKPRESSURE_HEADROOM) && low < high
 }
 #[inline]
 fn drive_rts(base: u16, asserted: bool) {
@@ -480,7 +486,7 @@ pub unsafe fn set_auto_rts_flow_control(
     }
     let capacity = port.queue.capacity();
     let disabled = high_watermark == 0 && low_watermark == 0;
-    if !disabled && (high_watermark == 0 || high_watermark > capacity || low_watermark >= high_watermark) {
+    if !disabled && !valid_rts_watermarks(high_watermark, low_watermark, capacity) {
         return Err(UartIrqError::InvalidWatermarks);
     }
     if disabled {
@@ -527,6 +533,12 @@ pub fn transmit_statistics(base: u16) -> Option<UartTxStatistics> {
 /// Returns the number of bytes waiting in a legacy UART's TX queue.
 pub fn transmit_pending(base: u16) -> Option<usize> {
     binding(base).map(|port| port.tx_queue.len())
+}
+
+
+/// Returns the greatest software RX queue occupancy observed for a legacy UART.
+pub fn receive_high_watermark(base: u16) -> Option<usize> {
+    binding(base).map(|port| port.queue.high_watermark())
 }
 
 /// Returns the static RX queue associated with a legacy UART base port.\n/// Do not consume it directly while automatic RTS is enabled; use receive_byte\n/// so the low-watermark transition can reassert the peer's transmit permission.
@@ -722,6 +734,16 @@ mod tests {
     #[test]
     fn rts_watermarks_encode_and_decode_without_loss() {
         assert_eq!(decode_rts_watermarks(encode_rts_watermarks(900, 300)), (900, 300));
+    }
+
+
+    #[test]
+    fn rts_watermarks_reserve_hardware_and_in_flight_headroom() {
+        assert!(valid_rts_watermarks(900, 300, RX_CAPACITY - 1));
+        assert!(!valid_rts_watermarks(RX_CAPACITY - 1, 300, RX_CAPACITY - 1));
+        assert!(!valid_rts_watermarks(0, 0, RX_CAPACITY - 1));
+        assert!(!valid_rts_watermarks(300, 300, RX_CAPACITY - 1));
+        assert!(!valid_rts_watermarks(300, 301, RX_CAPACITY - 1));
     }
 
     #[test]
