@@ -16,6 +16,22 @@ pub struct TscClockSource {
 }
 
 impl TscClockSource {
+    /// Prefer the architectural CPUID ratio and fall back to bounded HPET calibration.
+    ///
+    /// HPET is consulted only when CPUID leaf 0x15 cannot provide a complete
+    /// frequency ratio.
+    pub fn detect_or_calibrate(
+        hpet: Option<&Hpet>,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Option<Self> {
+        Self::detect().or_else(|| {
+            hpet.and_then(|device| {
+                Self::calibrate_with_hpet(device, sample_ms, max_spin_iterations)
+            })
+        })
+    }
+
     /// Calibrate invariant TSC against an enabled HPET main counter.
     ///
     /// This is the fallback when CPUID leaf 0x15 does not provide a complete
