@@ -31,12 +31,12 @@ pub enum CpuFeatureError {
 /// assumptions about EFER state.
 pub unsafe fn enable_nxe() -> Result<NxeEnabled, CpuFeatureError> {
     // SAFETY: CPUID is available in long mode and does not mutate machine state.
-    let maximum = unsafe { __cpuid(CPUID_EXTENDED_MAX) }.eax;
+    let maximum = __cpuid(CPUID_EXTENDED_MAX).eax;
     if maximum < CPUID_EXTENDED_FEATURES {
         return Err(CpuFeatureError::ExtendedCpuidUnavailable);
     }
     // SAFETY: The extended feature leaf was confirmed to be available.
-    let features = unsafe { __cpuid(CPUID_EXTENDED_FEATURES) };
+    let features = __cpuid(CPUID_EXTENDED_FEATURES);
     if features.edx & CPUID_NX == 0 {
         return Err(CpuFeatureError::NxUnsupported);
     }
