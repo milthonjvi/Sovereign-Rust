@@ -42,8 +42,8 @@ pub const CONFIGURATION_DESCRIPTOR:u8=2;
 pub const INTERFACE_DESCRIPTOR:u8=4;
 pub const ENDPOINT_DESCRIPTOR:u8=5;
 pub const SS_ENDPOINT_COMPANION_DESCRIPTOR:u8=0x30;
-pub const MAX_INTERFACES:usize=16;
-pub const MAX_ENDPOINTS:usize=32;
+pub const MAX_INTERFACES:usize=64;
+pub const MAX_ENDPOINTS:usize=128;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct ConfigurationDescriptor{
