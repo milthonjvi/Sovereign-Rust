@@ -59,20 +59,20 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
         .map_err(BarProbeError::Access)?;
     let original_command = command_status as u16;
 
-    // The upper half of this dword is PCI Status (write-one-to-clear). Always
-    // write zero there; echoing the read status could clear latched errors.
+    // The upper half is PCI Status (write-one-to-clear). Never echo it.
     let disable_decode = (original_command & !(COMMAND_IO_SPACE | COMMAND_MEMORY_SPACE)) as u32;
-    if io.write_u32(function.address, COMMAND_STATUS, disable_decode).is_err() {
+    if let Err(error) = io.write_u32(function.address, COMMAND_STATUS, disable_decode) {
         return if io.write_u32(function.address, COMMAND_STATUS, original_command as u32).is_err() {
             Err(BarProbeError::RestoreFailed)
         } else {
-            Err(BarProbeError::Access(ConfigError::MappingUnavailable))
+            Err(BarProbeError::Access(error))
         };
     }
 
     let mut measured = [None; MAX_BAR_REGISTERS];
     let mut index = 0usize;
     let mut operation_error = None;
+    let mut bar_restore_failed = false;
 
     while index < count {
         let low = original[index];
@@ -122,15 +122,14 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
             Ok(size)
         })();
 
-        // Restore both halves even when the second write or a mask read failed.
-        let mut restore_failed = false;
+        // Restore both halves even if probing failed partway through.
         if is_64 && io.write_u32(function.address, low_register + 4, high_original).is_err() {
-            restore_failed = true;
+            bar_restore_failed = true;
         }
         if io.write_u32(function.address, low_register, low).is_err() {
-            restore_failed = true;
+            bar_restore_failed = true;
         }
-        if restore_failed {
+        if bar_restore_failed {
             operation_error = Some(BarProbeError::RestoreFailed);
             break;
         }
@@ -143,14 +142,14 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
         index += if is_64 { 2 } else { 1 };
     }
 
-    // Restore only the command bits; status is write-one-to-clear and must
-    // never be restored by echoing the previously read status half.
-    let command_restore_failed = io.write_u32(
-        function.address,
-        COMMAND_STATUS,
-        original_command as u32,
-    ).is_err();
-    if command_restore_failed {
+    // If a BAR could not be restored, leave decode disabled. Re-enabling it
+    // with an unknown aperture would be less safe than keeping the function off.
+    if bar_restore_failed {
+        return Err(BarProbeError::RestoreFailed);
+    }
+
+    // Restore only command bits; status is write-one-to-clear.
+    if io.write_u32(function.address, COMMAND_STATUS, original_command as u32).is_err() {
         return Err(BarProbeError::RestoreFailed);
     }
     if let Some(error) = operation_error {
