@@ -10,8 +10,9 @@ use super::device::{
 };
 use super::dma::DmaBuffer;
 use super::e1000::{
-    supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL,
+    supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL, REG_RAL0, REG_RAH0,
 };
+use super::e1000_descriptor::mac_address_from_registers;
 use super::e1000_hw::{
     read_link_state, reset, E1000QueueError, E1000Registers, E1000ResetError,
     E1000QueueConfig, E1000RxQueue, E1000TxQueue,
@@ -29,6 +30,7 @@ pub enum E1000DeviceError {
     InvalidBufferPool,
     OverlappingDmaPools,
     InvalidMacAddress,
+    HardwareFault,
 }
 
 pub struct E1000Device<'a, 'dma, R: E1000Registers> {
@@ -72,7 +74,6 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         tx_descriptors: &'a mut [TxDescriptor],
         rx_buffers: &'a mut [DmaBuffer<'dma>],
         tx_buffers: &'a mut [DmaBuffer<'dma>],
-        mac: MacAddress,
     ) -> Result<Self, E1000DeviceError> {
         if queues.validate().is_err()
             || queues.rx.descriptor_count as usize != rx_descriptors.len()
@@ -116,6 +117,11 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             .map_err(|_| E1000DeviceError::InvalidRing)?;
         let tx_queue = E1000TxQueue::new(tx_descriptors.len() as u16)
             .map_err(|_| E1000DeviceError::InvalidRing)?;
+        let ral = registers.read32(REG_RAL0).map_err(|_| E1000DeviceError::HardwareFault)?;
+        let rah = registers.read32(REG_RAH0).map_err(|_| E1000DeviceError::HardwareFault)?;
+        let mac = mac_address_from_registers(ral, rah)
+            .filter(|address| address.is_unicast())
+            .ok_or(E1000DeviceError::InvalidMacAddress)?;
         let interface = NetworkInterfaceInfo::new(mac, ETHERNET_DEFAULT_MTU)
             .map_err(|_| E1000DeviceError::InvalidMacAddress)?;
         Ok(Self {
@@ -551,6 +557,8 @@ mod tests {
             if offset == REG_STATUS {
                 return Ok((1 << 1) | (2 << 6) | 1);
             }
+            if offset == REG_RAL0 { return Ok(0x4433_2211); }
+            if offset == REG_RAH0 { return Ok(0x8000_6655); }
             Ok(0)
         }
 
@@ -607,7 +615,7 @@ mod tests {
         // SAFETY: the mock backend performs no DMA; these arrays model pinned mappings.
         let mut device = unsafe { E1000Device::new(
             &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
-            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+            &mut rx_buffers, &mut tx_buffers,
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
@@ -648,7 +656,7 @@ mod tests {
         // the pinned rings and device-visible buffers required by the constructor.
         let mut device = unsafe { E1000Device::new(
             &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
-            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+            &mut rx_buffers, &mut tx_buffers,
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
@@ -690,7 +698,7 @@ mod tests {
         // SAFETY: the mock backend performs no DMA; arrays model pinned mappings.
         let mut device = unsafe { E1000Device::new(
             &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
-            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+            &mut rx_buffers, &mut tx_buffers,
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
@@ -730,7 +738,7 @@ mod tests {
         // the pinned rings and device-visible buffers required by the constructor.
         let mut device = unsafe { E1000Device::new(
             &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
-            &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
+            &mut rx_buffers, &mut tx_buffers,
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
