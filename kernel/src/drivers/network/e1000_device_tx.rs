@@ -8,7 +8,8 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// Fill an available DMA TX buffer directly, avoiding an intermediate frame copy.
     ///
     /// The closure receives the selected buffer and returns the number of bytes
-    /// written. It must not retain the buffer borrow or access the NIC reentrantly.
+    /// written. It must initialize every byte in the returned prefix and must not
+    /// retain the buffer borrow or access the NIC reentrantly.
     pub fn transmit_with<F>(&mut self, fill: F) -> Result<(), DriverError>
     where
         F: FnOnce(&mut [u8]) -> usize,
@@ -62,7 +63,8 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     ///
     /// The builder is called only after the complete batch has available ring
     /// slots. If any builder rejects a frame, no descriptor in the batch is
-    /// published. The callback must be bounded and must not re-enter this device.
+    /// published. Each callback must initialize its returned prefix, be bounded,
+    /// and must not re-enter this device.
     pub fn transmit_batch_with<F>(
         &mut self,
         count: usize,
