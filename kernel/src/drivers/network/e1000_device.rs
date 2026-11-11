@@ -167,6 +167,67 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         ).map_err(map_queue_error)
     }
 
+    /// Receive several completed Ethernet frames with one descriptor scan
+    /// barrier and one RX-tail MMIO update. Invalid, fragmented, and undersized
+    /// frames are dropped; valid frames are packed into the leading output slots.
+    /// All scratch storage is supplied by the caller and no allocation occurs.
+    pub fn receive_batch(
+        &mut self,
+        outputs: &mut [&mut [u8]],
+        completions: &mut [(u16, super::e1000_descriptor::RxCompletion)],
+        recycle_backup: &mut [RxDescriptor],
+    ) -> Result<usize, DriverError> {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        let limit = core::cmp::min(outputs.len(), completions.len());
+        if limit == 0 {
+            return Ok(0);
+        }
+        if recycle_backup.len() < limit {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        let received = self.rx_queue.poll_batch(
+            self.registers,
+            self.rx_descriptors,
+            &mut completions[..limit],
+        ).map_err(map_queue_error)?;
+        if received == 0 {
+            return Ok(0);
+        }
+
+        let mut delivered = 0usize;
+        for item in &completions[..received] {
+            let (index, completion) = *item;
+            let slot = index as usize;
+            let was_fragmented = self.dropping_rx_frame;
+            self.dropping_rx_frame = !completion.end_of_packet;
+            let length = completion.length as usize;
+            let valid = !was_fragmented
+                && completion.end_of_packet
+                && completion.errors == 0
+                && length != 0
+                && length <= self.rx_buffers[slot].len()
+                && length <= E1000_MAX_FRAME_SIZE;
+            if !valid || length > outputs[delivered].len() {
+                continue;
+            }
+
+            outputs[delivered][..length]
+                .copy_from_slice(&self.rx_buffers[slot].as_slice()[..length]);
+            delivered += 1;
+        }
+
+        self.rx_queue.recycle_batch(
+            self.registers,
+            self.rx_descriptors,
+            &completions[..received],
+            &mut recycle_backup[..received],
+        ).map_err(map_queue_error)?;
+        Ok(delivered)
+    }
+
     fn reclaim_tx(&mut self) -> Result<(), DriverError> {
         self.tx_queue
             .reap(self.registers, self.tx_descriptors)
