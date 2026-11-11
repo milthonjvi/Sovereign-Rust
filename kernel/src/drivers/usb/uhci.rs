@@ -94,3 +94,102 @@ mod schedule_tests{
   assert_eq!(td.token>>21,0x7ff);
  }
 }
+
+
+pub const CMD_MAX_PACKET:u16=1<<7;
+pub const PORT_SUSPEND:u16=1<<12;
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum UhciState{Discovered,Resetting,Reset,Running,Halted}
+pub trait UhciPortIo{fn read16(&self,port:u16)->Result<u16,super::UsbError>;fn write16(&mut self,port:u16,value:u16)->Result<(),super::UsbError>;fn write32(&mut self,port:u16,value:u32)->Result<(),super::UsbError>;}
+pub struct UhciController{pub state:UhciState,io_base:u16,frame_list_configured:bool}
+impl UhciController{
+ pub const fn new(io_base:u16)->Self{Self{state:UhciState::Discovered,io_base,frame_list_configured:false}}
+ fn reg(&self,offset:u16)->u16{self.io_base+offset}
+ pub fn request_reset<I:UhciPortIo>(&mut self,io:&mut I)->Result<(),super::UsbError>{
+  if self.state!=UhciState::Discovered&&self.state!=UhciState::Halted{return Err(super::UsbError::Unsupported)}
+  io.write16(self.reg(USBCMD),CMD_HCRESET)?;self.state=UhciState::Resetting;Ok(())
+ }
+ pub fn poll_reset<I:UhciPortIo>(&mut self,io:&I)->Result<bool,super::UsbError>{
+  if self.state!=UhciState::Resetting{return Err(super::UsbError::Unsupported)}
+  if io.read16(self.reg(USBCMD))?&CMD_HCRESET==0{self.state=UhciState::Reset;return Ok(true)}
+  Ok(false)
+ }
+ /// Frame list must be pinned, coherent DMA memory aligned to 4 KiB.
+ pub unsafe fn configure_frame_list<I:UhciPortIo>(&mut self,io:&mut I,physical:u64)->Result<(),super::UsbError>{
+  if self.state!=UhciState::Reset||self.frame_list_configured{return Err(super::UsbError::Unsupported)}
+  if physical>u32::MAX as u64||physical&0xfff!=0{return Err(super::UsbError::InvalidAddress)}
+  io.write32(self.reg(FLBASEADD),physical as u32)?;
+  io.write16(self.reg(SOFMOD),0x40)?;
+  self.frame_list_configured=true;Ok(())
+ }
+ pub fn start<I:UhciPortIo>(&mut self,io:&mut I)->Result<(),super::UsbError>{
+  if self.state!=UhciState::Reset||!self.frame_list_configured{return Err(super::UsbError::Unsupported)}
+  io.write16(self.reg(USBINTR),STS_USBINT|STS_USBERRINT|STS_RESUME|STS_HSE)?;
+  io.write16(self.reg(USBCMD),CMD_RUN|CMD_MAX_PACKET)?;Ok(())
+ }
+ pub fn poll_running<I:UhciPortIo>(&mut self,io:&I)->Result<bool,super::UsbError>{
+  if self.state!=UhciState::Reset{return Err(super::UsbError::Unsupported)}
+  if io.read16(self.reg(USBSTS))?&STS_HCHALTED==0{self.state=UhciState::Running;return Ok(true)}
+  Ok(false)
+ }
+ pub fn request_halt<I:UhciPortIo>(&mut self,io:&mut I)->Result<(),super::UsbError>{
+  if self.state!=UhciState::Running{return Err(super::UsbError::Unsupported)}
+  let command=io.read16(self.reg(USBCMD))?;io.write16(self.reg(USBCMD),command&!CMD_RUN)
+ }
+ pub fn poll_halted<I:UhciPortIo>(&mut self,io:&I)->Result<bool,super::UsbError>{
+  if self.state!=UhciState::Running{return Err(super::UsbError::Unsupported)}
+  if io.read16(self.reg(USBSTS))?&STS_HCHALTED!=0{self.state=UhciState::Halted;return Ok(true)}
+  Ok(false)
+ }
+ pub fn port_status<I:UhciPortIo>(&self,io:&I,port:u8)->Result<super::controller::PortStatus,super::UsbError>{
+  if self.state!=UhciState::Running{return Err(super::UsbError::ControllerUnavailable)}
+  let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
+  let value=io.read16(self.reg(offset))?;
+  Ok(super::controller::PortStatus{connected:value&PORT_CONNECT!=0,enabled:value&PORT_ENABLE!=0,
+   suspended:value&PORT_SUSPEND!=0,over_current:false,
+   speed:if value&PORT_CONNECT==0{None}else if value&PORT_LOW_SPEED!=0{Some(super::transfer::UsbSpeed::Low)}else{Some(super::transfer::UsbSpeed::Full)}})
+ }
+ pub fn request_port_reset<I:UhciPortIo>(&self,io:&mut I,port:u8)->Result<(),super::UsbError>{
+  let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
+  let value=io.read16(self.reg(offset))?;
+  if value&PORT_CONNECT==0{return Err(super::UsbError::ControllerUnavailable)}
+  io.write16(self.reg(offset),(value&!(PORT_CONNECT_CHANGE|PORT_ENABLE_CHANGE))|PORT_RESET)
+ }
+ pub fn port_reset_complete<I:UhciPortIo>(&self,io:&I,port:u8)->Result<bool,super::UsbError>{
+  let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
+  let value=io.read16(self.reg(offset))?;Ok(value&PORT_RESET==0&&value&PORT_ENABLE!=0)
+ }
+ pub fn clear_port_changes<I:UhciPortIo>(&self,io:&mut I,port:u8,changes:u16)->Result<(),super::UsbError>{
+  let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
+  if changes&!(PORT_CONNECT_CHANGE|PORT_ENABLE_CHANGE)!=0{return Err(super::UsbError::InvalidAddress)}
+  io.write16(self.reg(offset),changes)
+ }
+}
+
+#[cfg(test)]
+mod controller_tests{
+ use super::*;
+ struct FakeUhci{ports:[u16;64]}
+ impl FakeUhci{fn new()->Self{Self{ports:[0;64]}}}
+ impl UhciPortIo for FakeUhci{
+  fn read16(&self,port:u16)->Result<u16,super::super::UsbError>{self.ports.get(port as usize/2).copied().ok_or(super::super::UsbError::BufferTooShort)}
+  fn write16(&mut self,port:u16,value:u16)->Result<(),super::super::UsbError>{
+   let i=port as usize/2;if i>=self.ports.len(){return Err(super::super::UsbError::BufferTooShort)}
+   self.ports[i]=value;
+   if port==USBCMD&&value&CMD_HCRESET!=0{self.ports[i]&=!CMD_HCRESET;}
+   if port==USBCMD{if value&CMD_RUN!=0{self.ports[(port as usize+2)/2]&=!STS_HCHALTED}else{self.ports[(port as usize+2)/2]|=STS_HCHALTED}}
+   Ok(())
+  }
+  fn write32(&mut self,port:u16,value:u32)->Result<(),super::super::UsbError>{self.write16(port,value as u16)}
+ }
+ #[test]fn resets_configures_frame_list_and_runs(){
+  let mut io=FakeUhci::new();let mut h=UhciController::new(0);
+  h.request_reset(&mut io).unwrap();assert!(h.poll_reset(&io).unwrap());
+  unsafe{h.configure_frame_list(&mut io,0x1000)}.unwrap();
+  h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());assert_eq!(h.state,UhciState::Running);
+ }
+ #[test]fn rejects_unaligned_frame_list(){
+  let mut io=FakeUhci::new();let mut h=UhciController::new(0);h.state=UhciState::Reset;
+  assert_eq!(unsafe{h.configure_frame_list(&mut io,0x1001)},Err(super::super::UsbError::InvalidAddress));
+ }
+}
