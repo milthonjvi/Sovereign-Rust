@@ -5,7 +5,7 @@
 //! allocates DMA memory, or installs interrupt handlers.
 
 use super::e1000::{
-    RingConfig, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
+    RingConfig, RxDescriptor, TxDescriptor, RingCursor, E1000Error, RXD_STATUS_DD, TXD_STATUS_DD, CTRL_RST, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE,
     REG_CTRL, REG_ICR, REG_IMC, REG_RAL0, REG_RAH0, REG_RCTL,
     REG_RDBAH, REG_RDBAL, REG_RDH, REG_RDLEN, REG_RDT,
     REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
@@ -28,6 +28,11 @@ pub trait E1000Registers {
 
     fn read32(&mut self, offset: u32) -> Result<u32, Self::Error>;
     fn write32(&mut self, offset: u32, value: u32) -> Result<(), Self::Error>;
+
+    /// Order descriptor and buffer writes before notifying the device.
+    fn dma_write_barrier(&mut self);
+    /// Order device descriptor write-back before the CPU inspects it.
+    fn dma_read_barrier(&mut self);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +42,9 @@ pub enum E1000InitError<E> {
     InvalidRingConfiguration,
     BusMasterDisabled,
     MissingMacAddress,
+    InvalidDescriptorBuffers,
+    InvalidFrameLength,
+    TxRingFull,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,13 +89,31 @@ pub struct E1000InitInfo {
 pub fn initialize<R: E1000Registers>(
     registers: &mut R,
     queues: E1000QueueConfig,
+    rx_descriptors: &mut [RxDescriptor],
+    rx_buffer_dma: &[u64],
+    tx_descriptors: &mut [TxDescriptor],
     bus_master_enabled: bool,
 ) -> Result<E1000InitInfo, E1000InitError<R::Error>> {
     if !bus_master_enabled {
         return Err(E1000InitError::BusMasterDisabled);
     }
     validate_queue(&queues).map_err(|_| E1000InitError::InvalidRingConfiguration)?;
+    if rx_descriptors.len() != queues.rx.descriptor_count as usize
+        || rx_buffer_dma.len() != rx_descriptors.len()
+        || tx_descriptors.len() != queues.tx.descriptor_count as usize
+        || rx_buffer_dma.iter().any(|address| *address == 0)
+    {
+        return Err(E1000InitError::InvalidDescriptorBuffers);
+    }
 
+    for (descriptor, &buffer_dma) in rx_descriptors.iter_mut().zip(rx_buffer_dma.iter()) {
+        *descriptor = RxDescriptor::for_buffer(buffer_dma);
+    }
+    for descriptor in tx_descriptors.iter_mut() {
+        *descriptor = TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() };
+    }
+
+    registers.dma_write_barrier();
     registers.write32(REG_IMC, u32::MAX).map_err(E1000InitError::Register)?;
     registers.write32(REG_RCTL, 0).map_err(E1000InitError::Register)?;
     registers.write32(REG_TCTL, 0).map_err(E1000InitError::Register)?;
@@ -112,6 +138,7 @@ pub fn initialize<R: E1000Registers>(
     // reading the read-to-clear cause register or programming the queues.
     registers.write32(REG_IMC, u32::MAX).map_err(E1000InitError::Register)?;
     let _ = registers.read32(REG_ICR).map_err(E1000InitError::Register)?;
+    registers.dma_write_barrier();
 
     let ral = registers.read32(REG_RAL0).map_err(E1000InitError::Register)?;
     let rah = registers.read32(REG_RAH0).map_err(E1000InitError::Register)?;
@@ -127,6 +154,7 @@ pub fn initialize<R: E1000Registers>(
         | (TCTL_COLLISION_THRESHOLD << TCTL_CT_SHIFT)
         | (TCTL_COLLISION_DISTANCE << TCTL_COLD_SHIFT);
     registers.write32(REG_TCTL, tctl).map_err(E1000InitError::Register)?;
+    registers.dma_write_barrier();
     registers.write32(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)
         .map_err(E1000InitError::Register)?;
 
@@ -201,6 +229,8 @@ mod tests {
             self.writes.push((offset, value));
             Ok(())
         }
+        fn dma_write_barrier(&mut self) { core::sync::atomic::fence(core::sync::atomic::Ordering::Release); }
+        fn dma_read_barrier(&mut self) { core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire); }
     }
 
     #[test]
@@ -213,8 +243,14 @@ mod tests {
     fn initialization_programs_rings_and_enables_rx_tx() {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1_0000_1000, 0x1_0000_2000).unwrap();
-        let info = initialize(&mut regs, queues, true).unwrap();
+        let mut rx = [RxDescriptor::default(); 32];
+        let rx_buffers = [0x4000u64; 32];
+        let mut tx = [TxDescriptor::default(); 32];
+        let info = initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true).unwrap();
         assert_eq!(info.mac, MacAddress([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]));
+        assert_eq!(rx[0].buffer_address, 0x4000);
+        assert_eq!(rx[0].status, 0);
+        assert_eq!(tx[0].status, TXD_STATUS_DD);
         assert!(regs.writes.contains(&(REG_RDBAH, 1)));
         assert!(regs.writes.contains(&(REG_TDBAH, 1)));
         assert!(regs.writes.contains(&(REG_RDT, 31)));
@@ -227,7 +263,10 @@ mod tests {
     fn refuses_to_initialize_without_bus_mastering() {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1000, 0x2000).unwrap();
-        assert_eq!(initialize(&mut regs, queues, false), Err(E1000InitError::BusMasterDisabled));
+        let mut rx = [RxDescriptor::default(); 32];
+        let rx_buffers = [0x4000u64; 32];
+        let mut tx = [TxDescriptor::default(); 32];
+        assert_eq!(initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, false), Err(E1000InitError::BusMasterDisabled));
         assert!(regs.writes.is_empty());
     }
 }
