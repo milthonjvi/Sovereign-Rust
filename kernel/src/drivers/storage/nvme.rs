@@ -64,23 +64,23 @@ impl<'a> NvmeSubmissionQueue<'a> {
     pub fn update_head(&mut self,head:u32)->Result<(),NvmeError>{
         if head>=self.depth{return Err(NvmeError::InvalidQueueDepth);} self.head=head; Ok(())
     }
-    /// Returns the new tail for the submission doorbell.
+    /// Returns the new tail for the submission doorbell. Caller must issue the\n    /// platform DMA write barrier before ringing the MMIO doorbell.
     pub fn submit(&mut self,cmd:NvmeCommand)->Result<u32,NvmeError>{
         let next=(self.tail+1)%self.depth;
         if next==self.head{return Err(NvmeError::QueueFull);}
-        self.entries[self.tail as usize]=cmd; self.tail=next; Ok(next)
+        // SAFETY: tail is bounded by depth, and the caller owns the DMA queue mapping.\n        unsafe { core::ptr::write_volatile(self.entries.as_mut_ptr().add(self.tail as usize), cmd); }\n        self.tail=next; Ok(next)
     }
 }
 
 pub struct NvmeCompletionQueue<'a>{entries:&'a [NvmeCompletion],depth:u32,head:u32,phase:bool}
 impl<'a> NvmeCompletionQueue<'a>{
-    pub fn new(entries:&'a [NvmeCompletion],depth:u16)->Result<Self,NvmeError>{
+    pub fn new(entries:&'a [NvmeCompletion],depth:u32)->Result<Self,NvmeError>{
         if depth<2 || depth as usize>entries.len(){return Err(NvmeError::InvalidQueueDepth);}
         Ok(Self{entries,depth,head:0,phase:true})
     }
     pub const fn head(&self)->u32{self.head}
-    pub fn poll(&mut self)->Option<NvmeCompletion>{
-        let c=self.entries[self.head as usize]; if c.phase()!=self.phase{return None;}
+    /// Caller must issue the platform DMA read barrier before polling.\n    pub fn poll(&mut self)->Option<NvmeCompletion>{
+        // SAFETY: head is bounded by depth; caller must perform its DMA read barrier before polling.\n        let c=unsafe { core::ptr::read_volatile(self.entries.as_ptr().add(self.head as usize)) };\n        if c.phase()!=self.phase{return None;}
         self.head+=1; if self.head==self.depth{self.head=0;self.phase=!self.phase;} Some(c)
     }
 }
