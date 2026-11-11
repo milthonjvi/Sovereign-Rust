@@ -7,10 +7,12 @@
 pub mod apic;
 pub mod hpet;
 pub mod pit;
+pub mod x2apic_timer;
 
 pub use apic::{
-    ApicDivide, ApicTimerMode, LocalApicTimer, TscDeadline, X2ApicTimer, IA32_TSC_DEADLINE, calibrated_periodic_initial_count,
+    ApicDivide, ApicTimerMode, LocalApicTimer, TscDeadline, IA32_TSC_DEADLINE, calibrated_periodic_initial_count,
     calibrate_bus_clock_hz, periodic_initial_count,
 };
 pub use hpet::{counter_delta, route_is_supported, Hpet, HpetCapabilities};
 pub use pit::{Pit, PitConfig, PitIrqError};
+pub use x2apic_timer::X2ApicTimer;
