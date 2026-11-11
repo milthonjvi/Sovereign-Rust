@@ -60,8 +60,10 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// The descriptor slices must be the live, pinned DMA rings programmed into
     /// this NIC. Every DmaBuffer must reference a valid device-visible mapping,
     /// with RX buffers writable by the device and TX buffers retained until DD.
-    /// The MMIO accessor must target the same device and no other owner may
-    /// mutate these rings or buffers for the lifetime of this adapter. The
+    /// The MMIO accessor must target the same device. CPU virtual ranges for
+    /// descriptor rings and packet buffers must be disjoint, as must their
+    /// device-visible DMA ranges; no other owner may mutate them for this
+    /// adapter's lifetime. The
     /// caller must successfully shut down the adapter before releasing any DMA
     /// mapping or dropping it; if shutdown fails, mappings must remain pinned
     /// until the platform independently proves that the NIC is quiescent. If
