@@ -1,7 +1,7 @@
 //! Fixed-capacity, allocation-free timer queue.
 //!
 //! The queue is a binary min-heap ordered by (deadline, insertion sequence).
-//! It performs O(log N) insertion/removal and O(1) next-deadline queries.
+//! It performs O(N) insertion/cancellation because IDs are checked linearly,
 //! Synchronization is deliberately external: callers must protect a shared
 //! queue with the kernel's appropriate lock and define IRQ/task ownership.
 
