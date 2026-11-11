@@ -100,12 +100,15 @@ pub const fn short_name_checksum(name: &[u8; 11]) -> u8 {
 
 /// Feed a directory record: LFN fragments update state; a short record completes it.
 pub fn consume_lfn_record(state: &mut FatLongName, raw: &[u8]) -> Result<Option<([u16; 260], usize, FatDirEntry)>, FatError> {
+    consume_lfn_record_for_kind(state, raw, super::fat::FatKind::Fat32)
+}
+pub fn consume_lfn_record_for_kind(state: &mut FatLongName, raw: &[u8], kind: super::fat::FatKind) -> Result<Option<([u16; 260], usize, FatDirEntry)>, FatError> {
     if raw.len() < 32 { state.reset(); return Err(FatError::InvalidDirectoryEntry); }
     if raw[11] == 0x0F {
         state.push_record(raw).map_err(|_| FatError::InvalidDirectoryEntry)?;
         return Ok(None);
     }
-    let entry = match FatDirEntry::parse_for_kind(raw, volume.bpb.kind)? { Some(entry) => entry, None => { state.reset(); return Ok(None); } };
+    let entry = match FatDirEntry::parse_for_kind(raw, kind)? { Some(entry) => entry, None => { state.reset(); return Ok(None); } };
     match state.finish(&entry.short_name) {
         Ok(Some((name, len))) => Ok(Some((name, len, entry))),
         Ok(None) => Ok(None),
