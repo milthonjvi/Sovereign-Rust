@@ -269,6 +269,15 @@ impl Fadt {
         Ok(())
     }
 
+    /// Whether the ACPI Global Lock protocol is available on this platform.
+    ///
+    /// ACPI Hardware Reduced platforms explicitly do not support the Global
+    /// Lock or resource sharing with asynchronous firmware environments.
+    /// A present FACS does not change that platform-level restriction.
+    pub const fn global_lock_supported(&self) -> bool {
+        self.pm_hardware_mode() == PmHardwareMode::LegacyFixedHardware
+    }
+
     /// Select the PM model advertised by the FADT.
     pub const fn pm_hardware_mode(&self) -> PmHardwareMode {
         if self.flags & FADT_HW_REDUCED_ACPI != 0 { PmHardwareMode::HardwareReduced }
@@ -1027,6 +1036,15 @@ mod tests {
         let fadt = Fadt::parse(&valid).unwrap();
         assert_eq!(fadt.validate_hardware_mode(), Ok(()));
         assert_eq!(fadt.validated_sleep_registers(), Ok(None));
+    }
+
+    #[test]
+    fn global_lock_support_follows_platform_hardware_mode() {
+        let legacy = Fadt::parse(&make_fadt(148, 0, None, None)).unwrap();
+        assert!(legacy.global_lock_supported());
+
+        let reduced = Fadt::parse(&make_fadt(268, FADT_HW_REDUCED_ACPI, None, None)).unwrap();
+        assert!(!reduced.global_lock_supported());
     }
 
     #[test]
