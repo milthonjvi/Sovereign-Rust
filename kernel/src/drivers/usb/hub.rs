@@ -117,6 +117,12 @@ impl SuperSpeedPortStatus{
  pub const OVER_CURRENT:u16=1<<3;
  pub const RESET:u16=1<<4;
  pub const POWER:u16=1<<9;
+ pub const C_CONNECTION:u16=1<<0;
+ pub const C_OVER_CURRENT:u16=1<<3;
+ pub const C_RESET:u16=1<<4;
+ pub const C_BH_RESET:u16=1<<5;
+ pub const C_LINK_STATE:u16=1<<6;
+ pub const C_CONFIG_ERROR:u16=1<<7;
  pub const fn parse(bytes:&[u8])->Result<Self,UsbError>{
   if bytes.len()<4{return Err(UsbError::BufferTooShort)}
   let status=u16::from_le_bytes([bytes[0],bytes[1]]);
@@ -316,8 +322,8 @@ impl HubPortMachine{
   if status.enabled(){normalized|=HubPortStatus::ENABLE;}
   if status.over_current(){normalized|=HubPortStatus::OVER_CURRENT;}
   if status.reset(){normalized|=HubPortStatus::RESET;}
-  if status.change&(1<<6)!=0{self.clear_link_state_change=true;}
-  if status.change&(1<<7)!=0{self.clear_config_error_change=true;}
+  if status.change&SuperSpeedPortStatus::C_LINK_STATE!=0{self.clear_link_state_change=true;}
+  if status.change&SuperSpeedPortStatus::C_CONFIG_ERROR!=0{self.clear_config_error_change=true;}
   if self.state==HubPortState::Resetting&&status.connected()&&status.enabled()
    &&status.change&SuperSpeedPortStatus::C_BH_RESET!=0{
    self.state=HubPortState::ClearResetChange;
@@ -326,7 +332,7 @@ impl HubPortMachine{
   }
   // SuperSpeed has no C_PORT_ENABLE or C_PORT_SUSPEND bits. Passing the raw
   // change word into the USB 2.0 state machine would misread reserved bits 1-2.
-  let normalized_change=status.change&(HubPortStatus::C_CONNECTION|HubPortStatus::C_OVER_CURRENT|HubPortStatus::C_RESET);
+  let normalized_change=status.change&(SuperSpeedPortStatus::C_CONNECTION|SuperSpeedPortStatus::C_OVER_CURRENT|SuperSpeedPortStatus::C_RESET);
   self.observe(HubPortStatus{status:normalized,change:normalized_change});
  }
  pub fn take_action(&mut self)->Option<HubPortAction>{
