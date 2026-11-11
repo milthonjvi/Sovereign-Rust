@@ -217,33 +217,23 @@ pub fn validate_io_apic_ranges(ranges: &[IoApicGsiRange]) -> Result<(), Topology
 
 /// Resolve a GSI to exactly one controller and its local redirection pin.
 ///
-/// The ranges should first pass validate_io_apic_ranges. Malformed input is
-/// still checked here to avoid arithmetic wrap or ambiguous lookup.
+/// Validate the complete topology, then resolve a GSI to exactly one
+/// controller and its local redirection pin. Invalid unrelated ranges are
+/// rejected too; callers never receive a route from a malformed topology.
 pub fn resolve_gsi(
     gsi: u32,
     ranges: &[IoApicGsiRange],
 ) -> Result<GsiRoute, TopologyError> {
-    let mut found = None;
+    validate_io_apic_ranges(ranges)?;
     for (controller_index, range) in ranges.iter().copied().enumerate() {
-        if range.redirection_count == 0
-            || range.redirection_count > MAX_REDIRECTION_ENTRIES
-        {
-            return Err(TopologyError::InvalidRedirectionCount);
-        }
-        if range.end_exclusive().is_none() {
-            return Err(TopologyError::GsiRangeOverflow);
-        }
         if range.contains(gsi) {
-            if found.is_some() {
-                return Err(TopologyError::OverlappingGsiRanges);
-            }
-            found = Some(GsiRoute {
+            return Ok(GsiRoute {
                 controller_index,
                 pin: gsi - range.gsi_base,
             });
         }
     }
-    found.ok_or(TopologyError::GsiNotCovered)
+    Err(TopologyError::GsiNotCovered)
 }
 
 #[cfg(test)]
