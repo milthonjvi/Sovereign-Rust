@@ -190,3 +190,8 @@ extern "C" fn irq4_handler(_vector: u8) {
     if attached & COM1_BIT != 0 { drain_port(0x3F8, &COM1_RX); }
     if attached & COM3_BIT != 0 { drain_port(0x3E8, &COM3_RX); }
 }
+
+/// Reports whether a UART port is currently connected to its shared IRQ line.
+pub(super) fn is_attached(base: u16) -> bool {
+    binding(base).is_some_and(|port| ATTACHED.load(Ordering::Acquire) & port.bit != 0)
+}
