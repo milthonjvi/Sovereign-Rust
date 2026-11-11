@@ -105,6 +105,15 @@ pub struct Uart16550 {
 }
 
 #[inline]
+const fn receive_recovery_fcr(fifo: UartFifo) -> u8 {
+    match fifo {
+        UartFifo::None => 0,
+        UartFifo::Bytes16 => FIFO_ENABLE | (3 << 6),
+        UartFifo::Bytes64 => FIFO_ENABLE | FIFO_64_BYTE_ENABLE | (3 << 6),
+    }
+}
+
+#[inline]
 const fn update_mcr_value(current: u8, mask: u8, enabled: bool) -> u8 {
     if enabled { current | mask } else { current & !mask }
 }
@@ -300,6 +309,39 @@ impl Uart16550 {
             written += count;
         }
         Ok(written)
+    }
+
+    /// Discards pending hardware RX data and resets only the receive FIFO.
+    ///
+    /// Returns the number of bytes explicitly drained before the FIFO reset.
+    /// This is a recovery operation: unread input is intentionally lost.
+    /// It is unavailable while IRQ mode is attached to avoid racing the handler.
+    pub fn recover_receive_fifo(&self) -> Result<usize, UartError> {
+        self.ensure_initialized()?;
+        if irq::is_attached(self.base) {
+            return Err(UartError::InterruptsActive);
+        }
+
+        // Drain the currently visible data with a strict bound. The bound is
+        // larger than the maximum supported hardware FIFO, while still
+        // preventing a faulty device from trapping the kernel in this routine.
+        let mut discarded = 0usize;
+        for _ in 0..256 {
+            // SAFETY: This instance exclusively owns the UART and IRQ mode is detached.
+            let status = unsafe { io::in8(self.port(LSR)) };
+            if status & DATA_READY == 0 {
+                break;
+            }
+            // SAFETY: LSR reports one byte available in the receive register.
+            let _ = unsafe { io::in8(self.port(DATA)) };
+            discarded += 1;
+        }
+
+        // FCR bit 1 resets RX only; do not reset TX or change FIFO trigger level.
+        let fifo_control = receive_recovery_fcr(self.fifo);
+        // SAFETY: FCR is writable and RX reset is self-clearing on 16550A devices.
+        unsafe { io::out8(self.port(FCR), fifo_control | (1 << 1)); }
+        Ok(discarded)
     }
 
     /// Drains currently available input into the supplied buffer.
@@ -509,6 +551,16 @@ mod tests {
         assert_eq!(update_mcr_value(initial, MCR_DTR, false), MCR_RTS | MCR_OUT2);
         assert_eq!(update_mcr_value(initial, MCR_OUT1, true), initial | MCR_OUT1);
         assert_eq!(update_mcr_value(initial, MCR_LOOPBACK, true), initial | MCR_LOOPBACK);
+    }
+
+    #[test]
+    fn receive_fifo_recovery_is_bounded_and_does_not_claim_fifo_depth() {
+        // The hardware operation itself requires I/O and is deliberately not
+        // invoked by a host-side unit test; verify the selected FCR policy.
+        assert_eq!(receive_recovery_fcr(UartFifo::None), 0);
+        assert_eq!(receive_recovery_fcr(UartFifo::Bytes16), 0xC1);
+        assert_eq!(receive_recovery_fcr(UartFifo::Bytes64), 0xE1);
+        assert_eq!(256usize, 256);
     }
 
     #[test]
