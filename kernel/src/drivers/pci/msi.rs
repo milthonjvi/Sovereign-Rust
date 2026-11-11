@@ -105,14 +105,18 @@ impl MsixCapability {
             return Err(ConfigError::OutOfRange);
         }
         let offset = capability.offset as u16;
-        if offset < 0x40 || offset > MAX_STANDARD_CAPABILITY_OFFSET || offset & 3 != 0 {
+        if offset < 0x40
+            || offset > MAX_STANDARD_CAPABILITY_OFFSET
+            || offset & 3 != 0
+            || offset + 8 >= PCI_CONFIG_SIZE
+        {
             return Err(ConfigError::OutOfRange);
         }
 
-        let header = io.read_u32(address, offset)?;
+        let header = read_standard(io, address, offset)?;
         let control = (header >> 16) as u16;
-        let table = io.read_u32(address, offset + 4)?;
-        let pba = io.read_u32(address, offset + 8)?;
+        let table = read_standard(io, address, offset + 4)?;
+        let pba = read_standard(io, address, offset + 8)?;
         let table_bar = (table & 0x7) as u8;
         let pba_bar = (pba & 0x7) as u8;
         let table_offset = table & !0x7;
