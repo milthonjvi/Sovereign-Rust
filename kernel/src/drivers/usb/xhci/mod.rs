@@ -42,6 +42,9 @@ impl<'a,const N:usize>XhciProducerRing<'a,N>{
  /// contiguous, coherent, 64-byte aligned, and remain pinned for the ring lifetime.
  pub unsafe fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
   if N<2||physical_base&0x3f!=0{return Err(XhciError::InvalidRing)}
+  let bytes=N.checked_mul(TRB_SIZE).ok_or(XhciError::InvalidRing)?;
+  super::dma::DmaConstraints::xhci_64bit(64).validate(physical_base,bytes,true)
+   .map_err(|_|XhciError::InvalidDmaAddress)?;
   for entry in entries.iter_mut(){unsafe{core::ptr::write_volatile(entry,Trb::EMPTY);}}
   let mut ring=Self{entries,physical_base,enqueue:0,cycle:true,in_flight:0};
   ring.write_link();Ok(ring)
@@ -97,6 +100,9 @@ impl<'a,const N:usize>XhciEventRing<'a,N>{
  /// pinned/coherent, and the controller must be stopped during initialization.
  pub unsafe fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
   if N==0||physical_base&0x3f!=0{return Err(XhciError::InvalidRing)}
+  let bytes=N.checked_mul(TRB_SIZE).ok_or(XhciError::InvalidRing)?;
+  super::dma::DmaConstraints::xhci_64bit(64).validate(physical_base,bytes,true)
+   .map_err(|_|XhciError::InvalidDmaAddress)?;
   for entry in entries.iter_mut(){unsafe{core::ptr::write_volatile(entry,Trb::EMPTY);}}
   Ok(Self{entries,physical_base,dequeue:0,cycle:true})
  }
