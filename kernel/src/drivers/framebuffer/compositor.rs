@@ -1,6 +1,9 @@
 //! Fixed-capacity software layer compositor.
 //!
 //! Layers are borrowed image views in slot order (low slot to high slot).
+//! Higher slot indices are drawn later and therefore appear above lower slots.
+//! Reusing a vacant slot preserves slot-based ordering; it does not implicitly
+//! raise that layer above layers already occupying higher slots.
 //! Rendering is damage-driven: each dirty region is restored to the compositor
 //! background and every intersecting visible layer is composited over it.
 //! No heap allocation or implicit framebuffer ownership is required.
@@ -77,7 +80,7 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         !self.dirty.is_empty()
     }
 
-    /// Add a visible image layer at the topmost occupied slot.
+    /// Add a visible image layer in the first available slot.
     pub fn add_layer(
         &mut self,
         image: ImageView<'a>,
