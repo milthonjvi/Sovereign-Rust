@@ -4,6 +4,13 @@ use crate::drivers::input::event::{InputEvent, KeyCode};
 pub struct Set1Decoder { extended: bool, pause_remaining: u8, keys_down: [u64; 4] }
 impl Set1Decoder {
  pub const fn new() -> Self { Self { extended: false, pause_remaining: 0, keys_down: [0; 4] } }
+ /// Discards incomplete E0/E1 framing after a controller transport error.
+ /// Key-down state is retained because the corrupt byte may not identify
+ /// which physical key transition was lost.
+ pub fn reset_stream(&mut self) {
+  self.extended = false;
+  self.pause_remaining = 0;
+ }
  pub fn feed(&mut self, byte: u8) -> Option<InputEvent> {
   if self.pause_remaining != 0 { self.pause_remaining -= 1; return None; }
   if byte == 0xE0 { self.extended = true; return None; }
@@ -53,6 +60,12 @@ mod tests {
   assert_eq!(d.feed(0x1E),Some(InputEvent::Key{code:KeyCode::A,pressed:true,repeat:false}));
   assert_eq!(d.feed(0x1E),Some(InputEvent::Key{code:KeyCode::A,pressed:true,repeat:true}));
   assert_eq!(d.feed(0x9E),Some(InputEvent::Key{code:KeyCode::A,pressed:false,repeat:false}));
+ }
+ #[test] fn reset_discards_incomplete_extended_prefix() {
+  let mut d=Set1Decoder::new();
+  assert_eq!(d.feed(0xE0),None);
+  d.reset_stream();
+  assert_eq!(d.feed(0x48),Some(InputEvent::Key{code:KeyCode::Keypad8,pressed:true,repeat:false}));
  }
  #[test] fn extended_navigation() {
   let mut d=Set1Decoder::new(); assert_eq!(d.feed(0xE0),None);
