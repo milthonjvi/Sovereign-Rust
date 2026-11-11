@@ -12,7 +12,7 @@ use crate::drivers::input::event::InputEvent;
 use crate::drivers::input::pipeline::Ps2InputPipeline;
 use crate::drivers::input::ps2::Ps2Controller;
 use crate::drivers::input::queue::{SpscConsumer, SpscQueue};
-use crate::interrupts::dispatch::{self, InterruptHandler};
+use crate::interrupts::dispatch;
 
 const KEYBOARD_VECTOR: u8 = 0x21;
 const MOUSE_VECTOR: u8 = 0x2C;
@@ -120,10 +120,6 @@ impl<const N: usize> Ps2IrqService<N> {
         self.header.context.store(ptr::null_mut(), Ordering::Release);
         Ok(())
     }
-
-    pub const fn controller(&self) -> &'static Ps2Controller {
-        self.controller
-    }
 }
 
 unsafe fn invoke_service<const N: usize>(context: *mut (), budget: usize) {
@@ -151,10 +147,6 @@ extern "C" fn ps2_irq_handler(_vector: u8) {
 
 pub fn legacy_irqs_registered() -> bool {
     !ACTIVE_PS2_CONTEXT.load(Ordering::Acquire).is_null()
-}
-
-pub const fn legacy_irq_handler() -> InterruptHandler {
-    ps2_irq_handler
 }
 
 #[cfg(test)]
