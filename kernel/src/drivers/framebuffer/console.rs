@@ -58,6 +58,51 @@ impl<'a> FramebufferConsole<'a> {
         (self.columns, self.rows)
     }
 
+    /// Move the insertion point to a cell inside the console.
+    ///
+    /// Returns false and leaves the position unchanged when the coordinates
+    /// are outside the usable text grid.
+    pub fn set_cursor_position(&mut self, column: usize, row: usize) -> bool {
+        if column >= self.columns || row >= self.rows {
+            return false;
+        }
+        self.erase_cursor_if_visible();
+        self.column = column;
+        self.row = row;
+        self.draw_cursor_if_visible();
+        true
+    }
+
+    /// Clear the current text row and move the insertion point to its start.
+    pub fn clear_line(&mut self) {
+        self.erase_cursor_if_visible();
+        let y = self.row * FONT_LINE_HEIGHT;
+        self.surface.fill_rect(
+            0,
+            y,
+            self.columns * FONT_ADVANCE,
+            FONT_LINE_HEIGHT,
+            self.background,
+        );
+        self.column = 0;
+        self.draw_cursor_if_visible();
+    }
+
+    /// Clear from the insertion point to the end of the current text row.
+    pub fn clear_to_end_of_line(&mut self) {
+        self.erase_cursor_if_visible();
+        let x = self.column * FONT_ADVANCE;
+        let y = self.row * FONT_LINE_HEIGHT;
+        self.surface.fill_rect(
+            x,
+            y,
+            (self.columns - self.column) * FONT_ADVANCE,
+            FONT_LINE_HEIGHT,
+            self.background,
+        );
+        self.draw_cursor_if_visible();
+    }
+
     /// Whether the insertion cursor is currently rendered.
     pub const fn cursor_visible(&self) -> bool {
         self.cursor_visible
