@@ -230,3 +230,108 @@ impl BootHidPoller{
   BootMouseReport::parse(&bytes[..count])
  }
 }
+
+
+// Generic HID report-descriptor accounting. It deliberately parses item
+// structure rather than assuming boot-keyboard layouts, and uses fixed storage.
+pub const MAX_HID_REPORT_IDS:usize=16;
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct HidReportLayout{pub report_id:u8,pub input_bits:u32,pub output_bits:u32,pub feature_bits:u32}
+impl HidReportLayout{
+ pub const EMPTY:Self=Self{report_id:0,input_bits:0,output_bits:0,feature_bits:0};
+ pub const fn input_bytes(self)->u32{(self.input_bits+7)/8+(self.report_id!=0)as u32}
+ pub const fn output_bytes(self)->u32{(self.output_bits+7)/8+(self.report_id!=0)as u32}
+ pub const fn feature_bytes(self)->u32{(self.feature_bits+7)/8+(self.report_id!=0)as u32}
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+struct HidGlobalState{report_size:u32,report_count:u32,report_id:u8}
+impl HidGlobalState{const EMPTY:Self=Self{report_size:0,report_count:0,report_id:0};}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct HidReportDescriptor{reports:[Option<HidReportLayout>;MAX_HID_REPORT_IDS],len:u8}
+impl HidReportDescriptor{
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  let mut out=Self{reports:[None;MAX_HID_REPORT_IDS],len:0};
+  let mut state=HidGlobalState::EMPTY;
+  let mut stack=[HidGlobalState::EMPTY;4];let mut depth=0usize;let mut offset=0usize;
+  while offset<bytes.len(){
+   let prefix=bytes[offset];offset+=1;
+   if prefix==0xfe{
+    if bytes.len().saturating_sub(offset)<2{return Err(UsbError::MalformedDescriptor)}
+    let size=bytes[offset] as usize;offset+=2;
+    if size>bytes.len().saturating_sub(offset){return Err(UsbError::MalformedDescriptor)}
+    offset+=size;continue
+   }
+   let size=match prefix&3{0=>0,1=>1,2=>2,_=>4};
+   if size>bytes.len().saturating_sub(offset){return Err(UsbError::MalformedDescriptor)}
+   let mut value=0u32;
+   for i in 0..size{value|=(bytes[offset+i] as u32)<<(i*8);}
+   offset+=size;
+   let item_type=(prefix>>2)&3;let tag=prefix>>4;
+   if item_type!=1{continue}
+   match tag{
+    7=>state.report_size=value,
+    8=>{
+     if value==0||value>255{return Err(UsbError::MalformedDescriptor)}
+     state.report_id=value as u8;
+    }
+    9=>state.report_count=value,
+    10=>{
+     if depth>=stack.len(){return Err(UsbError::NoResources)}
+     stack[depth]=state;depth+=1;
+    }
+    11=>{
+     if depth==0{return Err(UsbError::MalformedDescriptor)}
+     depth-=1;state=stack[depth];
+    }
+    _=>{}
+   }
+   if item_type==0&&(tag==8||tag==9||tag==11){
+    if state.report_size==0||state.report_count==0{return Err(UsbError::MalformedDescriptor)}
+    let bits=state.report_size.checked_mul(state.report_count).ok_or(UsbError::NoResources)?;
+    let index=out.find_or_insert(state.report_id)?;
+    let layout=out.reports[index].as_mut().ok_or(UsbError::MalformedDescriptor)?;
+    let target=match tag{8=>&mut layout.input_bits,9=>&mut layout.output_bits,_=>&mut layout.feature_bits};
+    *target=target.checked_add(bits).ok_or(UsbError::NoResources)?;
+   }
+  }
+  if depth!=0||out.len==0{return Err(UsbError::MalformedDescriptor)}
+  Ok(out)
+ }
+ fn find_or_insert(&mut self,id:u8)->Result<usize,UsbError>{
+  for i in 0..self.len as usize{if self.reports[i].map(|r|r.report_id)==Some(id){return Ok(i)}}
+  if self.len as usize>=MAX_HID_REPORT_IDS{return Err(UsbError::NoResources)}
+  let i=self.len as usize;self.reports[i]=Some(HidReportLayout{report_id:id,..HidReportLayout::EMPTY});self.len+=1;Ok(i)
+ }
+ pub fn report(&self,id:u8)->Option<HidReportLayout>{
+  self.reports[..self.len as usize].iter().flatten().find(|r|r.report_id==id).copied()
+ }
+ pub fn iter(&self)->impl Iterator<Item=HidReportLayout>+'_{
+  self.reports[..self.len as usize].iter().filter_map(|r|*r)
+ }
+ pub const fn len(&self)->usize{self.len as usize}
+}
+
+#[cfg(test)]
+mod report_descriptor_tests{
+ use super::*;
+ #[test]fn accounts_input_output_and_feature_reports(){
+  // Report Size=8, Report Count=3, then Input; Count=2, then Output.
+  let descriptor=[0x75,8,0x95,3,0x81,2,0x95,2,0x91,2];
+  let parsed=HidReportDescriptor::parse(&descriptor).unwrap();
+  let report=parsed.report(0).unwrap();
+  assert_eq!(report.input_bits,24);assert_eq!(report.output_bits,16);
+  assert_eq!(report.input_bytes(),3);assert_eq!(report.output_bytes(),2);
+ }
+ #[test]fn separates_report_ids_and_includes_id_prefix_byte(){
+  let descriptor=[0x85,1,0x75,8,0x95,2,0x81,2,0x85,2,0x95,4,0x91,2];
+  let parsed=HidReportDescriptor::parse(&descriptor).unwrap();
+  assert_eq!(parsed.report(1).unwrap().input_bytes(),3);
+  assert_eq!(parsed.report(2).unwrap().output_bytes(),5);
+ }
+ #[test]fn validates_global_push_pop_and_malformed_streams(){
+  let descriptor=[0x75,8,0xa4,0x95,2,0xb4,0x95,1,0x81,2];
+  assert_eq!(HidReportDescriptor::parse(&descriptor).unwrap().report(0).unwrap().input_bits,8);
+  assert_eq!(HidReportDescriptor::parse(&[0xb4]),Err(UsbError::MalformedDescriptor));
+  assert_eq!(HidReportDescriptor::parse(&[0x75]),Err(UsbError::MalformedDescriptor));
+ }
+}
