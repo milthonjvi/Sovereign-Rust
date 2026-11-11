@@ -265,39 +265,62 @@ impl E1000TxQueue {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct E1000RxQueue {
     cursor: RingCursor,
+    recycle: RingCursor,
+    outstanding: u16,
 }
 
 impl E1000RxQueue {
     pub fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
-        Ok(Self { cursor: RingCursor::new(descriptor_count)? })
+        Ok(Self { cursor: RingCursor::new(descriptor_count)?, recycle: RingCursor::new(descriptor_count)?, outstanding: 0 })
     }
 
-    /// Consume one completed descriptor and return it to hardware. The packet
-    /// remains in its DMA buffer; the caller must inspect/copy it before reuse.
+    /// Consume one completed descriptor without returning its buffer to hardware.
+    /// The caller owns the packet buffer until recycle() succeeds.
     pub fn poll<R: E1000Registers>(
         &mut self,
         registers: &mut R,
-        descriptors: &mut [RxDescriptor],
+        descriptors: &[RxDescriptor],
     ) -> Result<Option<(u16, super::e1000_descriptor::RxCompletion)>, E1000QueueError<R::Error>> {
         if descriptors.len() != self.cursor_count() {
             return Err(E1000QueueError::InvalidRing);
+        }
+        if self.outstanding as usize >= descriptors.len() {
+            return Ok(None);
         }
         let index = self.cursor.index() as usize;
         registers.dma_read_barrier();
         let Some(completion) = descriptors[index].completion() else {
             return Ok(None);
         };
+        self.cursor.advance();
+        self.outstanding += 1;
+        Ok(Some((index as u16, completion)))
+    }
 
-        let completed_descriptor = descriptors[index];
-        let buffer_dma = completed_descriptor.buffer_address;
-        descriptors[index] = RxDescriptor::for_buffer(buffer_dma);
+    /// Return a processed RX buffer to hardware. Recycling must follow descriptor
+    /// order so RDT never advances past an unreleased buffer.
+    pub fn recycle<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &mut [RxDescriptor],
+        index: u16,
+    ) -> Result<(), E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count() || self.outstanding == 0
+            || index != self.recycle.index()
+        {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        let slot = index as usize;
+        let completed_descriptor = descriptors[slot];
+        descriptors[slot] = RxDescriptor::for_buffer(completed_descriptor.buffer_address);
         registers.dma_write_barrier();
         if let Err(error) = registers.write32(REG_RDT, index as u32) {
-            descriptors[index] = completed_descriptor;
+            descriptors[slot] = completed_descriptor;
             return Err(E1000QueueError::Register(error));
         }
-        self.cursor.advance();
-        Ok(Some((index as u16, completion)))
+        self.recycle.advance();
+        self.outstanding -= 1;
+        Ok(())
     }
 
     const fn cursor_count(&self) -> usize {
@@ -420,10 +443,12 @@ mod tests {
         assert_eq!(queue.poll(&mut regs, &mut descriptors), Ok(None));
         descriptors[0].length = 96;
         descriptors[0].status = super::super::e1000::RXD_STATUS_DD | super::super::e1000::RXD_STATUS_EOP;
-        let (index, completion) = queue.poll(&mut regs, &mut descriptors).unwrap().unwrap();
+        let (index, completion) = queue.poll(&mut regs, &descriptors).unwrap().unwrap();
         assert_eq!(index, 0);
         assert_eq!(completion.length, 96);
         assert_eq!(descriptors[0].buffer_address, 0xa000);
+        assert_eq!(descriptors[0].status & super::super::e1000::RXD_STATUS_DD, super::super::e1000::RXD_STATUS_DD);
+        assert!(queue.recycle(&mut regs, &mut descriptors, index).is_ok());
         assert_eq!(descriptors[0].status, 0);
         assert!(regs.writes.contains(&(REG_RDT, 0)));
     }
