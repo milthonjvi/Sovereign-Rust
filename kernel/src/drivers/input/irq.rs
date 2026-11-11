@@ -35,10 +35,10 @@ pub enum Ps2IrqError {
     InvalidDrainBudget,
     ContextAlreadyInstalled,
     HandlerAlreadyRegistered,
-    HandlerNotRegistered,
 }
 
-/// Owns the IRQ-side pipeline. Move the returned consumer to exactly one task.
+/// Owns a permanent IRQ-side pipeline. Once registered, the service remains
+/// active for the kernel lifetime. Move the returned consumer to exactly one task.
 pub struct Ps2IrqService<const N: usize> {
     header: IrqContextHeader,
     controller: &'static Ps2Controller,
@@ -106,26 +106,7 @@ impl<const N: usize> Ps2IrqService<N> {
         Ok(())
     }
 
-    /// Unregisters both callbacks after the caller has quiesced the hardware.
-    ///
-    /// # Safety
-    /// Mask IRQ1/IRQ12, disable both i8042 IRQ-enable bits, and guarantee no
-    /// callback is executing before calling this method.
-    pub unsafe fn unregister_legacy_irqs(&'static self) -> Result<(), Ps2IrqError> {
-        dispatch::unregister(KEYBOARD_VECTOR, ps2_irq_handler)
-            .map_err(|_| Ps2IrqError::HandlerNotRegistered)?;
-        if dispatch::unregister(MOUSE_VECTOR, ps2_irq_handler).is_err() {
-            let _ = dispatch::register(KEYBOARD_VECTOR, ps2_irq_handler);
-            return Err(Ps2IrqError::HandlerNotRegistered);
-        }
 
-        let expected = &self.header as *const IrqContextHeader as *mut IrqContextHeader;
-        ACTIVE_PS2_CONTEXT
-            .compare_exchange(expected, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| Ps2IrqError::ContextAlreadyInstalled)?;
-        self.header.context.store(ptr::null_mut(), Ordering::Release);
-        Ok(())
-    }
 }
 
 unsafe fn invoke_service<const N: usize>(context: *mut (), budget: usize) {
