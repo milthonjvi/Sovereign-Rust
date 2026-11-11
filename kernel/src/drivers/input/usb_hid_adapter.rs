@@ -21,7 +21,7 @@ impl Default for InputDeviceIdAllocator { fn default() -> Self { Self::new() } }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HidPublishStats { pub published: u8, pub dropped: u8 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HidInputError { MalformedReport }
+pub enum HidInputError { MalformedReport, QueueUnavailable }
 
 /// One adapter per configured USB boot-keyboard interface/collection.
 pub struct UsbBootKeyboardAdapter {
@@ -133,7 +133,7 @@ impl UsbBootMouseAdapter {
         if self.resync_required {
             if p.push(InputEvent::DeviceStateReset { device: self.device }).is_err() {
                 self.dropped_events = self.dropped_events.saturating_add(1);
-                return Err(HidInputError::MalformedReport);
+                return Err(HidInputError::QueueUnavailable);
             }
             self.previous_buttons = None;
             self.resync_required = false;
