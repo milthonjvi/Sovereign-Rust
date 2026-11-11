@@ -61,10 +61,11 @@ impl FatVolume {
 
 fn read_fat_bytes<D: BlockDevice>(device: &mut D, volume: &FatVolume, offset: u64, fat_index: u8, out: &mut [u8], scratch: &mut [u8]) -> Result<(), FatError> {
     let bps = volume.bpb.bytes_per_sector as usize;
-    if scratch.len() < bps * 2 { return Err(FatError::FatSectorBufferTooSmall); }
     let sector_index = offset / bps as u64;
     let within = (offset % bps as u64) as usize;
     let count = if within + out.len() > bps { 2u64 } else { 1u64 };
+    let required = bps.checked_mul(count as usize).ok_or(FatError::FatSectorBufferTooSmall)?;
+    if scratch.len() < required { return Err(FatError::FatSectorBufferTooSmall); }
     if fat_index >= volume.bpb.fat_count { return Err(FatError::FatEntryIo); }
     let fat_start = (volume.bpb.reserved_sectors as u64)
         .checked_add((fat_index as u64).checked_mul(volume.bpb.sectors_per_fat as u64).ok_or(FatError::FatEntryIo)?)
@@ -341,6 +342,24 @@ mod range_tests {
         fn write_blocks(&mut self, _: BlockRange, _: &[u8]) -> Result<(), BlockError> { Err(BlockError::UnsupportedOperation) }
         fn flush(&mut self) -> Result<(), BlockError> { Ok(()) }
     }
+    #[test]
+    fn fat_entry_that_fits_one_sector_needs_only_one_sector_of_scratch() {
+        let bpb = FatBpb {
+            kind: FatKind::Fat12, bytes_per_sector: 512, sectors_per_cluster: 1,
+            reserved_sectors: 1, fat_count: 1, root_entry_count: 16,
+            total_sectors: 6, sectors_per_fat: 1, root_directory_sectors: 1,
+            first_data_sector: 3, data_sectors: 3, cluster_count: 3,
+            root_cluster: None, fs_info_sector: None, backup_boot_sector: None,
+            volume_id: 0, fat_mirroring_enabled: true, active_fat: 0,
+        };
+        let volume = FatVolume::new(bpb, BlockGeometry { block_count: 6, block_size: 512 }).unwrap();
+        let mut disk = MemoryDisk([0; 3072]);
+        disk.0[512 + 3] = 0xFF;
+        disk.0[512 + 4] = 0x0F;
+        let mut scratch = [0u8; 512];
+        assert_eq!(read_fat_entry_from_copy(&mut disk, &volume, 0, 2, &mut scratch), Ok(FatChainValue::End));
+    }
+
     #[test]
     fn reads_range_across_cluster_boundary() {
         let bpb = FatBpb {
