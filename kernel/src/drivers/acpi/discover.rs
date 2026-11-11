@@ -145,7 +145,8 @@ impl AcpiTables {
             }
         }
 
-        Ok(found)    }
+        Ok(found)
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +237,36 @@ mod tests {
             _ => None,
         }).unwrap();
 
+        assert_eq!(result.facs, Some(0x5000));
+    }
+
+    #[test]
+    fn uses_dedicated_mapper_for_facs() {
+        let root = make_xsdt(0x2000);
+        let mut fadt = make_fadt(0, 0);
+        fadt[36..40].copy_from_slice(&0x5000u32.to_le_bytes());
+        fadt[9] = 0;
+        let checksum = 0u8.wrapping_sub(fadt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        fadt[9] = checksum;
+        let mut facs = std::vec![0u8; 64];
+        facs[0..4].copy_from_slice(b"FACS");
+        facs[4..8].copy_from_slice(&64u32.to_le_bytes());
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover_with_mappers(
+            &rsdp,
+            |address| match address {
+                0x1000 => Some(root.as_slice()),
+                0x2000 => Some(fadt.as_slice()),
+                _ => None,
+            },
+            |address| if address == 0x5000 { Some(facs.as_slice()) } else { None },
+        ).unwrap();
         assert_eq!(result.facs, Some(0x5000));
     }
 
