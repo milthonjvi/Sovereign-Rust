@@ -134,6 +134,18 @@ impl Facs {
         })
     }
 
+    /// Calculate an acquire attempt from the parsed FACS lock snapshot.
+    /// The result must be committed to firmware memory with atomic CAS.
+    pub const fn global_lock_acquire_transition(&self) -> GlobalLockAcquire {
+        GlobalLock::acquire_transition(self.global_lock)
+    }
+
+    /// Calculate release from the parsed FACS lock snapshot.
+    /// The result must be committed to firmware memory with atomic CAS.
+    pub const fn global_lock_release_transition(&self) -> GlobalLockRelease {
+        GlobalLock::release_transition(self.global_lock)
+    }
+
     pub const fn supports_s4_bios(&self) -> bool {
         self.flags & FLAG_S4_BIOS != 0
     }
