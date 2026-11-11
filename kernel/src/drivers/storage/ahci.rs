@@ -105,8 +105,9 @@ pub fn build_prdt(physical:u64,byte_len:usize,entries:&mut[AhciPrdtEntry],suppor
     Ok(count)
 }
 
-pub fn command_header(table_phys:u64,prdt_count:u16,write:bool,command_fis_dwords:u8)->Result<AhciCommandHeader,AhciError>{
+pub fn command_header(table_phys:u64,prdt_count:u16,write:bool,command_fis_dwords:u8,supports_64bit_dma:bool)->Result<AhciCommandHeader,AhciError>{
     if table_phys&0x7F!=0 || command_fis_dwords<5 || command_fis_dwords>16{return Err(AhciError::InvalidAlignment);}
+    if !supports_64bit_dma && table_phys>u32::MAX as u64{return Err(AhciError::UnsupportedAddressing);}
     Ok(AhciCommandHeader{flags:command_fis_dwords as u16|if write{1<<6}else{0},
         prdt_length:prdt_count,transferred_bytes:0,command_table_base:table_phys as u32,
         command_table_base_upper:(table_phys>>32) as u32,reserved:[0;4]})
@@ -248,11 +249,13 @@ pub fn stop_port<R:AhciRegisterIo>(io:&mut R,base:u32,polls:u32)->Result<(),Ahci
 /// DMA-mapped, physically contiguous, command-list aligned to 1 KiB and FIS
 /// receive memory aligned to 256 bytes.
 pub fn configure_port<R:AhciRegisterIo>(
-    io:&mut R,base:u32,memory:AhciPortMemory,interrupt_enable:u32,polls:u32,
+    io:&mut R,base:u32,memory:AhciPortMemory,interrupt_enable:u32,supports_64bit_dma:bool,polls:u32,
 )->Result<(),AhciError>{
     if memory.command_list_phys&0x3FF!=0 || memory.received_fis_phys&0xFF!=0
         || memory.command_list_phys.checked_add(1024).is_none()
-        || memory.received_fis_phys.checked_add(256).is_none(){
+        || memory.received_fis_phys.checked_add(256).is_none()
+        || (!supports_64bit_dma && (memory.command_list_phys.checked_add(1024).map_or(true,|v|v>u32::MAX as u64+1)
+            || memory.received_fis_phys.checked_add(256).map_or(true,|v|v>u32::MAX as u64+1))){
         return Err(AhciError::InvalidPortMemory);
     }
     stop_port(io,base,polls)?;
@@ -272,8 +275,10 @@ pub fn start_port<R:AhciRegisterIo>(io:&mut R,base:u32,polls:u32)->Result<(),Ahc
     wait_register(io,reg,CR|FR,true,polls)?;
     let command=io.read32(reg)?;
     io.write32(reg,command|FRE)?;
-    io.write32(reg,(command|FRE)|ST)?;
-    Ok(())
+    wait_register(io,reg,FR,false,polls)?;
+    let command=io.read32(reg)?;
+    io.write32(reg,command|ST)?;
+    wait_register(io,reg,CR,false,polls)
 }
 
 /// Submit a prepared command-table slot. For NCQ, SACT is set before CI.
@@ -327,7 +332,13 @@ mod port_tests {
         fn read32(&mut self, offset:u32)->Result<u32,AhciError>{Ok(self.0[(offset/4) as usize])}
         fn write32(&mut self, offset:u32,value:u32)->Result<(),AhciError>{
             let slot=&mut self.0[(offset/4) as usize];
-            if offset==0x10 || offset==0x30 { *slot &= !value; } else { *slot=value; }
+            if offset==0x10 || offset==0x30 { *slot &= !value; }
+            else if offset==0x18 {
+                let mut next=value;
+                if value&(1<<4)!=0 { next|=1<<14; } else { next&=!(1<<14); }
+                if value&1!=0 { next|=1<<15; } else { next&=!(1<<15); }
+                *slot=next;
+            } else { *slot=value; }
             Ok(())
         }
     }
@@ -335,7 +346,7 @@ mod port_tests {
     fn configures_starts_and_issues_port_command() {
         let mut regs=Registers([0;64]);
         regs.0[0x18/4]=(1<<0)|(1<<4);
-        configure_port(&mut regs,0,AhciPortMemory{command_list_phys:0x4000,received_fis_phys:0x5000},0xFFFF,8).unwrap();
+        configure_port(&mut regs,0,AhciPortMemory{command_list_phys:0x4000,received_fis_phys:0x5000},0xFFFF,true,8).unwrap();
         assert_eq!(regs.0[0],0x4000);
         assert_eq!(regs.0[2],0x5000);
         start_port(&mut regs,0,8).unwrap();
@@ -350,6 +361,6 @@ mod port_tests {
     #[test]
     fn rejects_unaligned_port_dma_memory() {
         let mut regs=Registers([0;64]);
-        assert_eq!(configure_port(&mut regs,0,AhciPortMemory{command_list_phys:0x4100,received_fis_phys:0x5000},0,1),Err(AhciError::InvalidPortMemory));
+        assert_eq!(configure_port(&mut regs,0,AhciPortMemory{command_list_phys:0x4100,received_fis_phys:0x5000},0,true,1),Err(AhciError::InvalidPortMemory));
     }
 }
