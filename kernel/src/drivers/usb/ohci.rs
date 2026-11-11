@@ -122,7 +122,8 @@ impl OhciController{
  }
  pub fn start<I:OhciRegisterIo>(&mut self,io:&mut I)->Result<(),UsbError>{
   if self.state!=OhciState::Reset||!self.hcca_configured{return Err(UsbError::Unsupported)}
-  let control=io.read32(CONTROL)?;\n  io.write32(CONTROL,(control&!CONTROL_HCFS_MASK)|HCFS_OPERATIONAL|(1<<3)|(1<<4))?;
+  let control=io.read32(CONTROL)?;
+  io.write32(CONTROL,(control&!CONTROL_HCFS_MASK)|HCFS_OPERATIONAL|(1<<3)|(1<<4))?;
   io.write32(INTERRUPT_ENABLE,(1<<31)|(1<<1)|(1<<6))?;Ok(())
  }
  pub fn poll_running<I:OhciRegisterIo>(&mut self,io:&I)->Result<bool,UsbError>{
