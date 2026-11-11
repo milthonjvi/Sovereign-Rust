@@ -184,6 +184,38 @@ impl EfiMemoryMap<'_> {
     pub const fn len(&self) -> usize { self.byte_len / self.descriptor_stride }
     pub const fn is_empty(&self) -> bool { self.byte_len == 0 }
 
+    /// Check whether one physical byte range is wholly contained in a
+    /// descriptor of the requested UEFI memory type.
+    ///
+    /// This is used to verify that boot-owned buffers and the loaded kernel
+    /// image still belong to EFI_LOADER_DATA before the kernel adopts them.
+    pub fn contains_range_with_type(
+        &self,
+        physical_start: u64,
+        byte_len: u64,
+        memory_type: u32,
+    ) -> Result<bool, SovereignBootError> {
+        if byte_len == 0 {
+            return Ok(false);
+        }
+        let requested_end = physical_start.checked_add(byte_len)
+            .ok_or(SovereignBootError::InvalidMemoryMap)?;
+        for index in 0..self.len() {
+            let descriptor = self.descriptor(index)?;
+            let descriptor_bytes = descriptor.number_of_pages.checked_mul(4096)
+                .ok_or(SovereignBootError::InvalidMemoryMap)?;
+            let descriptor_end = descriptor.physical_start.checked_add(descriptor_bytes)
+                .ok_or(SovereignBootError::InvalidMemoryMap)?;
+            if descriptor.memory_type == memory_type
+                && physical_start >= descriptor.physical_start
+                && requested_end <= descriptor_end
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Read one descriptor while respecting firmware-provided descriptor stride.
     pub fn descriptor(&self, index: usize) -> Result<EfiMemoryDescriptor, SovereignBootError> {
         if index >= self.len() { return Err(SovereignBootError::DescriptorOutOfRange); }
