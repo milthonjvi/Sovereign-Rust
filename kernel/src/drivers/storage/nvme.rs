@@ -378,3 +378,63 @@ mod tracker_tests{
         let c=tracker.allocate().unwrap();assert_ne!(c,b);assert_eq!(tracker.in_flight(),2);
     }
 }
+
+
+/// Admin command: create an I/O completion queue (opcode 0x05).
+pub fn create_io_completion_queue_command(
+    cid:u16,qid:u16,depth:u32,queue_phys:u64,interrupts:bool,interrupt_vector:u16,
+)->Result<NvmeCommand,NvmeError>{
+    if qid==0 || depth<2 || depth>65_536 || queue_phys&0xFFF!=0
+        || queue_phys.checked_add(depth as u64*16).is_none(){
+        return Err(NvmeError::InvalidQueueDepth);
+    }
+    Ok(NvmeCommand{opcode:0x05,command_id:cid,prp1:queue_phys,
+        cdw10:qid as u32|((depth-1)<<16),
+        cdw11:1|((interrupts as u32)<<1)|((interrupt_vector as u32)<<16),
+        ..NvmeCommand::default()})
+}
+
+/// Admin command: create an I/O submission queue (opcode 0x01).
+pub fn create_io_submission_queue_command(
+    cid:u16,qid:u16,depth:u32,queue_phys:u64,completion_qid:u16,priority:u8,
+)->Result<NvmeCommand,NvmeError>{
+    if qid==0 || completion_qid==0 || depth<2 || depth>65_536
+        || priority>3 || queue_phys&0xFFF!=0
+        || queue_phys.checked_add(depth as u64*64).is_none(){
+        return Err(NvmeError::InvalidQueueDepth);
+    }
+    Ok(NvmeCommand{opcode:0x01,command_id:cid,prp1:queue_phys,
+        cdw10:qid as u32|((depth-1)<<16),
+        cdw11:1|((priority as u32)<<1)|((completion_qid as u32)<<16),
+        ..NvmeCommand::default()})
+}
+
+/// Admin Set Features (FID 0x07): request zero-based queue counts.
+pub fn set_number_of_queues_command(
+    cid:u16,submission_queues:u16,completion_queues:u16,
+)->Result<NvmeCommand,NvmeError>{
+    if submission_queues==0 || completion_queues==0{return Err(NvmeError::InvalidQueueDepth);}
+    Ok(NvmeCommand{opcode:0x09,command_id:cid,cdw10:0x07,
+        cdw11:((submission_queues as u32-1)<<16)|(completion_queues as u32-1),
+        ..NvmeCommand::default()})
+}
+
+#[cfg(test)]
+mod io_queue_command_tests{
+    use super::*;
+    #[test]
+    fn creates_io_queues_with_protocol_fields(){
+        let cq=create_io_completion_queue_command(1,2,64,0x4000,true,5).unwrap();
+        assert_eq!(cq.opcode,0x05);assert_eq!(cq.cdw10,2|((63)<<16));
+        assert_eq!(cq.cdw11,1|(1<<1)|(5<<16));
+        let sq=create_io_submission_queue_command(2,3,32,0x8000,2,1).unwrap();
+        assert_eq!(sq.opcode,0x01);assert_eq!(sq.cdw10,3|((31)<<16));
+        assert_eq!(sq.cdw11,1|(1<<1)|(2<<16));
+    }
+    #[test]
+    fn requests_supported_io_queue_counts(){
+        let cmd=set_number_of_queues_command(9,4,4).unwrap();
+        assert_eq!(cmd.opcode,0x09);assert_eq!(cmd.cdw10,0x07);
+        assert_eq!(cmd.cdw11,(3<<16)|3);
+    }
+}
