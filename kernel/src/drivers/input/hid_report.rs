@@ -363,6 +363,7 @@ pub struct HidReportDecoder {
     previous: [i32; MAX_HID_VALUES],
     initialized: [bool; MAX_HID_VALUES],
     contact_active: bool,
+    pointer_buttons_state: u32,
     resync_required: bool,
     pub dropped_events: u64,
 }
@@ -370,7 +371,8 @@ impl HidReportDecoder {
     pub const fn new(device: InputDeviceId) -> Self {
         Self {
             device, previous: [0; MAX_HID_VALUES], initialized: [false; MAX_HID_VALUES],
-            contact_active: false, resync_required: false, dropped_events: 0,
+            contact_active: false, pointer_buttons_state: 0,
+            resync_required: false, dropped_events: 0,
         }
     }
     pub const fn device_id(&self) -> InputDeviceId { self.device }
@@ -396,6 +398,7 @@ impl HidReportDecoder {
         self.previous = [0; MAX_HID_VALUES];
         self.initialized = [false; MAX_HID_VALUES];
         self.contact_active = false;
+        self.pointer_buttons_state = 0;
         self.resync_required = false;
     }
 
@@ -432,6 +435,7 @@ impl HidReportDecoder {
             self.previous = [0; MAX_HID_VALUES];
             self.initialized = [false; MAX_HID_VALUES];
             self.contact_active = false;
+            self.pointer_buttons_state = 0;
             self.resync_required = false;
         }
         let mut modifiers = 0u8;
@@ -449,7 +453,7 @@ impl HidReportDecoder {
         let mut pointer_x = 0i32;
         let mut pointer_y = 0i32;
         let mut pointer_changed = false;
-        let mut pointer_buttons = 0u32;
+        let mut pointer_buttons = self.pointer_buttons_state;
         let mut pointer_button_seen = false;
         let mut pointer_wheel_x = 0i16;
         let mut pointer_wheel_y = 0i16;
@@ -668,8 +672,10 @@ impl HidReportDecoder {
                     let slot = field.value_slot as usize + element;
                     let button = if field.is_variable() { field_usage(*field, element) }
                         else { self.previous[slot].max(0) as u16 };
-                    if self.previous[slot] != 0 && (1..=32).contains(&button) {
-                        pointer_buttons |= 1u32 << (button - 1);
+                    if (1..=32).contains(&button) {
+                        let mask = 1u32 << (button - 1);
+                        pointer_buttons &= !mask;
+                        if self.previous[slot] != 0 { pointer_buttons |= mask; }
                     }
                 }
             }
@@ -752,6 +758,7 @@ impl HidReportDecoder {
             }, producer, &mut stats);
         }
         if pointer_changed || pointer_button_seen {
+            self.pointer_buttons_state = pointer_buttons;
             self.emit(InputEvent::PointerMotion {
                 device: self.device, dx: pointer_x, dy: pointer_y,
                 wheel_x: pointer_wheel_x, wheel_y: pointer_wheel_y, buttons: pointer_buttons,
