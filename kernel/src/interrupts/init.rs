@@ -1,7 +1,7 @@
 //! Bootstrap CPU interrupt infrastructure initialization.
 //!
-//! This stage installs the kernel GDT/TSS, all 256 IDT fallback gates, the
-//! legacy PIC remap, and PIC IRQ gates. It intentionally leaves IF clear and
+//! This stage installs the kernel GDT/TSS, all 256 IDT gates, the legacy PIC,
+//! and a masked x2APIC backend when the BSP supports it. It intentionally leaves IF clear and
 //! every PIC line masked. Device drivers may register handlers and unmask
 //! individual lines only after their own state is ready.
 
@@ -95,6 +95,16 @@ unsafe fn initialize_inner() -> Result<(), InterruptInitError> {
         return Err(InterruptInitError::IncompleteIdt);
     }
 
+    // Remap and mask every legacy IRQ before loading the completed IDT.
+    // SAFETY: Exclusive PIC ownership, CPL 0, and IF clear are guaranteed.
+    let pic = unsafe { &mut *core::ptr::addr_of_mut!(LEGACY_PIC) };
+    unsafe { pic.initialize(0x20, 0x28) }
+        .map_err(|_| InterruptInitError::PicConfiguration)?;
+
+    // SAFETY: IDT is fully populated and has static storage duration.
+    let idt = unsafe { &*core::ptr::addr_of!(BOOTSTRAP_IDT) };
+    unsafe { idt.load() };
+
     // Enable the local x2APIC only when the processor advertises it. Every
     // local vector remains masked; vector 0xFF already has a dedicated IRETQ
     // gate, and the legacy PIC remains fully masked as a fallback.
@@ -110,15 +120,6 @@ unsafe fn initialize_inner() -> Result<(), InterruptInitError> {
         LOCAL_APIC_MODE.store(LOCAL_APIC_X2APIC, Ordering::Release);
     }
 
-    // Remap and mask every legacy IRQ before loading the completed IDT.
-    // SAFETY: Exclusive PIC ownership, CPL 0, and IF clear are guaranteed.
-    let pic = unsafe { &mut *core::ptr::addr_of_mut!(LEGACY_PIC) };
-    unsafe { pic.initialize(0x20, 0x28) }
-        .map_err(|_| InterruptInitError::PicConfiguration)?;
-
-    // SAFETY: IDT is fully populated and has static storage duration.
-    let idt = unsafe { &*core::ptr::addr_of!(BOOTSTRAP_IDT) };
-    unsafe { idt.load() };
     Ok(())
 }
 
