@@ -68,6 +68,11 @@ impl<'a, R: E1000Registers> E1000Device<'a, R> {
         }
         DmaBuffer::validate_rx_pool(rx_buffers)
             .map_err(|_| E1000DeviceError::InvalidBufferPool)?;
+        for (descriptor, buffer) in rx_descriptors.iter().zip(rx_buffers.iter()) {
+            if descriptor.buffer_address != buffer.dma_address() {
+                return Err(E1000DeviceError::InvalidBufferPool);
+            }
+        }
         for (index, buffer) in tx_buffers.iter().enumerate() {
             if buffer.is_empty() || buffer.len() < E1000_MAX_FRAME_SIZE {
                 return Err(E1000DeviceError::InvalidBufferPool);
@@ -183,6 +188,7 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, R> {
             let valid = !was_fragmented
                 && completion.end_of_packet
                 && completion.errors == 0
+                && completion.length != 0
                 && completion.length as usize <= self.rx_buffers[slot].len()
                 && completion.length as usize <= E1000_MAX_FRAME_SIZE;
 
