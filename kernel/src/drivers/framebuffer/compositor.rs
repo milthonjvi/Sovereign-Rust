@@ -280,14 +280,19 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
             if !layer.visible || layer.opacity == 0 {
                 continue;
             }
+            let layer_bounds = self.layer_bounds(layer.image, layer.x, layer.y);
+            let visible_region = region.intersection(layer_bounds);
+            if visible_region.is_empty() {
+                continue;
+            }
             layer.image.draw_alpha_blended_clipped(
                 target,
                 layer.x,
                 layer.y,
-                region.x,
-                region.y,
-                region.width,
-                region.height,
+                visible_region.x,
+                visible_region.y,
+                visible_region.width,
+                visible_region.height,
                 layer.opacity,
             )?;
         }
@@ -303,21 +308,25 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
             .ok_or(CompositorError::InvalidLayer)
     }
 
-    fn mark_layer_bounds(&mut self, image: ImageView<'a>, x: i64, y: i64) {
+    fn layer_bounds(&self, image: ImageView<'a>, x: i64, y: i64) -> Rect {
         let (width, height) = image.dimensions();
         let left = (x as i128).max(0);
         let top = (y as i128).max(0);
         let right = (x as i128 + width as i128).min(self.width as i128);
         let bottom = (y as i128 + height as i128).min(self.height as i128);
         if left >= right || top >= bottom {
-            return;
+            return Rect::EMPTY;
         }
-        self.dirty.mark(Rect {
+        Rect {
             x: left as usize,
             y: top as usize,
             width: (right - left) as usize,
             height: (bottom - top) as usize,
-        });
+        }
+    }
+
+    fn mark_layer_bounds(&mut self, image: ImageView<'a>, x: i64, y: i64) {
+        self.dirty.mark(self.layer_bounds(image, x, y));
     }
 }
 
