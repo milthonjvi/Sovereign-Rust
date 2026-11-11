@@ -18,6 +18,8 @@ const IER: u16 = 1;
 const IIR: u16 = 2;
 const THR_EMPTY: u8 = 1 << 5;
 const RX_INTERRUPT_ENABLE: u8 = 1;
+const LINE_STATUS_INTERRUPT_ENABLE: u8 = 1 << 2;
+const RX_IRQ_ENABLES: u8 = RX_INTERRUPT_ENABLE | LINE_STATUS_INTERRUPT_ENABLE;
 const THRE_INTERRUPT_ENABLE: u8 = 1 << 1;
 const THRE_INTERRUPT_ID: u8 = 0x02;
 const MAX_TX_PER_IRQ: usize = 64;
@@ -284,7 +286,7 @@ pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, Ua
     if accepted != 0 {
         // Preserve RX-ready while arming THRE. IF is clear per API contract.
         // SAFETY: Exclusive UART ownership is held by the caller.
-        unsafe { io::out8(uart.base_port() + IER, RX_INTERRUPT_ENABLE | THRE_INTERRUPT_ENABLE); }
+        unsafe { io::out8(uart.base_port() + IER, RX_IRQ_ENABLES | THRE_INTERRUPT_ENABLE); }
     }
     port.tx_stats.queued.fetch_add(accepted, Ordering::Relaxed);
     if accepted < bytes.len() { port.tx_stats.full.fetch_add(1, Ordering::Relaxed); }
@@ -355,9 +357,9 @@ fn service_transmit(base: u16, queue: &'static UartTxBuffer, depth: &'static Ato
         }
         stats.transmitted.fetch_add(sent, Ordering::Relaxed);
         if queue.is_empty() {
-            // Disable THRE only; RX remains enabled on the shared UART.
-            // SAFETY: IER bit zero remains set for RX.
-            unsafe { io::out8(base + IER, RX_INTERRUPT_ENABLE); }
+            // Disable THRE only; RX-ready and line-status IRQs remain enabled.
+            // SAFETY: RX_IRQ_ENABLES preserves both receive interrupt sources.
+            unsafe { io::out8(base + IER, RX_IRQ_ENABLES); }
             break;
         }
         if sent == 0 { break; }
