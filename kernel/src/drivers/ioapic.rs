@@ -107,6 +107,24 @@ pub const fn valid_redirection_vector(vector: u8) -> bool {
     vector >= 0x30 && vector <= 0xFE && vector != 0x80
 }
 
+#[inline]
+fn validate_unmask_prerequisites(
+    vector: u8,
+    local_apic_ready: bool,
+    handler_registered: bool,
+) -> Result<(), IoApicError> {
+    if !local_apic_ready {
+        return Err(IoApicError::LocalApicUnavailable);
+    }
+    if !valid_redirection_vector(vector) {
+        return Err(IoApicError::InvalidVector);
+    }
+    if !handler_registered {
+        return Err(IoApicError::InterruptHandlerNotRegistered);
+    }
+    Ok(())
+}
+
 /// Compare only architecturally writable redirection bits. Delivery status
 /// and Remote-IRR are read-only and may change asynchronously.
 #[inline]
@@ -410,15 +428,16 @@ impl IoApicController {
     /// handler valid for the lifetime of the unmasked route.
     pub unsafe fn unmask(&mut self, gsi: u32) -> Result<(), IoApicError> {
         let state = self.read_redirection_state(gsi)?;
-        if !crate::interrupts::init::is_initialized()
-            || crate::interrupts::init::local_apic_mode()
-                != crate::interrupts::init::LocalApicMode::X2Apic
-        {
-            return Err(IoApicError::LocalApicUnavailable);
-        }
-        if !crate::interrupts::dispatch::is_registered(state.vector) {
-            return Err(IoApicError::InterruptHandlerNotRegistered);
-        }
+        let local_apic_ready = crate::interrupts::init::is_initialized()
+            && crate::interrupts::init::local_apic_mode()
+                == crate::interrupts::init::LocalApicMode::X2Apic;
+        let handler_registered =
+            crate::interrupts::dispatch::is_registered(state.vector);
+        validate_unmask_prerequisites(
+            state.vector,
+            local_apic_ready,
+            handler_registered,
+        )?;
         self.set_masked_internal(gsi, false)
     }
 
@@ -661,6 +680,23 @@ mod tests {
             InterruptSourceOverride { bus: 0, source: 4, global_system_interrupt: 21, flags: 0 },
         ];
         assert_eq!(resolve_isa_irq(4, &duplicate), Err(IoApicError::DuplicateOverride));
+    }
+
+    #[test]
+    fn unmask_requires_apic_readiness_and_a_registered_vector_handler() {
+        assert_eq!(
+            validate_unmask_prerequisites(0x41, false, true),
+            Err(IoApicError::LocalApicUnavailable)
+        );
+        assert_eq!(
+            validate_unmask_prerequisites(0x41, true, false),
+            Err(IoApicError::InterruptHandlerNotRegistered)
+        );
+        assert_eq!(
+            validate_unmask_prerequisites(0x80, true, true),
+            Err(IoApicError::InvalidVector)
+        );
+        assert_eq!(validate_unmask_prerequisites(0x41, true, true), Ok(()));
     }
 
     #[test]
