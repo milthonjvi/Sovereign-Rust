@@ -174,6 +174,9 @@ impl X2Apic {
         if !valid_tsc_deadline_vector(vector) {
             return Err(X2ApicError::InvalidVector);
         }
+        if super::cpuid::cpuid(1, 0).ecx & (1 << 24) == 0 {
+            return Err(X2ApicError::FeatureUnavailable);
+        }
         self.write_register(REG_LVT_TIMER, (vector as u32 | LVT_TIMER_TSC_DEADLINE | LVT_MASKED) as u64);
         Ok(())
     }
