@@ -159,6 +159,11 @@ impl X2Apic {
 
         let max_lvt = self.max_lvt_entry();
         self.write_register(REG_LVT_TIMER, LVT_MASKED as u64);
+        self.write_register(REG_TIMER_INITIAL_COUNT, 0);
+        if super::cpuid::cpuid(1, 0).ecx & (1 << 24) != 0 {
+            // Clear a firmware-left TSC deadline only when the MSR exists.
+            unsafe { msr::write(0x6E0, 0) };
+        }
         if max_lvt >= 1 { self.write_register(REG_LVT_THERMAL, LVT_MASKED as u64); }
         if max_lvt >= 2 { self.write_register(REG_LVT_PERFORMANCE, LVT_MASKED as u64); }
         if max_lvt >= 3 { self.write_register(REG_LVT_LINT0, LVT_MASKED as u64); }
@@ -253,6 +258,7 @@ impl X2Apic {
             return Err(X2ApicError::FeatureUnavailable);
         }
         self.write_register(REG_LVT_TIMER, (vector as u32 | LVT_TIMER_TSC_DEADLINE | LVT_MASKED) as u64);
+        self.write_register(REG_TIMER_INITIAL_COUNT, 0);
         Ok(())
     }
 
@@ -263,6 +269,8 @@ impl X2Apic {
     pub fn unmask_tsc_deadline_timer(&mut self) -> Result<(), X2ApicError> {
         let value = self.read_register(REG_LVT_TIMER) as u32;
         if value & LVT_TIMER_TSC_DEADLINE == 0
+            || value & LVT_TIMER_PERIODIC != 0
+            || value & LVT_MASKED == 0
             || !valid_tsc_deadline_vector((value & LVT_TIMER_VECTOR_MASK) as u8)
         {
             return Err(X2ApicError::InvalidTimerConfiguration);
