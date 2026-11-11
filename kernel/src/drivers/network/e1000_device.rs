@@ -14,7 +14,7 @@ use super::e1000::{
 };
 use super::e1000_hw::{
     read_link_state, reset, E1000QueueError, E1000Registers, E1000ResetError,
-    E1000RxQueue, E1000TxQueue,
+    E1000QueueConfig, E1000RxQueue, E1000TxQueue,
 };
 use super::ethernet::MacAddress;
 use super::e1000_irq::{E1000Interrupt, E1000_ICR_LSC, E1000_ICR_TXDW};
@@ -67,13 +67,17 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// releasing those mappings.
     pub unsafe fn new(
         registers: &'a mut R,
+        queues: E1000QueueConfig,
         rx_descriptors: &'a mut [RxDescriptor],
         tx_descriptors: &'a mut [TxDescriptor],
         rx_buffers: &'a mut [DmaBuffer<'dma>],
         tx_buffers: &'a mut [DmaBuffer<'dma>],
         mac: MacAddress,
     ) -> Result<Self, E1000DeviceError> {
-        if rx_descriptors.len() < 8
+        if queues.validate().is_err()
+            || queues.rx.descriptor_count as usize != rx_descriptors.len()
+            || queues.tx.descriptor_count as usize != tx_descriptors.len()
+            || rx_descriptors.len() < 8
             || tx_descriptors.len() < 8
             || !rx_descriptors.len().is_power_of_two()
             || !tx_descriptors.len().is_power_of_two()
@@ -84,6 +88,14 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         }
         DmaBuffer::validate_rx_pool(rx_buffers)
             .map_err(|_| E1000DeviceError::InvalidBufferPool)?;
+        for ring in [queues.rx, queues.tx] {
+            DmaBuffer::validate_disjoint_from_range(
+                rx_buffers, ring.physical_base, ring.byte_length as usize,
+            ).map_err(|_| E1000DeviceError::OverlappingDmaPools)?;
+            DmaBuffer::validate_disjoint_from_range(
+                tx_buffers, ring.physical_base, ring.byte_length as usize,
+            ).map_err(|_| E1000DeviceError::OverlappingDmaPools)?;
+        }
         for (descriptor, buffer) in rx_descriptors.iter().zip(rx_buffers.iter()) {
             if descriptor.buffer_address != buffer.dma_address() {
                 return Err(E1000DeviceError::InvalidBufferPool);
@@ -560,6 +572,10 @@ mod tests {
         DmaBuffer::new_for_test(address, bytes).unwrap()
     }
 
+    fn test_queues() -> E1000QueueConfig {
+        E1000QueueConfig::new(0x30000, 0x31000, 8, 8).unwrap()
+    }
+
     fn supported_device() -> DeviceInfo {
         DeviceInfo {
             class: DeviceClass::Network,
@@ -587,7 +603,7 @@ mod tests {
         }
         // SAFETY: the mock backend performs no DMA; these arrays model pinned mappings.
         let mut device = unsafe { E1000Device::new(
-            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
             &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
@@ -628,7 +644,7 @@ mod tests {
         // SAFETY: the mock register backend does not perform DMA; backing arrays model
         // the pinned rings and device-visible buffers required by the constructor.
         let mut device = unsafe { E1000Device::new(
-            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
             &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
@@ -668,7 +684,7 @@ mod tests {
             .collect::<Vec<_>>().try_into().ok().unwrap();
         // SAFETY: the mock backend performs no DMA; arrays model pinned mappings.
         let mut device = unsafe { E1000Device::new(
-            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
             &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
@@ -706,7 +722,7 @@ mod tests {
         // SAFETY: the mock register backend does not perform DMA; backing arrays model
         // the pinned rings and device-visible buffers required by the constructor.
         let mut device = unsafe { E1000Device::new(
-            &mut registers, &mut rx_descriptors, &mut tx_descriptors,
+            &mut registers, test_queues(), &mut rx_descriptors, &mut tx_descriptors,
             &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
