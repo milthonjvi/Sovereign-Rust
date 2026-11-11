@@ -40,11 +40,11 @@ tables, acquire the final memory map, or call ExitBootServices.
 
 The next stages are:
 
-1. Allocate pages and load validated `PT_LOAD` segments, including zeroing BSS.
-2. Define the versioned Sovereign Boot information structure.
-3. Obtain a stable final memory map and call ExitBootServices with retry logic.
-4. Prepare CPU/page-table state and transfer control to the kernel entry point.
-5. Add a matching kernel-side Sovereign Boot ABI consumer.
+1. Define the physical/virtual mapping policy and build the loader's page tables.
+2. Allocate pages and load validated `PT_LOAD` segments, including zeroing BSS.
+3. Populate the versioned handoff structure and retain all referenced buffers.
+4. Obtain a stable final memory map and call ExitBootServices with retry logic.
+5. Transfer control using the agreed x86_64 entry ABI and add the kernel-side consumer.
 
 Until those stages are integrated and tested, the kernel's existing Limine
 handoff remains in place as a temporary compatibility path. Do not remove
