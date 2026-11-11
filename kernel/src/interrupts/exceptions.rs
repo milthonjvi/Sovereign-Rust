@@ -85,7 +85,8 @@ static LAST_RIP: AtomicU64 = AtomicU64::new(0);
 static LAST_RFLAGS: AtomicU64 = AtomicU64::new(0);
 static LAST_CR2: AtomicU64 = AtomicU64::new(0);
 
-/// Installs a valid fatal fallback gate for every architectural vector.\n/// PIC IRQ gates may subsequently replace vectors 0x20..=0x2F.
+/// Installs a valid fatal fallback gate for every architectural vector.
+/// PIC IRQ gates may subsequently replace vectors 0x20..=0x2F.
 ///
 /// # Safety
 /// The caller must ensure the current CS selector names a valid 64-bit code
