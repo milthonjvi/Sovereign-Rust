@@ -62,7 +62,7 @@ impl E1000PciDevice {
         let bar0 = bars.iter().copied()
             .find(|bar| bar.index == 0)
             .ok_or(E1000PciError::MissingMmioBar)?;
-        if bar0.kind == BarKind::Io || bar0.base == 0 {
+        if bar0.kind == BarKind::Io || bar0.base == 0 || bar0.prefetchable {
             return Err(E1000PciError::InvalidMmioBar);
         }
         Ok(bar0)
@@ -121,6 +121,13 @@ mod tests {
     fn rejects_unassigned_or_missing_mmio_bars() {
         let nic = E1000PciDevice::from_function(&function(0x8086, DEVICE_82545EM, 0)).unwrap();
         let bars = [Bar { index: 0, kind: BarKind::Memory32, prefetchable: false, base: 0, raw_low: 0, raw_high: None }];
-        assert_eq!(nic.mmio_bar(&bars), Err(E1000PciError::MissingMmioBar));
+        assert_eq!(nic.mmio_bar(&bars), Err(E1000PciError::InvalidMmioBar));
+    }
+
+    #[test]
+    fn rejects_prefetchable_register_bar() {
+        let nic = E1000PciDevice::from_function(&function(0x8086, DEVICE_82540EM, 0)).unwrap();
+        let bars = [Bar { index: 0, kind: BarKind::Memory32, prefetchable: true, base: 0xfebc0000, raw_low: 0xfebc0008, raw_high: None }];
+        assert_eq!(nic.mmio_bar(&bars), Err(E1000PciError::InvalidMmioBar));
     }
 }
