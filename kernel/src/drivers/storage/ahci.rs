@@ -89,7 +89,7 @@ impl RegisterFisH2d {
 /// Build a PRDT for one physically contiguous DMA region. AHCI limits each
 /// descriptor to 4 MiB; DBC stores byte_count - 1.
 pub fn build_prdt(physical:u64,byte_len:usize,entries:&mut[AhciPrdtEntry],supports_64bit:bool)->Result<usize,AhciError>{
-    if byte_len==0 || physical&1!=0{return Err(AhciError::InvalidTransfer);}
+    if byte_len==0 || physical&0x3!=0{return Err(AhciError::InvalidTransfer);}
     let end=physical.checked_add(byte_len as u64).ok_or(AhciError::AddressOverflow)?;
     if !supports_64bit && end>u32::MAX as u64+1{return Err(AhciError::UnsupportedAddressing);}
     let count=byte_len.checked_add(4*1024*1024-1).ok_or(AhciError::AddressOverflow)?/(4*1024*1024);
@@ -174,6 +174,15 @@ mod tests{
         assert_eq!(id.sector_count,0x1_1234_5678);
         assert_eq!(id.logical_sector_size,4096);
         assert!(id.supports_ncq);
+    }
+    #[test]fn rejects_non_dword_aligned_prdt_buffer(){
+        let mut entries=[AhciPrdtEntry::default();1];
+        assert_eq!(build_prdt(0x1002,512,&mut entries,true),Err(AhciError::InvalidTransfer));
+        assert_eq!(build_prdt(0x1001,512,&mut entries,true),Err(AhciError::InvalidTransfer));
+    }
+    #[test]fn rejects_prdt_address_range_overflow(){
+        let mut entries=[AhciPrdtEntry::default();1];
+        assert_eq!(build_prdt(u64::MAX-3,8,&mut entries,true),Err(AhciError::AddressOverflow));
     }
     #[test]fn rejects_dma_above_4g_without_support(){
         let mut entries=[AhciPrdtEntry::default();1];
