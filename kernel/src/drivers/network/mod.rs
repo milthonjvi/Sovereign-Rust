@@ -11,6 +11,8 @@ pub mod dma;
 pub mod e1000;
 pub mod e1000_descriptor;
 pub mod e1000_device;
+mod e1000_device_rx;
+mod e1000_device_tx;
 pub mod e1000_filter;
 pub mod e1000_hw;
 pub mod e1000_irq;
