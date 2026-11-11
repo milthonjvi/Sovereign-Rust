@@ -158,11 +158,16 @@ impl AcpiTables {
             // ACPI requires a FACS for full fixed-hardware platforms. It is
             // optional only when HW_REDUCED_ACPI is advertised. A nonzero
             // pointer that could not be mapped is not equivalent to absence.
-            if !facs_mapped && fadt.pm_hardware_mode() != super::fadt::PmHardwareMode::HardwareReduced {
+            if !facs_mapped {
+                // A nonzero pointer advertises an actual FACS and must be
+                // usable even on a Hardware Reduced platform. Only two zero
+                // pointers mean that the optional structure is absent.
                 if extended_facs.is_some() {
                     return Err(AcpiError::UnsupportedAddress);
                 }
-                return Err(AcpiError::MalformedTable);
+                if fadt.pm_hardware_mode() != super::fadt::PmHardwareMode::HardwareReduced {
+                    return Err(AcpiError::MalformedTable);
+                }
             }
 
             // DSDT is reached through FADT, never through the root table.
