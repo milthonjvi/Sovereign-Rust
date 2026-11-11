@@ -4,6 +4,7 @@
 //! not enable MSI/MSI-X, program message addresses, or touch device BAR memory.
 use super::capabilities::Capability;
 use super::config::{Bar, BarKind, ConfigAccess, ConfigError, PciAddress, PciIdentity, PCI_CONFIG_SIZE};
+use super::resources::BarResource;
 
 pub const MSI_CAPABILITY_ID: u8 = 0x05;
 pub const MSIX_CAPABILITY_ID: u8 = 0x11;
@@ -158,6 +159,27 @@ impl MsixCapability {
         let pba = bars.iter().find(|bar| bar.index == self.pending_bit_array_bar)
             .ok_or(ConfigError::InvalidBar)?;
         if table.kind == BarKind::Io || pba.kind == BarKind::Io {
+            return Err(ConfigError::InvalidBar);
+        }
+        Ok(())
+    }
+
+    /// Validate that the complete MSI-X table and PBA fit inside their BAR apertures.
+    /// This requires sizes obtained from a trusted BAR sizing phase.
+    pub fn validate_resources(self, resources: &[BarResource]) -> Result<(), ConfigError> {
+        let table = resources.iter().find(|resource| resource.index == self.table_bar)
+            .ok_or(ConfigError::InvalidBar)?;
+        let pba = resources.iter().find(|resource| resource.index == self.pending_bit_array_bar)
+            .ok_or(ConfigError::InvalidBar)?;
+        if table.kind == BarKind::Io || pba.kind == BarKind::Io {
+            return Err(ConfigError::InvalidBar);
+        }
+        let table_end = self.table_offset.checked_add(self.table_bytes().ok_or(ConfigError::InvalidBar)?)
+            .ok_or(ConfigError::InvalidBar)?;
+        let pba_end = self.pending_bit_array_offset
+            .checked_add(self.pending_bit_array_bytes().ok_or(ConfigError::InvalidBar)?)
+            .ok_or(ConfigError::InvalidBar)?;
+        if table_end as u64 > table.size || pba_end as u64 > pba.size {
             return Err(ConfigError::InvalidBar);
         }
         Ok(())
