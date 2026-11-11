@@ -6,7 +6,7 @@
 //! writes all ones to BAR registers, reads the implemented address mask, and
 //! restores every original value before returning.
 
-use super::config::{ConfigAccess, ConfigError, PciFunction};
+use super::config::{ConfigAccess, ConfigError, PciAddress, PciFunction};
 
 const COMMAND_STATUS: u16 = 0x04;
 const COMMAND_IO_SPACE: u16 = 1 << 0;
@@ -25,6 +25,7 @@ pub enum BarProbeError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BarSize {
+    pub address: PciAddress,
     pub index: u8,
     pub size: u64,
 }
@@ -147,7 +148,7 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
         }
 
         match probe {
-            Ok(Some(size)) => measured[index] = Some(BarSize { index: index as u8, size }),
+            Ok(Some(size)) => measured[index] = Some(BarSize { address: function.address, index: index as u8, size }),
             Ok(None) => {},
             Err(error) => { operation_error = Some(error); break; }
         }
@@ -228,7 +229,7 @@ mod tests {
         let mut sizes = [None; MAX_BAR_REGISTERS];
         let count = unsafe { probe_bar_sizes(&mock, function(), &mut sizes) }.unwrap();
         assert_eq!(count, 1);
-        assert_eq!(sizes[0], Some(BarSize { index: 0, size: 0x1000 }));
+        assert_eq!(sizes[0], Some(BarSize { address: function().address, index: 0, size: 0x1000 }));
         let restored = mock.registers.borrow();
         assert_eq!(restored[4], 0x8000_0000);
         assert_eq!(restored[1] as u16, 0x0007);
@@ -264,7 +265,7 @@ mod tests {
         let mut sizes = [None; MAX_BAR_REGISTERS];
         let count = unsafe { probe_bar_sizes(&mock, function(), &mut sizes) }.unwrap();
         assert_eq!(count, 1);
-        assert_eq!(sizes[0], Some(BarSize { index: 0, size: 0x2000 }));
+        assert_eq!(sizes[0], Some(BarSize { address: function().address, index: 0, size: 0x2000 }));
         assert_eq!(sizes[1], None);
         let restored = mock.registers.borrow();
         assert_eq!(restored[4], 0x4);
