@@ -344,8 +344,7 @@ impl EfiMemoryMap<'_> {
         };
         let descriptor_bytes = descriptor.number_of_pages.checked_mul(4096)
             .ok_or(SovereignBootError::InvalidMemoryMap)?;
-        if descriptor.number_of_pages == 0
-            || descriptor.physical_start & 0xfff != 0
+        if descriptor.physical_start & 0xfff != 0
             || descriptor.physical_start >= MAX_PHYSICAL_ADDRESS
             || descriptor_bytes > MAX_PHYSICAL_ADDRESS - descriptor.physical_start
         {
