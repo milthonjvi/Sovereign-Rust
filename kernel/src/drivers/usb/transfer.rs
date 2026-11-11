@@ -22,7 +22,7 @@ impl EndpointAddress{
 }
 impl Endpoint{
  pub fn from_descriptor(b:&[u8])->Result<Self,UsbError>{
-  if b.len()<7||b[0]<7||b[1]!=5{return Err(UsbError::MalformedDescriptor)}
+  if b.len()<7||b[0]!=7||b[1]!=5{return Err(UsbError::MalformedDescriptor)}
   let raw=u16::from_le_bytes([b[4],b[5]]);
   let transfer= b[3]&3;
   let transfer_type=match transfer{0=>return Err(UsbError::MalformedDescriptor),1=>TransferType::Isochronous,2=>TransferType::Bulk,_=>TransferType::Interrupt};
