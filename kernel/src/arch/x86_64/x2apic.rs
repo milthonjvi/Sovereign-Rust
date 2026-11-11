@@ -8,6 +8,7 @@ use super::{cpuid::CpuInfo, msr};
 
 pub const IA32_APIC_BASE: u32 = 0x1B;
 pub const IA32_X2APIC_BASE: u32 = 0x800;
+pub const SPURIOUS_VECTOR: u8 = 0xFF;
 
 pub const REG_ID: u32 = 0x802;
 pub const REG_VERSION: u32 = 0x803;
