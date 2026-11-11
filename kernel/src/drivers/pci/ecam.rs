@@ -161,7 +161,8 @@ mod tests {
     fn parses_mcfg_window_and_checks_full_ecam_span() {
         let mut table = [0u8; MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE];
         table[..4].copy_from_slice(b"MCFG");
-        table[4..8].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        let table_length = table.len() as u32;
+        table[4..8].copy_from_slice(&table_length.to_le_bytes());
         write_entry(&mut table, MCFG_HEADER_SIZE, 0xe000_0000, 0, 0, 3);
         finalize_checksum(&mut table);
         let mut windows = [EcamWindow { segment: 9, start_bus: 9, end_bus: 9, physical_base: 9 }; 1];
@@ -175,7 +176,8 @@ mod tests {
     fn rejects_overlapping_segment_ranges_without_partial_output() {
         let mut table = [0u8; MCFG_HEADER_SIZE + 2 * MCFG_ENTRY_SIZE];
         table[..4].copy_from_slice(b"MCFG");
-        table[4..8].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        let table_length = table.len() as u32;
+        table[4..8].copy_from_slice(&table_length.to_le_bytes());
         write_entry(&mut table, MCFG_HEADER_SIZE, 0xe000_0000, 0, 0, 31);
         write_entry(&mut table, MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE, 0xf000_0000, 0, 31, 63);
         finalize_checksum(&mut table);
@@ -189,7 +191,8 @@ mod tests {
     fn rejects_ecam_physical_span_overflow() {
         let mut table = [0u8; MCFG_HEADER_SIZE + MCFG_ENTRY_SIZE];
         table[..4].copy_from_slice(b"MCFG");
-        table[4..8].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        let table_length = table.len() as u32;
+        table[4..8].copy_from_slice(&table_length.to_le_bytes());
         write_entry(&mut table, MCFG_HEADER_SIZE, u64::MAX & !0x000f_ffff, 0, 0, 0);
         finalize_checksum(&mut table);
         let mut windows = [EcamWindow { segment: 0, start_bus: 0, end_bus: 0, physical_base: 0 }; 1];
