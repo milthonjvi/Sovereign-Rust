@@ -17,7 +17,7 @@ pub const MEMORY_DESCRIPTOR_VERSION_UEFI: u32 = 1;
 /// No framebuffer information is currently provided.
 pub const BOOT_INFO_FLAG_FRAMEBUFFER_VALID: u64 = 1 << 0;
 
-/// No ACPI root pointer is currently provided.
+/// A validated UEFI ACPI RSDP physical address is provided when available.
 pub const BOOT_INFO_FLAG_ACPI_VALID: u64 = 1 << 1;
 
 /// Versioned boot handoff passed in the first argument register (RDI).
