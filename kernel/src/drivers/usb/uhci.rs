@@ -150,16 +150,19 @@ impl UhciController{
    speed:if value&PORT_CONNECT==0{None}else if value&PORT_LOW_SPEED!=0{Some(super::transfer::UsbSpeed::Low)}else{Some(super::transfer::UsbSpeed::Full)}})
  }
  pub fn request_port_reset<I:UhciPortIo>(&self,io:&mut I,port:u8)->Result<(),super::UsbError>{
+  if self.state!=UhciState::Running{return Err(super::UsbError::ControllerUnavailable)}
   let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
   let value=io.read16(self.reg(offset))?;
   if value&PORT_CONNECT==0{return Err(super::UsbError::ControllerUnavailable)}
   io.write16(self.reg(offset),(value&!(PORT_CONNECT_CHANGE|PORT_ENABLE_CHANGE))|PORT_RESET)
  }
  pub fn port_reset_complete<I:UhciPortIo>(&self,io:&I,port:u8)->Result<bool,super::UsbError>{
+  if self.state!=UhciState::Running{return Err(super::UsbError::ControllerUnavailable)}
   let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
   let value=io.read16(self.reg(offset))?;Ok(value&PORT_RESET==0&&value&PORT_ENABLE!=0)
  }
  pub fn clear_port_changes<I:UhciPortIo>(&self,io:&mut I,port:u8,changes:u16)->Result<(),super::UsbError>{
+  if self.state!=UhciState::Running{return Err(super::UsbError::ControllerUnavailable)}
   let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
   if changes&!(PORT_CONNECT_CHANGE|PORT_ENABLE_CHANGE)!=0{return Err(super::UsbError::InvalidAddress)}
   let current=io.read16(self.reg(offset))?;
