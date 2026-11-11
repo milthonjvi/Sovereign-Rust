@@ -545,7 +545,7 @@ fn transition_to_kernel(
             in("r8") kernel_entry,
             in("r9") &idtr,
             options(noreturn)
-        );
+        )
     }
 }
 
