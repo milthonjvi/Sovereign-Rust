@@ -631,6 +631,7 @@ mod tests {
     #[derive(Default)]
     struct MockRegisters {
         writes: Vec<(u32, u32)>,
+        fail_register: Option<u32>,
     }
 
     impl E1000Registers for MockRegisters {
@@ -647,6 +648,9 @@ mod tests {
         }
 
         fn write32(&mut self, offset: u32, value: u32) -> Result<(), Self::Error> {
+            if self.fail_register == Some(offset) {
+                return Err(());
+            }
             self.writes.push((offset, value));
             Ok(())
         }
@@ -782,6 +786,27 @@ mod tests {
         assert_eq!(regs.writes.iter().filter(|(register, _)| *register == REG_RDT).count(), 1);
         assert!(regs.writes.contains(&(REG_RDT, 1)));
         assert_eq!(queue.poll(&mut regs, &descriptors), Ok(None));
+    }
+
+    #[test]
+    fn rx_batch_restores_descriptors_when_tail_publication_fails() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [RxDescriptor::for_buffer(0xa000); 8];
+        let mut queue = E1000RxQueue::new(8).unwrap();
+        let mut completions = [(0u16, super::super::e1000_descriptor::RxCompletion {
+            length: 64, end_of_packet: true, errors: 0,
+        }); 1];
+        descriptors[0].length = 64;
+        descriptors[0].status = super::super::e1000::RXD_STATUS_DD | super::super::e1000::RXD_STATUS_EOP;
+        assert_eq!(queue.poll_batch(&mut regs, &descriptors, &mut completions), Ok(1));
+        let mut backup = [RxDescriptor::default(); 1];
+        regs.fail_register = Some(REG_RDT);
+        assert_eq!(queue.recycle_batch(&mut regs, &mut descriptors, &completions, &mut backup),
+            Err(E1000QueueError::Register(())));
+        assert_eq!(descriptors[0].status, super::super::e1000::RXD_STATUS_DD | super::super::e1000::RXD_STATUS_EOP);
+        regs.fail_register = None;
+        assert_eq!(queue.recycle_batch(&mut regs, &mut descriptors, &completions, &mut backup), Ok(1));
+        assert_eq!(descriptors[0].status, 0);
     }
 
     #[test]
