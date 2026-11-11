@@ -59,13 +59,18 @@ impl AcpiTables {
     /// Every returned SDT is checked for length and checksum before its
     /// signature is inspected. If a FADT is present, its legacy or extended
     /// DSDT pointer is followed and the target must validate as a DSDT.
-    pub fn discover<'a, F>(rsdp: &Rsdp, mut map_table: F) -> Result<Self, AcpiError>
+    pub fn discover<'a, F>(rsdp: &Rsdp, map_table: F) -> Result<Self, AcpiError>
     where
         F: FnMut(u64) -> Option<&'a [u8]>,
     {
-        Self::discover_with_mappers(rsdp, |address| map_table(address), |address| {
-            map_table(address)
-        })
+        // Share the legacy mapper between the two callbacks without creating
+        // overlapping mutable captures of the same FnMut value.
+        let mapper = core::cell::RefCell::new(map_table);
+        Self::discover_with_mappers(
+            rsdp,
+            |address| (&mut *mapper.borrow_mut())(address),
+            |address| (&mut *mapper.borrow_mut())(address),
+        )
     }
 
     /// Discover ACPI tables with distinct SDT and FACS mapping policies.
