@@ -58,6 +58,12 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         fatal_halt();
     }
 
+    // Verify the recursive page-table window and the critical mappings before
+    // installing interrupt state or allowing any subsystem to use memory.
+    if !validate_boot_mappings(boot_info_pointer as u64, &boot_info) {
+        fatal_halt();
+    }
+
     // Validate the firmware RSDP before exposing it to ACPI table discovery.
     // UEFI normally places it in ACPI reclaimable memory; reserved and NVS
     // descriptors are also valid firmware-owned locations.
@@ -93,11 +99,6 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         let _root_table = rsdp.root_table_address().unwrap_or_else(|_| fatal_halt());
     }
 
-    // Verify the recursive page-table window and the critical mappings before
-    // installing interrupt state or allowing any subsystem to use memory.
-    if !validate_boot_mappings(boot_info_pointer as u64, &boot_info) {
-        fatal_halt();
-    }
 
     // Install the kernel's GDT/TSS, IDT, and masked legacy PIC only after the
     // Sovereign handoff and every memory descriptor have passed validation.
