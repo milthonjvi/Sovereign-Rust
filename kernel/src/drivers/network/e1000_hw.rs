@@ -73,8 +73,10 @@ pub struct E1000InitInfo {
 /// Initialize one supported legacy E1000 using preallocated DMA rings.
 ///
 /// Safety is delegated to the platform accessor and caller: the MMIO window
-/// must refer to this device, rings must be DMA-mapped and pinned, and PCI bus
-/// mastering must already be enabled. No DMA memory is dereferenced here.
+/// must refer to this device, RX descriptors must contain valid DMA buffer
+/// addresses, TX descriptors must start with DD set, all rings and buffers
+/// must be DMA-mapped and pinned, and PCI bus mastering must already be enabled.
+/// No DMA memory is dereferenced here.
 pub fn initialize<R: E1000Registers>(
     registers: &mut R,
     queues: E1000QueueConfig,
@@ -205,7 +207,7 @@ mod tests {
     #[test]
     fn queue_config_enforces_hardware_ring_length_alignment() {
         assert!(E1000QueueConfig::defaults(0x1000, 0x2000).is_ok());
-        assert!(E1000QueueConfig::new(0x1000, 0x2000, 8, 8).is_err());
+        assert!(E1000QueueConfig::new(0x1000, 0x2000, 12, 32).is_err());
     }
 
     #[test]
