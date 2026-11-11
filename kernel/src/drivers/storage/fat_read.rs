@@ -157,6 +157,7 @@ pub fn enumerate_directory<D: BlockDevice>(
     fat_scratch: &mut [u8],
 ) -> Result<usize, FatError> {
     entries.fill(None);
+    let result = (|| -> Result<usize, FatError> {
     let mut count = 0usize;
     let bps = volume.bpb.bytes_per_sector as usize;
     let mut stopped = false;
@@ -203,6 +204,9 @@ pub fn enumerate_directory<D: BlockDevice>(
         }
     }
     Ok(count)
+    })();
+    if result.is_err() { entries.fill(None); }
+    result
 }
 
 /// Read from the primary FAT copy (copy zero).
