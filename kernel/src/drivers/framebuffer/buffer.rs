@@ -177,14 +177,28 @@ impl<'a> SoftwareBuffer<'a> {
         })
     }
 
-    fn copy_visible_from(&mut self, source: &SoftwareBuffer<'_>) {
+    fn copy_regions_from(
+        &mut self,
+        source: &SoftwareBuffer<'_>,
+        regions: &[Rect],
+    ) {
         debug_assert_eq!(self.width, source.width);
         debug_assert_eq!(self.height, source.height);
-        for y in 0..self.height {
-            let destination_start = y * self.stride;
-            let source_start = y * source.stride;
-            self.pixels[destination_start..destination_start + self.width]
-                .copy_from_slice(&source.pixels[source_start..source_start + self.width]);
+        for region in regions {
+            let left = region.x.min(self.width);
+            let top = region.y.min(self.height);
+            let right = region.x.saturating_add(region.width).min(self.width);
+            let bottom = region.y.saturating_add(region.height).min(self.height);
+            if left >= right || top >= bottom {
+                continue;
+            }
+            let row_width = right - left;
+            for y in top..bottom {
+                let destination_start = y * self.stride + left;
+                let source_start = y * source.stride + left;
+                self.pixels[destination_start..destination_start + row_width]
+                    .copy_from_slice(&source.pixels[source_start..source_start + row_width]);
+            }
         }
     }
 }
@@ -235,7 +249,7 @@ impl<'a> DoubleBuffer<'a> {
         }
         core::mem::swap(&mut self.front, &mut self.back);
         let (front, back) = (&self.front, &mut self.back);
-        back.copy_visible_from(front);
+        back.copy_regions_from(front, regions);
         Ok(())
     }
 
