@@ -1,4 +1,6 @@
 //! Kernel synchronization primitives.
 //!
-//! Planned primitives: interrupt-safe spin locks, mutexes, wait queues, and
-//! once initialization. Lock ordering and interrupt-context rules must be explicit.
+//! Interrupt-safe locks disable local maskable interrupts before acquiring
+//! the SMP lock, preventing same-CPU IRQ/task self-deadlocks.
+
+pub mod irq_lock;
