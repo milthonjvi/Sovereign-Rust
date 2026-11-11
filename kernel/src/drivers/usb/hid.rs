@@ -18,6 +18,7 @@ pub struct HidDescriptor{pub hid_release:u16,pub country_code:u8,pub subordinate
 impl HidDescriptor{
  pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
   if bytes.len()<9||bytes[0]<9||bytes[1]!=HID_DESCRIPTOR_TYPE{return Err(UsbError::MalformedDescriptor)}
+  if bytes[0] as usize>bytes.len(){return Err(UsbError::BufferTooShort)}
   let count=bytes[5] as usize;
   if count==0||(bytes[0] as usize)<6+3*count||bytes.len()<6+3*count{return Err(UsbError::MalformedDescriptor)}
   let mut report_length=0;
