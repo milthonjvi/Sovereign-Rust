@@ -130,3 +130,53 @@ mod ring_tests{
   assert_eq!(ring.pop(),None);assert_eq!(ring.dequeue_index(),0);assert!(!ring.consumer_cycle());
  }
 }
+
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+#[repr(u8)]
+pub enum TrbType{Normal=1,SetupStage=2,DataStage=3,StatusStage=4,Isoch=5,Link=6,EventData=7,NoopTransfer=8,EnableSlot=9,DisableSlot=10,AddressDevice=11,ConfigureEndpoint=12,EvaluateContext=13,ResetEndpoint=14,StopEndpoint=15,SetTrDequeuePointer=16,ResetDevice=17,ForceEvent=18,NegotiateBandwidth=19,SetLatencyTolerance=20,GetPortBandwidth=21,ForceHeader=22,NoopCommand=23,TransferEvent=32,CommandCompletion=33,PortStatusChange=34,HostControllerEvent=37}
+impl Trb{
+ pub const fn command(kind:TrbType,parameter:u64,status:u32,slot_id:u8)->Self{
+  Self{parameter,status,control:((kind as u32)<<10)|((slot_id as u32)<<24)}
+ }
+ pub const fn enable_slot()->Self{Self::command(TrbType::EnableSlot,0,0,0)}
+ pub const fn address_device(input_context:u64,slot_id:u8)->Self{Self::command(TrbType::AddressDevice,input_context,0,slot_id)}
+ pub const fn configure_endpoint(input_context:u64,slot_id:u8)->Self{Self::command(TrbType::ConfigureEndpoint,input_context,0,slot_id)}
+ pub const fn evaluate_context(input_context:u64,slot_id:u8)->Self{Self::command(TrbType::EvaluateContext,input_context,0,slot_id)}
+ pub const fn noop_command()->Self{Self::command(TrbType::NoopCommand,0,0,0)}
+ pub const fn normal_transfer(buffer:u64,length:u32,td_size:u8,interrupt_on_completion:bool)->Self{
+  Self{parameter:buffer,status:(length&0x1ffff)|(((td_size as u32)&0x1f)<<17),
+   control:((TrbType::Normal as u32)<<10)|(1<<4)|((interrupt_on_completion as u32)<<5)|(1<<2)}
+ }
+ pub const fn setup_stage(setup:super::super::transfer::SetupPacket)->Self{
+  let encoded=setup.encode();
+  let parameter=u64::from_le_bytes(encoded);
+  let trt=if setup.length==0{0}else if setup.request_type&0x80!=0{3}else{2};
+  Self{parameter,status:8,control:((TrbType::SetupStage as u32)<<10)|(1<<6)|(1<<4)|(trt<<16)}
+ }
+ pub const fn data_stage(buffer:u64,length:u32,td_size:u8,direction_in:bool,interrupt_on_completion:bool)->Self{
+  Self{parameter:buffer,status:(length&0x1ffff)|(((td_size as u32)&0x1f)<<17),
+   control:((TrbType::DataStage as u32)<<10)|((direction_in as u32)<<16)|(1<<4)|((interrupt_on_completion as u32)<<5)}
+ }
+ pub const fn status_stage(direction_in:bool,interrupt_on_completion:bool)->Self{
+  Self{parameter:0,status:0,control:((TrbType::StatusStage as u32)<<10)|((direction_in as u32)<<16)|((interrupt_on_completion as u32)<<5)}
+ }
+}
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct TransferEvent{pub pointer:u64,pub residual_length:u32,pub completion_code:u8,pub endpoint_id:u8,pub slot_id:u8}
+impl TransferEvent{
+ pub fn parse(trb:Trb)->Result<Self,XhciError>{
+  if trb.trb_type()!=TrbType::TransferEvent as u8{return Err(XhciError::InvalidCapability)}
+  Ok(Self{pointer:trb.parameter,residual_length:trb.status&0x00ff_ffff,
+   completion_code:(trb.status>>24)as u8,endpoint_id:((trb.control>>16)&0x1f)as u8,slot_id:(trb.control>>24)as u8})
+ }
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct CommandCompletionEvent{pub command_pointer:u64,pub completion_code:u8,pub slot_id:u8}
+impl CommandCompletionEvent{
+ pub fn parse(trb:Trb)->Result<Self,XhciError>{
+  if trb.trb_type()!=TrbType::CommandCompletion as u8{return Err(XhciError::InvalidCapability)}
+  Ok(Self{command_pointer:trb.parameter,completion_code:(trb.status>>24)as u8,slot_id:(trb.control>>24)as u8})
+ }
+}
