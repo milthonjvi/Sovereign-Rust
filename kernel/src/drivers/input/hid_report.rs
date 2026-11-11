@@ -837,6 +837,11 @@ mod tests {
         let map = HidReportMap::parse(KEYBOARD_DESCRIPTOR).unwrap();
         assert!(map.field_count() >= 2);
         assert_eq!(map.report_bytes(0), 8);
+        let field = map.field(0).unwrap();
+        assert_eq!(field.application_page, 0x01);
+        assert_eq!(field.application_usage, 0x06);
+        assert_eq!(field.collection_type, 1);
+        assert_ne!(field.collection_id, 0);
     }
 
     #[test]
