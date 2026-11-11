@@ -64,6 +64,24 @@ impl Pit {
         self.config
     }
 
+    /// Latch and read the current channel-0 down-counter value.
+    ///
+    /// A returned value of 65,536 represents the hardware's zero encoding.
+    ///
+    /// # Safety
+    /// The caller must own PIT channel 0 ports, run at CPL 0, and serialize
+    /// access with any other code programming or reading the PIT.
+    pub unsafe fn read_current_count(&mut self) -> u32 {
+        // SAFETY: Port ownership and privilege are caller obligations.
+        unsafe {
+            io::out8(COMMAND, 0x00);
+            let low = io::in8(CHANNEL0_DATA) as u16;
+            let high = io::in8(CHANNEL0_DATA) as u16;
+            let raw = low | (high << 8);
+            if raw == 0 { 65_536 } else { raw as u32 }
+        }
+    }
+
     /// Program channel 0. This does not unmask PIC IRQ0 or enable interrupts.
     ///
     /// # Safety
