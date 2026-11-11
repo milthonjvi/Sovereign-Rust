@@ -20,6 +20,7 @@ use super::dma::DmaBuffer;
 mod rx_queue;
 #[path = "e1000_hw_tx.rs"]
 mod tx_queue;
+pub(crate) use rx_queue::E1000RxQueue;
 
 const RESET_POLL_LIMIT: usize = 1_000_000;
 const RING_LENGTH_ALIGNMENT: u32 = 128;
