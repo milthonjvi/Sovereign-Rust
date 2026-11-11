@@ -1,27 +1,41 @@
-//! Task sleep deadlines and timeout-to-wakeup handoff.
+//! Per-CPU task sleep deadlines and timeout-to-wakeup handoff.
 //!
-//! This module does not perform a context switch. It converts expired timer
-//! events into task IDs for the scheduler's ready-queue path. The scheduler
-//! owns task state transitions and must enqueue returned IDs after this method
-//! has completed.
+//! This layer connects task identifiers to the local APIC-backed deadline
+//! queue. It does not perform context switches: expired IDs are returned to
+//! the scheduler, which owns task-state transitions and ready-queue insertion.
 
 use crate::time::{
-    ClockSource, Deadline, TimerEvent, TimerId, TimerService, TimerServiceError,
+    ClockSource, Deadline, TimerEvent, TimerId, TscDeadlineQueue, TscDeadlineQueueError,
 };
 
 /// Stable task identifier used by timeout registration.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TaskId(pub u64);
 
-/// Task sleep/deadline manager backed by the kernel monotonic timer service.
+const TASK_SLEEP_EVENT: u32 = 0x5441_534B;
+
+/// Per-CPU task timeout manager driven by the local APIC TSC-deadline timer.
 pub struct TaskTimeouts<S: ClockSource, const N: usize> {
-    timers: TimerService<S, N>,
+    timers: TscDeadlineQueue<S, N>,
 }
 
 impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
-    /// Construct the task timeout manager from the selected clocksource.
-    pub fn new(source: S, initial_time_ns: u64) -> Result<Self, TimerServiceError> {
-        Ok(Self { timers: TimerService::new(source, initial_time_ns)? })
+    /// Construct task timeout management on the current CPU.
+    ///
+    /// # Safety
+    /// Must run on the target CPU after configuring its local APIC timer LVT
+    /// in TSC-deadline mode and registering its timer interrupt vector. The
+    /// TSC frequency must be accurate for this CPU's TSC domain.
+    pub unsafe fn new(
+        source: S,
+        initial_time_ns: u64,
+        tsc_frequency_hz: u64,
+    ) -> Result<Self, TscDeadlineQueueError> {
+        // SAFETY: The caller guarantees the local APIC/TSC setup contract.
+        let timers = unsafe {
+            TscDeadlineQueue::new(source, initial_time_ns, tsc_frequency_hz)?
+        };
+        Ok(Self { timers })
     }
 
     /// Current monotonic time in nanoseconds.
@@ -32,46 +46,78 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
 
     /// Register a task sleep until an absolute monotonic deadline.
     ///
-    /// A task may have only one pending sleep. Register the timeout before
-    /// changing the task to a blocked state, with the scheduler's own locking
-    /// protocol preventing a wakeup from racing the state transition.
-    pub fn sleep_until(&self, task: TaskId, deadline: Deadline) -> Result<(), TimerServiceError> {
-        self.timers.schedule_at(TimerId(task.0), deadline, 0x5441_534B, 0)
-    }
-
-    /// Register a relative sleep. Returns the absolute wake deadline.
-    pub fn sleep_for(&self, task: TaskId, duration_ns: u64) -> Result<Deadline, TimerServiceError> {
-        self.timers.schedule_after(TimerId(task.0), duration_ns, 0x5441_534B, 0)
-    }
-
-    /// Cancel a pending sleep, for example when another event wakes the task.
-    pub fn cancel_sleep(&self, task: TaskId) -> bool {
-        self.timers.cancel(TimerId(task.0)).is_some()
-    }
-
-    /// Next deadline the hardware timer backend should program.
-    pub fn next_deadline(&self) -> Option<Deadline> {
-        self.timers.next_deadline()
-    }
-
-    /// Collect expired task IDs for the scheduler's ready queue.
+    /// Register the timeout before changing the task to blocked state. The
+    /// scheduler must serialize that transition against timeout processing.
     ///
-    /// The caller supplies both scratch event storage and output task storage.
-    /// At most min(events.len(), wakeups.len()) expirations are consumed. The
-    /// method does not mutate scheduler state or perform context switches.
-    pub fn collect_wakeups(
+    /// # Safety
+    /// Must be called on the CPU that owns this timeout manager.
+    pub unsafe fn sleep_until(
+        &self,
+        task: TaskId,
+        deadline: Deadline,
+    ) -> Result<(), TscDeadlineQueueError> {
+        // SAFETY: Same-CPU requirement is part of this method's contract.
+        unsafe {
+            self.timers.schedule_at(
+                TimerId(task.0),
+                deadline,
+                TASK_SLEEP_EVENT,
+                0,
+            )
+        }
+    }
+
+    /// Register a relative task sleep and return its absolute deadline.
+    ///
+    /// # Safety
+    /// Must be called on the CPU that owns this timeout manager.
+    pub unsafe fn sleep_for(
+        &self,
+        task: TaskId,
+        duration_ns: u64,
+    ) -> Result<Deadline, TscDeadlineQueueError> {
+        // SAFETY: Same-CPU requirement is part of this method's contract.
+        unsafe { self.timers.schedule_after(TimerId(task.0), duration_ns, TASK_SLEEP_EVENT, 0) }
+    }
+
+    /// Cancel a pending sleep, e.g. when another event wakes the task.
+    ///
+    /// # Safety
+    /// Must be called on the CPU that owns this timeout manager.
+    pub unsafe fn cancel_sleep(
+        &self,
+        task: TaskId,
+    ) -> Result<bool, crate::drivers::api::DriverError> {
+        // SAFETY: Same-CPU requirement is part of this method's contract.
+        Ok(unsafe { self.timers.cancel(TimerId(task.0)) }?.is_some())
+    }
+
+    /// Collect expired task IDs for insertion into the scheduler ready queue.
+    ///
+    /// The caller supplies scratch event storage and output task storage.
+    /// At most min(events.len(), wakeups.len()) events are consumed. No task
+    /// state is modified and no context switch is performed here.
+    ///
+    /// # Safety
+    /// Must run on the CPU that owns this timeout manager, in deferred/task
+    /// context rather than inside the hard interrupt handler.
+    pub unsafe fn collect_wakeups(
         &self,
         events: &mut [Option<TimerEvent>],
         wakeups: &mut [Option<TaskId>],
-    ) -> usize {
+    ) -> Result<usize, crate::drivers::api::DriverError> {
         let capacity = core::cmp::min(events.len(), wakeups.len());
-        let count = self.timers.drain_expired(&mut events[..capacity]);
+        // SAFETY: Same-CPU and deferred-context requirements are part of the
+        // caller contract for this method.
+        let count = unsafe { self.timers.process_expired(&mut events[..capacity])? };
         for index in 0..count {
             if let Some(event) = events[index].take() {
-                wakeups[index] = Some(TaskId(event.id.0));
+                if event.kind == TASK_SLEEP_EVENT {
+                    wakeups[index] = Some(TaskId(event.id.0));
+                }
             }
         }
-        count
+        Ok(count)
     }
 
     /// Number of pending task sleeps.
