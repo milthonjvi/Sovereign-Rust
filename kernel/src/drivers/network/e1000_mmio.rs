@@ -6,7 +6,7 @@
 use core::ptr::NonNull;
 use core::sync::atomic::{compiler_fence, fence, Ordering};
 
-use super::e1000::{REG_RAH0, REG_STATUS};
+use super::e1000::REG_RAH0;
 use super::e1000_hw::E1000Registers;
 
 /// Minimum BAR window needed for the registers used by the E1000 driver.
@@ -102,6 +102,7 @@ impl E1000Registers for VolatileE1000Registers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::e1000::REG_STATUS;
 
     #[repr(align(4096))]
     struct MockMmio([u8; E1000_MMIO_MIN_LENGTH]);
