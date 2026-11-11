@@ -1,8 +1,8 @@
 //! ELF64 PT_LOAD image allocation and population for Sovereign Boot.
 //!
-//! The current implementation reserves one contiguous physical span for the
-//! kernel's virtual image span. It is a staging loader: the caller must still
-//! create page-table mappings before transferring control to the kernel.
+//! The loader reserves one contiguous physical span for the kernel's virtual
+//! image, zeroes it, and copies each validated PT_LOAD payload. The caller
+//! constructs permission-correct page mappings before transferring control.
 
 use core::{ffi::c_void, ptr};
 
