@@ -231,7 +231,7 @@ pub fn initialize_controller<R: NvmeRegisterIo>(
     queues:&mut NvmeAdminQueueMemory<'_>,
     poll_limit:u32,
 )->Result<NvmeControllerInfo,NvmeError>{
-    const CAP:u32=0x00; const CC:u32=0x14; const CSTS:u32=0x1C;
+    const CAP:u32=0x00; const CC:u32=0x14;
     const AQA:u32=0x24; const ASQ:u32=0x28; const ACQ:u32=0x30;
     if queues.depth<2 || queues.depth>4096
         || queues.depth as usize>queues.submission.len()
@@ -326,6 +326,7 @@ mod controller_tests {
         assert_eq!(registers.aqa,0x0001_0001);
         assert_eq!(registers.asq,0x1000);assert_eq!(registers.acq,0x2000);
         assert_eq!(registers.cc&1,1);assert_eq!(registers.status&1,1);
+        drop(queues);
         assert_eq!(cq[0].status,0);
     }
 }
