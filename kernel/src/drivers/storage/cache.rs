@@ -97,7 +97,10 @@ impl<D: BlockDevice, const N: usize> BlockDevice for BlockCache<'_, D, N> {
     fn write_blocks(&mut self, range: BlockRange, input: &[u8]) -> Result<(), BlockError> {
         let geometry = self.inner.geometry().validate()?;
         validate_buffer(geometry, range, input.len())?;
-        self.inner.write_blocks(range, input)?;
+        if let Err(error) = self.inner.write_blocks(range, input) {
+            let _ = self.invalidate_range(range);
+            return Err(error);
+        }
         let block_size = self.block_size;
         for index in 0..range.block_count as usize {
             let lba = range.start_block + index as u64;
