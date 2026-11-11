@@ -97,6 +97,20 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         let rsdp = sovereign_kernel::drivers::acpi::rsdp::Rsdp::parse(rsdp_bytes)
             .unwrap_or_else(|_| fatal_halt());
         let _root_table = rsdp.root_table_address().unwrap_or_else(|_| fatal_halt());
+
+        // The loader identity-maps every EFI_ACPI_RECLAIM_MEMORY and
+        // EFI_ACPI_MEMORY_NVS range. Keep discovery optional: malformed or
+        // incomplete optional firmware tables must not block basic boot.
+        if let Ok(tables) = sovereign_kernel::drivers::acpi::discover::AcpiTables::discover_with_mappers(
+            &rsdp,
+            |physical| map_uefi_acpi_sdt(&memory_map, physical),
+            |physical| map_uefi_acpi_facs(&memory_map, physical),
+        ) {
+            // SAFETY: Single BSP bootstrap, IF clear, and discovery occurs once.
+            let _ = unsafe {
+                sovereign_kernel::boot::sovereign::install_acpi_tables(tables)
+            };
+        }
     }
 
 
@@ -203,6 +217,62 @@ fn validate_boot_mappings(
     stack_mapping.writable
         && !stack_mapping.executable
         && !stack_mapping.user_accessible
+}
+
+fn is_uefi_acpi_range(
+    memory_map: &sovereign_kernel::boot::sovereign::EfiMemoryMap<'_>,
+    physical: u64,
+    byte_len: u64,
+) -> bool {
+    memory_map.contains_range_with_type(physical, byte_len, 9).unwrap_or(false)
+        || memory_map.contains_range_with_type(physical, byte_len, 10).unwrap_or(false)
+}
+
+fn map_uefi_acpi_sdt(
+    memory_map: &sovereign_kernel::boot::sovereign::EfiMemoryMap<'_>,
+    physical: u64,
+) -> Option<&'static [u8]> {
+    const MIN_SDT_LENGTH: usize = 36;
+    const MAX_SDT_LENGTH: usize = 16 * 1024 * 1024;
+    if physical == 0 || !is_uefi_acpi_range(memory_map, physical, MIN_SDT_LENGTH as u64) {
+        return None;
+    }
+    let pointer = physical as usize as *const u8;
+    // SAFETY: The first 36 bytes are inside a retained ACPI memory descriptor.
+    let length = unsafe { ptr::read_unaligned(pointer.add(4).cast::<u32>()) } as usize;
+    if !(MIN_SDT_LENGTH..=MAX_SDT_LENGTH).contains(&length)
+        || !is_uefi_acpi_range(memory_map, physical, length as u64)
+    {
+        return None;
+    }
+    // SAFETY: The complete SDT range is identity-mapped and retained by UEFI.
+    Some(unsafe { slice::from_raw_parts(pointer, length) })
+}
+
+fn map_uefi_acpi_facs(
+    memory_map: &sovereign_kernel::boot::sovereign::EfiMemoryMap<'_>,
+    physical: u64,
+) -> Option<&'static [u8]> {
+    const MIN_FACS_LENGTH: usize = 64;
+    const MAX_FACS_LENGTH: usize = 16 * 1024 * 1024;
+    if physical == 0 || !is_uefi_acpi_range(memory_map, physical, 8) {
+        return None;
+    }
+    let pointer = physical as usize as *const u8;
+    // SAFETY: The FACS signature and length prefix are inside retained ACPI memory.
+    let signature = unsafe { ptr::read_unaligned(pointer.cast::<u32>()) };
+    if signature != u32::from_le_bytes(*b"FACS") {
+        return None;
+    }
+    // SAFETY: The FACS length is the u32 immediately following its signature.
+    let length = unsafe { ptr::read_unaligned(pointer.add(4).cast::<u32>()) } as usize;
+    if !(MIN_FACS_LENGTH..=MAX_FACS_LENGTH).contains(&length)
+        || !is_uefi_acpi_range(memory_map, physical, length as u64)
+    {
+        return None;
+    }
+    // SAFETY: The complete FACS range is identity-mapped and retained as ACPI memory.
+    Some(unsafe { slice::from_raw_parts(pointer, length) })
 }
 
 #[panic_handler]
