@@ -177,6 +177,20 @@ fn physical_region(start: u64, pages: u64) -> Result<PhysicalRegion, BootMemoryE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boot::sovereign::{EfiMemoryDescriptor, EfiMemoryMap};
+
+    #[test]
+    fn rejects_overlapping_memory_descriptors_before_allocation() {
+        let descriptors = [
+            EfiMemoryDescriptor::new(7, 0x0010_0000, 0, 16, 0),
+            EfiMemoryDescriptor::new(2, 0x0010_8000, 0, 16, 0),
+        ];
+        let raw_map = EfiMemoryMap::from_descriptors(&descriptors);
+        assert_eq!(
+            BootMemoryMap::new(&raw_map).err(),
+            Some(BootMemoryError::OverlappingOrUnorderedDescriptors),
+        );
+    }
 
     #[test]
     fn physical_region_uses_exclusive_end() {
