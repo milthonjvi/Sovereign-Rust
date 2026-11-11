@@ -191,7 +191,7 @@ impl Fadt {
         };
         for gas in [control, status] {
             gas.validate()?;
-            if !gas.is_system_memory_io_or_pci_config_bus0()
+            if !gas.is_valid_byte_register_address()
                 || gas.bit_width != 8
                 || gas.bit_offset != 0
                 || !gas.has_byte_access_encoding()
@@ -280,7 +280,7 @@ impl Fadt {
         let gas = self.reset_register.ok_or(AcpiError::InvalidGas)?;
         let value = self.reset_value.ok_or(AcpiError::InvalidGas)?;
         gas.validate()?;
-        if !gas.is_system_memory_io_or_pci_config_bus0()
+        if !gas.is_valid_byte_register_address()
             || gas.bit_width != 8
             || gas.bit_offset != 0
             || !gas.has_byte_access_encoding()
@@ -500,6 +500,20 @@ impl GenericAddress {
         let function = (self.address >> 16) & 0xFFFF;
         let offset = self.address & 0xFFFF;
         (self.address >> 48) == 0 && device <= 31 && function <= 7 && offset <= 0x0FFF
+    }
+
+    /// Validate a fixed 8-bit register's address space and address encoding.
+    /// x86 System I/O addresses are limited to the architectural 16-bit port
+    /// space; PCI Configuration addresses use the ACPI bus-zero encoding.
+    pub const fn is_valid_byte_register_address(self) -> bool {
+        if self.address_space == Self::ADDRESS_SPACE_SYSTEM_MEMORY {
+            return true;
+        }
+        if self.address_space == Self::ADDRESS_SPACE_SYSTEM_IO {
+            return self.address <= u16::MAX as u64;
+        }
+        self.address_space == Self::ADDRESS_SPACE_PCI_CONFIG
+            && self.is_system_memory_io_or_pci_config_bus0()
     }
 }
 
@@ -926,6 +940,28 @@ mod tests {
             pm_timer: 0, gpe0: 2, gpe1: 0,
         };
         assert_eq!(registers.validate_against_lengths(lengths), Ok(()));
+    }
+
+    #[test]
+    fn rejects_fixed_byte_registers_outside_x86_io_port_space() {
+        let mut gas = valid_reset_gas();
+        gas.address = 0x1_0000;
+        let fadt = Fadt::parse(&make_fadt(
+            148, FADT_RESET_REG_SUP, Some(gas), Some(6),
+        )).unwrap();
+        assert_eq!(fadt.validated_reset_register(), Err(AcpiError::InvalidGas));
+
+        let mut b = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
+        for (offset, address) in [(244usize, 0x1_0000u64), (256, 0x1000)] {
+            b[offset] = GenericAddress::ADDRESS_SPACE_SYSTEM_IO;
+            b[offset + 1] = 8;
+            b[offset + 3] = GenericAddress::ACCESS_BYTE;
+            b[offset + 4..offset + 12].copy_from_slice(&address.to_le_bytes());
+        }
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validated_sleep_registers(), Err(AcpiError::InvalidGas));
     }
 
     #[test]
