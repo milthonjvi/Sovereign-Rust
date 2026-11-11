@@ -5,7 +5,7 @@
 use super::block::{BlockError, BlockGeometry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AhciError { InvalidCapabilities, InvalidPort, InvalidTransfer, AddressOverflow, InvalidAlignment, PrdtCapacity, UnsupportedAddressing }
+pub enum AhciError { InvalidCapabilities, InvalidPort, InvalidTransfer, AddressOverflow, InvalidAlignment, PrdtCapacity, UnsupportedAddressing, QueueFull }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AhciCapabilities {
@@ -191,7 +191,7 @@ impl<const N:usize> AhciCommandSlots<N>{
         if N==0 || N>32{return Err(AhciError::InvalidCapabilities);}
         if let Some(index)=self.used.iter().position(|used|!*used){
             self.used[index]=true;self.in_flight+=1;Ok(index as u8)
-        }else{Err(AhciError::PrdtCapacity)}
+        }else{Err(AhciError::QueueFull)}
     }
     pub fn release(&mut self,slot:u8)->bool{
         let index=slot as usize;
@@ -207,7 +207,7 @@ mod slot_tests{
     #[test]fn allocates_and_releases_slots_without_duplicates(){
         let mut slots=AhciCommandSlots::<2>::new();
         let a=slots.allocate().unwrap();let b=slots.allocate().unwrap();
-        assert_ne!(a,b);assert_eq!(slots.allocate(),Err(AhciError::PrdtCapacity));
+        assert_ne!(a,b);assert_eq!(slots.allocate(),Err(AhciError::QueueFull));
         assert!(slots.release(a));assert!(!slots.release(a));
         assert_eq!(slots.in_flight(),1);assert!(slots.is_used(b));
     }
