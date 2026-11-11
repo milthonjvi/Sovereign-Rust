@@ -186,6 +186,11 @@ impl GenericAddress {
         })
     }
 
+    /// A zero GAS address denotes an unimplemented register block.
+    pub const fn is_present(self) -> bool {
+        self.address != 0
+    }
+
     /// Validate GAS field encoding and arithmetic without dereferencing address.
     pub fn validate(self) -> Result<(), AcpiError> {
         if self.address == 0 || self.bit_width == 0 {
@@ -299,6 +304,29 @@ mod tests {
         malformed[9] = checksum;
         let fadt = Fadt::parse(&malformed).unwrap();
         assert_eq!(fadt.extended_pm_registers.unwrap().validate(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn treats_zero_address_pm_gas_as_absent() {
+        let empty = GenericAddress {
+            address_space: 0xFF,
+            bit_width: 0,
+            bit_offset: 0xFF,
+            access_size: 0xFF,
+            address: 0,
+        };
+        assert!(!empty.is_present());
+        let registers = ExtendedPmRegisters {
+            pm1a_event: empty,
+            pm1b_event: empty,
+            pm1a_control: empty,
+            pm1b_control: empty,
+            pm2_control: empty,
+            pm_timer: empty,
+            gpe0: empty,
+            gpe1: empty,
+        };
+        assert_eq!(registers.validate(), Ok(()));
     }
 
     #[test]
