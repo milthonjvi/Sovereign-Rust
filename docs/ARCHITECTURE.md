@@ -31,8 +31,11 @@ The loader defines the initial versioned handoff ABI in
 `loader/src/boot_info.rs`. Version 1 carries physical-address fields for the
 firmware memory map, loaded kernel image, entry point, and optional ACPI and
 framebuffer metadata. The UEFI entry point now populates the structure and
-validates its fields before retaining it; the kernel-side consumer and actual
-register handoff are still pending. The kernel must validate all ranges before
+validates its fields before retaining it; the kernel-side validator now exists in `kernel/src/boot/sovereign.rs` and
+is exported by `kernel/src/boot/mod.rs`. It validates the ABI, checked address
+ranges, optional metadata flags, and UEFI descriptor stride, and reads memory
+map entries without assuming descriptors are tightly packed. The consumer is
+not yet wired into a separate kernel entry point or actual register handoff. The kernel must validate all ranges before
 dereferencing physical addresses.
 
 A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support
