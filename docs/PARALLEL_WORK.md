@@ -8,9 +8,9 @@ paths or redefine shared interfaces independently.
 
 | Workstream | Assigned paths | Must not modify |
 |---|---|---|
-| Core integration (coordinator) | root manifests, `README.md`, `docs/`, shared interfaces and integration | active workstream-owned files |
+| Core integration and x86_64 bootstrap (coordinator) | root manifests, `README.md`, `docs/`, shared interfaces, `kernel/src/arch/x86_64/**`, `kernel/src/boot/**` | active workstream-owned files |
 | Boot and image pipeline | `boot/**`, `tools/boot/**` | `kernel/src/**`, root manifests, shared docs |
-| x86_64 CPU support | `kernel/src/arch/x86_64/**` | boot pipeline, memory, drivers, scheduler |
+| Advanced x86_64 CPU support | coordinator-owned `kernel/src/arch/x86_64/**` (coordinate before edits) | boot pipeline, memory, drivers, scheduler |
 | Memory management | `kernel/src/memory/**` | architecture implementation, boot pipeline, drivers |
 | Interrupts and exceptions | `kernel/src/interrupts/**` | boot pipeline, memory allocator, drivers |
 | Device bus and firmware | `kernel/src/drivers/pci/**`, `kernel/src/drivers/acpi/**`, `kernel/src/firmware/**` | driver API, other driver families, architecture internals |
