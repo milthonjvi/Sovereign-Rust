@@ -312,6 +312,27 @@ impl MsixCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::RefCell;
+
+    struct WritableConfig {
+        registers: RefCell<[u32; 1024]>,
+    }
+
+    impl ConfigAccess for WritableConfig {
+        fn read_u32(&self, _address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+            self.registers.borrow().get((register / 4) as usize).copied()
+                .ok_or(ConfigError::OutOfRange)
+        }
+
+        fn write_u32(&self, _address: PciAddress, register: u16, value: u32) -> Result<(), ConfigError> {
+            let mut registers = self.registers.borrow_mut();
+            let slot = registers.get_mut((register / 4) as usize).ok_or(ConfigError::OutOfRange)?;
+            *slot = value;
+            Ok(())
+        }
+    }
+
+    extern "C" fn configured_msi_handler(_vector: u8) {}
 
     struct MockConfig {
         registers: [u32; 1024],
@@ -328,6 +349,42 @@ mod tests {
 
     fn address() -> PciAddress {
         PciAddress { segment: 0, bus: 0, device: 0, function: 0 }
+    }
+
+    #[test]
+    fn configures_msi_only_after_vectors_are_registered() {
+        let mut registers = [0u32; 1024];
+        registers[0x50 / 4] = 0x0185_0005;
+        registers[0x54 / 4] = 0xfee0_0000;
+        registers[0x58 / 4] = 0;
+        registers[0x5c / 4] = 0x0040;
+        registers[0x60 / 4] = 0x0000_0003;
+        registers[0x64 / 4] = 0x0000_0001;
+        let io = WritableConfig { registers: RefCell::new(registers) };
+
+        crate::interrupts::dispatch::register(0x40, configured_msi_handler).unwrap();
+        crate::interrupts::dispatch::register(0x41, configured_msi_handler).unwrap();
+        let result = unsafe {
+            configure_msi(
+                &io,
+                address(),
+                Capability { id: MSI_CAPABILITY_ID, offset: 0x50 },
+                0xfee0_0000,
+                0x0040,
+                2,
+            )
+        };
+        assert_eq!(result, Ok(()));
+        let programmed = io.registers.borrow();
+        assert_eq!(programmed[0x50 / 4], 0x0195_0005);
+        assert_eq!(programmed[0x54 / 4], 0xfee0_0000);
+        assert_eq!(programmed[0x58 / 4], 0);
+        assert_eq!(programmed[0x5c / 4], 0x40);
+        assert_eq!(programmed[0x60 / 4], 0);
+        assert_eq!(programmed[0x64 / 4], 1);
+        drop(programmed);
+        crate::interrupts::dispatch::unregister(0x40, configured_msi_handler).unwrap();
+        crate::interrupts::dispatch::unregister(0x41, configured_msi_handler).unwrap();
     }
 
     #[test]
