@@ -294,17 +294,6 @@ impl Fadt {
         {
             return Err(AcpiError::InvalidGas);
         }
-        if (legacy.pm1b_event != 0 || present(extended.map(|x| x.pm1b_event), 0))
-            && lengths.pm1_event == 0
-        {
-            return Err(AcpiError::InvalidLength);
-        }
-        if (legacy.pm1b_control != 0 || present(extended.map(|x| x.pm1b_control), 0))
-            && lengths.pm1_control == 0
-        {
-            return Err(AcpiError::InvalidLength);
-        }
-
         // Optional blocks must be described consistently: a nonzero length
         // requires an address, and a legacy address cannot have zero length.
         for (gas, address, length) in [
