@@ -211,7 +211,7 @@ pub trait NvmeRegisterIo {
     fn write64(&mut self, offset:u32, value:u64)->Result<(),NvmeError>;
 }
 
-pub struct NvmeAdminQueueMemory<'a> {
+/// Queue slices must be DMA-mapped, physically contiguous, and backed by the supplied bases.\npub struct NvmeAdminQueueMemory<'a> {
     pub submission_phys:u64,
     pub completion_phys:u64,
     pub submission:&'a mut [NvmeCommand],
@@ -245,7 +245,7 @@ pub fn initialize_controller<R: NvmeRegisterIo>(
         return Err(NvmeError::InvalidQueueDepth);
     }
     let mut cc=registers.read32(CC)?;
-    cc &= !1;
+    cc &= !(1 | (3 << 14));
     registers.write32(CC,cc)?;
     wait_ready(registers,false,poll_limit)?;
     let capabilities=NvmeCapabilities::parse(registers.read64(CAP)?)?;
