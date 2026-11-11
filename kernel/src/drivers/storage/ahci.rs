@@ -317,3 +317,39 @@ pub fn command_complete<R:AhciRegisterIo>(
     if ncq && io.read32(port_register(base,0x34)?)?&bit!=0{return Ok(false);}
     Ok(true)
 }
+
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+    struct Registers([u32;64]);
+    impl AhciRegisterIo for Registers {
+        fn read32(&mut self, offset:u32)->Result<u32,AhciError>{Ok(self.0[(offset/4) as usize])}
+        fn write32(&mut self, offset:u32,value:u32)->Result<(),AhciError>{
+            let slot=&mut self.0[(offset/4) as usize];
+            if offset==0x10 || offset==0x30 { *slot &= !value; } else { *slot=value; }
+            Ok(())
+        }
+    }
+    #[test]
+    fn configures_starts_and_issues_port_command() {
+        let mut regs=Registers([0;64]);
+        regs.0[0x18/4]=(1<<0)|(1<<4);
+        configure_port(&mut regs,0,AhciPortMemory{command_list_phys:0x4000,received_fis_phys:0x5000},0xFFFF,8).unwrap();
+        assert_eq!(regs.0[0],0x4000);
+        assert_eq!(regs.0[2],0x5000);
+        start_port(&mut regs,0,8).unwrap();
+        assert_eq!(regs.0[0x18/4]&0x11,0x11);
+        issue_command(&mut regs,0,3,true,8).unwrap();
+        assert_eq!(regs.0[0x34/4],1<<3);
+        assert_eq!(regs.0[0x38/4],1<<3);
+        assert_eq!(command_complete(&mut regs,0,3,true),Ok(false));
+        regs.0[0x34/4]=0;regs.0[0x38/4]=0;
+        assert_eq!(command_complete(&mut regs,0,3,true),Ok(true));
+    }
+    #[test]
+    fn rejects_unaligned_port_dma_memory() {
+        let mut regs=Registers([0;64]);
+        assert_eq!(configure_port(&mut regs,0,AhciPortMemory{command_list_phys:0x4100,received_fis_phys:0x5000},0,1),Err(AhciError::InvalidPortMemory));
+    }
+}
