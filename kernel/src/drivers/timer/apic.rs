@@ -61,21 +61,23 @@ pub fn periodic_initial_count(
 /// Derive the local-APIC timer input clock from a measured APIC countdown
 /// and an HPET main-counter interval.
 ///
-/// `apic_elapsed_ticks` is the number of APIC timer ticks elapsed during
+/// `apic_elapsed_ticks` is the number of down-counter ticks elapsed during
 /// `hpet_elapsed_ticks` HPET ticks. The HPET period is expressed in
-/// femtoseconds per tick. The result is the APIC timer input clock before
-/// applying the selected divide configuration.
+/// femtoseconds per tick. The selected APIC divider is applied to recover the
+/// timer input clock before division.
 pub fn calibrate_bus_clock_hz(
     apic_elapsed_ticks: u32,
     hpet_elapsed_ticks: u64,
     hpet_period_fs: u32,
+    divide: ApicDivide,
 ) -> Result<u64, DriverError> {
     if apic_elapsed_ticks == 0 || hpet_elapsed_ticks == 0 || hpet_period_fs == 0 {
         return Err(DriverError::InvalidConfiguration);
     }
 
     let numerator = (apic_elapsed_ticks as u128)
-        .checked_mul(1_000_000_000_000_000u128)
+        .checked_mul(divide.factor() as u128)
+        .and_then(|ticks| ticks.checked_mul(1_000_000_000_000_000u128))
         .ok_or(DriverError::InvalidConfiguration)?;
     let denominator = (hpet_elapsed_ticks as u128)
         .checked_mul(hpet_period_fs as u128)
@@ -99,6 +101,7 @@ pub fn calibrated_periodic_initial_count(
         apic_elapsed_ticks,
         hpet_elapsed_ticks,
         hpet_period_fs,
+        divide,
     )?;
     periodic_initial_count(bus_hz, requested_hz, divide)
 }
@@ -199,11 +202,14 @@ mod tests {
 
     #[test]
     fn calibrates_apic_clock_from_hpet_interval() {
-        // 100,000 APIC ticks over 10,000 HPET ticks at 100 ns/tick = 100 MHz.
-        assert_eq!(calibrate_bus_clock_hz(100_000, 10_000, 100_000_000), Ok(100_000_000));
+        // 6,250 divided APIC ticks over 1 ms: 6.25 MHz * 16 = 100 MHz.
+        assert_eq!(
+            calibrate_bus_clock_hz(6_250, 10_000, 100_000_000, ApicDivide::By16),
+            Ok(100_000_000)
+        );
         assert_eq!(
             calibrated_periodic_initial_count(
-                100_000, 10_000, 100_000_000, 1000, ApicDivide::By16
+                6_250, 10_000, 100_000_000, 1000, ApicDivide::By16
             ),
             Ok(6250)
         );
@@ -211,11 +217,11 @@ mod tests {
 
     #[test]
     fn rejects_invalid_calibration_samples() {
-        assert_eq!(calibrate_bus_clock_hz(0, 10, 100_000_000),
+        assert_eq!(calibrate_bus_clock_hz(0, 10, 100_000_000, ApicDivide::By1),
             Err(DriverError::InvalidConfiguration));
-        assert_eq!(calibrate_bus_clock_hz(10, 0, 100_000_000),
+        assert_eq!(calibrate_bus_clock_hz(10, 0, 100_000_000, ApicDivide::By1),
             Err(DriverError::InvalidConfiguration));
-        assert_eq!(calibrate_bus_clock_hz(10, 10, 0),
+        assert_eq!(calibrate_bus_clock_hz(10, 10, 0, ApicDivide::By1),
             Err(DriverError::InvalidConfiguration));
     }
 
