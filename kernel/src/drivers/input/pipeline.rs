@@ -183,8 +183,8 @@ mod tests {
     fn queue_overflow_resets_consumer_before_accepting_more_input() {
         let mut queue = SpscQueue::<InputEvent, 3>::new();
         let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&mut queue, false);
-        pipeline.feed(0, 0x1E); // Key-down is dropped because queue is filled below.
-        // Drain the first key event, then fill the queue and force another drop.
+        pipeline.feed(0, 0x1E); // Establish an initial held-key state.
+        // Drain the first event, then fill the queue and force a later edge loss.
         assert!(matches!(consumer.pop(), Some(InputEvent::Key { code: KeyCode::A, pressed: true, .. })));
         pipeline.feed(0, 0x1E); // Repeat event enters the queue.
         pipeline.feed(0, 0x30); // B event enters the queue.
