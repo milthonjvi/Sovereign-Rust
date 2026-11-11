@@ -135,6 +135,7 @@ impl ParsedConfiguration{
   let mut out=Self{descriptor,interfaces:[None;MAX_INTERFACES],endpoints:[None;MAX_ENDPOINTS],interface_len:0,endpoint_len:0};
   let mut current:Option<usize>=None;
   let mut first=true;
+  let mut endpoint_can_have_companion=false;
   for item in DescriptorIter::new(&bytes[..total]){
    let item=item?;
    if first{
@@ -145,6 +146,7 @@ impl ParsedConfiguration{
    match item.descriptor_type{
     CONFIGURATION_DESCRIPTOR=>return Err(UsbError::MalformedDescriptor),
     INTERFACE_DESCRIPTOR=>{
+     endpoint_can_have_companion=false;
      if out.interface_len as usize>=MAX_INTERFACES{return Err(UsbError::NoResources)}
      let d=InterfaceDescriptor::parse(item.bytes)?;
      // One entry per alternate setting; repeated interface numbers are valid.
@@ -159,13 +161,15 @@ impl ParsedConfiguration{
      let n=out.endpoint_len as usize;out.endpoints[n]=Some(e);out.endpoint_len+=1;
      let iface=out.interfaces[i].as_mut().ok_or(UsbError::MalformedDescriptor)?;
      iface.endpoint_count=iface.endpoint_count.saturating_add(1);
+     endpoint_can_have_companion=true;
     }
     SS_ENDPOINT_COMPANION_DESCRIPTOR=>{
-     if out.endpoint_len==0{return Err(UsbError::MalformedDescriptor)}
+     if !endpoint_can_have_companion||out.endpoint_len==0{return Err(UsbError::MalformedDescriptor)}
      let e=out.endpoints[out.endpoint_len as usize-1].as_mut().ok_or(UsbError::MalformedDescriptor)?;
      e.apply_companion(item.bytes)?;
+     endpoint_can_have_companion=false;
     }
-    _=>{}
+    _=>{endpoint_can_have_companion=false;}
    }
   }
   let mut unique_interfaces=[false;256];
@@ -224,6 +228,14 @@ mod configuration_tests{
   let e=c.endpoints[0].unwrap();
   assert_eq!(e.max_packet_size,512);assert_eq!(e.max_burst,3);
   assert!(e.has_ss_companion);assert_eq!(e.bytes_per_interval,0);
+ }
+ #[test]fn rejects_superspeed_companion_not_adjacent_to_endpoint(){
+  let bytes=[9,2,25,0,1,1,0,0x80,50,
+   9,4,0,0,1,0xff,0,0,0,
+   7,5,0x81,2,0,2,0,
+   2,0x24,
+   6,0x30,1,0,0,0];
+  assert_eq!(ParsedConfiguration::parse(&bytes),Err(UsbError::MalformedDescriptor));
  }
  #[test]fn rejects_configuration_with_truncated_descriptor(){
   let bytes=[9,2,12,0,1,1,0,0x80,50,9,4,0];
