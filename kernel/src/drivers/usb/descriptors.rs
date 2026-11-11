@@ -110,7 +110,7 @@ impl ParsedEndpoint{
   let packet=self.max_packet_size;
   let valid=match speed{
    UsbSpeed::Low=>{
-    transfer==3&&packet<=8&&self.interval>=10&&self.transactions_per_microframe==1
+    transfer==3&&packet==8&&self.interval>=10&&self.transactions_per_microframe==1
    }
    UsbSpeed::Full=>{
     let size_ok=match transfer{
