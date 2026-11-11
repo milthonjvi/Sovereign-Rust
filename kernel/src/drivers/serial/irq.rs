@@ -105,25 +105,30 @@ struct PortBinding {
     shared_line_mask: u8,
     handler: extern "C" fn(u8),
     queue: &'static UartRxBuffer<RX_CAPACITY>,
+    stats: &'static AtomicRxStatistics,
 }
 
 fn binding(base: u16) -> Option<PortBinding> {
     match base {
         0x3F8 => Some(PortBinding {
             irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
-            handler: irq4_handler, queue: &COM1_RX,\n            stats: &COM1_STATS,
+            handler: irq4_handler, queue: &COM1_RX,
+            stats: &COM1_STATS,
         }),
         0x2F8 => Some(PortBinding {
             irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
-            handler: irq3_handler, queue: &COM2_RX,\n            stats: &COM2_STATS,
+            handler: irq3_handler, queue: &COM2_RX,
+            stats: &COM2_STATS,
         }),
         0x3E8 => Some(PortBinding {
             irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
-            handler: irq4_handler, queue: &COM3_RX,\n            stats: &COM3_STATS,
+            handler: irq4_handler, queue: &COM3_RX,
+            stats: &COM3_STATS,
         }),
         0x2E8 => Some(PortBinding {
             irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
-            handler: irq3_handler, queue: &COM4_RX,\n            stats: &COM4_STATS,
+            handler: irq3_handler, queue: &COM4_RX,
+            stats: &COM4_STATS,
         }),
         _ => None,
     }
