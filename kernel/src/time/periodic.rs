@@ -33,7 +33,8 @@ impl PeriodicTimer {
         let (periods_elapsed, next_ns) = match self.mode {
             PeriodicMode::FixedRate => {
                 let lateness = now_ns.saturating_sub(scheduled.timestamp_ns());
-                let periods = lateness / self.period_ns + 1;
+                let periods = ((lateness as u128) / (self.period_ns as u128) + 1)
+                    .min(u64::MAX as u128) as u64;
                 let next = (scheduled.timestamp_ns() as u128)
                     .saturating_add((periods as u128).saturating_mul(self.period_ns as u128));
                 (periods, next.min(u64::MAX as u128) as u64)
@@ -66,6 +67,14 @@ mod tests {
         assert_eq!(fired.periods_elapsed, 1);
         assert_eq!(fired.periods_missed, 0);
         assert_eq!(fired.next, Deadline::at_ns(145));
+    }
+    #[test]
+    fn fixed_rate_handles_maximum_lateness_without_integer_overflow() {
+        let mut timer = PeriodicTimer::new(Deadline::at_ns(0), 1, PeriodicMode::FixedRate).unwrap();
+        let fired = timer.expire(u64::MAX).unwrap();
+        assert_eq!(fired.periods_elapsed, u64::MAX);
+        assert_eq!(fired.next, Deadline::INFINITE);
+        assert_eq!(timer.expire(u64::MAX), None);
     }
     #[test]
     fn rejects_zero_period_and_saturates_overflow() {
