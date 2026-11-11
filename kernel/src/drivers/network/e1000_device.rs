@@ -691,6 +691,8 @@ mod tests {
         assert_eq!(device.interface.link, LinkState::Down);
         assert!(device.registers.writes.contains(&(super::super::e1000::REG_CTRL,
             super::super::e1000::CTRL_RST)));
+        assert!(!device.registers.writes.contains(&(super::super::e1000::REG_RCTL, 0)));
+        assert!(!device.registers.writes.contains(&(super::super::e1000::REG_TCTL, 0)));
         assert_eq!(device.initialize(&supported_device()), Err(DriverError::NotReady));
     }
 
