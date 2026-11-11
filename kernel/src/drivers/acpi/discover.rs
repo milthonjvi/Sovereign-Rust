@@ -132,6 +132,7 @@ impl AcpiTables {
             fadt.validate_firmware_metadata()?;
             fadt.validate_fixed_feature_flags()?;
             fadt.validate_boot_architecture_flags()?;
+            fadt.validate_hardware_mode()?;
 
             // FACS is referenced by FADT.FIRMWARE_CTRL / X_FIRMWARE_CTRL,
             // not listed in the RSDT/XSDT. It has no SDT checksum. Prefer a
