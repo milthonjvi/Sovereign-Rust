@@ -196,6 +196,21 @@ mod tests {
             for depth in 0..levels as usize {
                 let address = recursive_entry_address(levels, RECURSIVE_SLOT, &indices, depth).unwrap();
                 assert!(is_canonical_for_levels(address, levels));
+
+                let address_bits = PAGE_SHIFT + 9 * levels as u64;
+                let raw = address & ((1u64 << address_bits) - 1);
+                let recursive_prefix = levels as usize - depth;
+                for position in 0..levels as usize {
+                    let shift = PAGE_SHIFT + 9 * (levels as u64 - position as u64 - 1);
+                    let actual = ((raw >> shift) & INDEX_MASK) as usize;
+                    let expected = if position < recursive_prefix {
+                        RECURSIVE_SLOT
+                    } else {
+                        indices[position - recursive_prefix]
+                    };
+                    assert_eq!(actual, expected);
+                }
+                assert_eq!(raw & 0xfff, indices[depth] as u64 * 8);
             }
         }
     }
