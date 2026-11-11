@@ -14,6 +14,7 @@ pub const BOOT_INFO_VERSION: u32 = 1;
 pub const MEMORY_MAP_FORMAT_UEFI: u32 = 1;
 pub const MEMORY_DESCRIPTOR_VERSION_UEFI: u32 = 1;
 const MAX_PHYSICAL_ADDRESS: u64 = 1 << 52;
+const MAX_MEMORY_MAP_BYTES: u64 = 1024 * 1024;
 
 /// No framebuffer information is currently provided.
 pub const BOOT_INFO_FLAG_FRAMEBUFFER_VALID: u64 = 1 << 0;
@@ -85,6 +86,7 @@ impl SovereignBootInfo {
             && self.memory_descriptor_size >= 40
             && self.memory_descriptor_version == MEMORY_DESCRIPTOR_VERSION_UEFI
             && self.memory_map_size != 0
+            && self.memory_map_size <= MAX_MEMORY_MAP_BYTES
             && self.memory_map_size % self.memory_descriptor_size == 0
             && self.memory_map_physical != 0
             && self.memory_map_physical & 0xfff == 0
