@@ -23,6 +23,7 @@ const TASK_SLEEP_EVENT: u32 = 0x5441_534B;
 pub struct TaskWakeupReport {
     pub wakeups: usize,
     pub timer_reprogram_error: Option<crate::drivers::api::DriverError>,
+    pub buffer_unavailable: bool,
 }
 
 /// Per-CPU task timeout manager driven by the local APIC TSC-deadline timer.
@@ -147,7 +148,8 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
             crate::time::interrupt::signal_timer_work_pending();
             return TaskWakeupReport {
                 wakeups: 0,
-                timer_reprogram_error: Some(crate::drivers::api::DriverError::ResourceUnavailable),
+                timer_reprogram_error: None,
+                buffer_unavailable: true,
             };
         }
         // SAFETY: Same-CPU and deferred-context requirements are part of the
@@ -200,6 +202,7 @@ fn task_wakeup_report(
     TaskWakeupReport {
         wakeups: count,
         timer_reprogram_error: processed.reprogram_error,
+        buffer_unavailable: false,
     }
 }
 
