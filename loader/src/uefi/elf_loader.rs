@@ -7,7 +7,7 @@
 use core::{ffi::c_void, ptr};
 
 use super::{
-    boot_services::{allocate_loader_pages, EfiBootServices},
+    boot_services::EfiBootServices,
     protocols::{
         EfiFileProtocol, EfiLoadedImageProtocol, EfiSimpleFileSystemProtocol,
         EFI_FILE_INFO_GUID, EFI_FILE_MODE_READ, EFI_LOADED_IMAGE_PROTOCOL_GUID,
