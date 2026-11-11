@@ -65,6 +65,21 @@ impl HidInterfaceInfo{
   }
   None
  }
+ /// Returns the selected endpoint together with its speed-aware polling contract.
+ pub fn interrupt_in_service_info(
+  self,configuration:&ParsedConfiguration,ordinal:usize,speed:super::transfer::UsbSpeed,
+ )->Result<Option<HidInterruptEndpoint>,UsbError>{
+  let start=self.first_endpoint as usize;
+  let end=start.checked_add(self.endpoint_count as usize).ok_or(UsbError::MalformedDescriptor)?;
+  if end>configuration.endpoint_len as usize||end>MAX_ENDPOINTS{return Err(UsbError::MalformedDescriptor)}
+  let mut found=0usize;
+  for parsed in configuration.endpoints[start..end].iter().flatten(){
+   if parsed.address&0x80==0||(parsed.attributes&3)!=TransferType::Interrupt as u8{continue}
+   if found==ordinal{return Ok(Some(HidInterruptEndpoint::from_parsed(*parsed,speed)?))}
+   found+=1;
+  }
+  Ok(None)
+ }
  /// Reads a raw report from the selected interrupt-IN endpoint.
  pub fn read_report<C:HostController>(
   self,configuration:&ParsedConfiguration,ordinal:usize,controller:&mut C,
@@ -223,6 +238,25 @@ mod tests{
    Ok(super::super::controller::TransferResult{status:self.status,bytes_transferred:self.bytes})
   }
   fn reset_port(&mut self,_:u8)->Result<(),UsbError>{Ok(())}
+ }
+ #[test]fn normalizes_interrupt_service_intervals_by_usb_speed(){
+  let parsed=ParsedEndpoint{address:0x81,attributes:3,max_packet_size:8,interval:4,
+   transactions_per_microframe:2,max_burst:0,companion_attributes:0,bytes_per_interval:0,has_ss_companion:false};
+  let full=HidInterruptEndpoint::from_parsed(parsed,super::super::transfer::UsbSpeed::Full).unwrap();
+  assert_eq!(full.service_interval,HidServiceInterval::Frames(4));
+  assert_eq!(full.transactions_per_interval,1);
+  let high=HidInterruptEndpoint::from_parsed(parsed,super::super::transfer::UsbSpeed::High).unwrap();
+  assert_eq!(high.service_interval,HidServiceInterval::Microframes(8));
+  assert_eq!(high.transactions_per_interval,2);
+ }
+ #[test]fn requires_superspeed_companion_and_uses_its_interval_payload(){
+  let parsed=ParsedEndpoint{address:0x81,attributes:3,max_packet_size:64,interval:3,
+   transactions_per_microframe:1,max_burst:3,companion_attributes:0,bytes_per_interval:200,
+   has_ss_companion:true};
+  let ss=HidInterruptEndpoint::from_parsed(parsed,super::super::transfer::UsbSpeed::Super).unwrap();
+  assert_eq!(ss.service_interval,HidServiceInterval::Microframes(4));
+  assert_eq!(ss.max_burst,3);assert_eq!(ss.bytes_per_interval,200);
+  assert!(HidInterruptEndpoint::from_parsed(ParsedEndpoint{has_ss_companion:false,..parsed},super::super::transfer::UsbSpeed::Super).is_err());
  }
  #[test]fn raw_report_reader_validates_transfer_status_and_length(){
   let endpoint=Endpoint{address:EndpointAddress::from_raw(0x81),transfer_type:TransferType::Interrupt,max_packet_size:8,interval:1};
