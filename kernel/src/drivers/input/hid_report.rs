@@ -371,16 +371,8 @@ impl HidReportDecoder {
         if self.resync_required {
             // Queue overflow can lose an edge. Reset the consumer's per-device
             // state before replaying the next full report snapshot.
-            let disconnected = InputEvent::DeviceDisconnected { device: self.device };
-            let connected = InputEvent::DeviceConnected { device: self.device };
-            if producer.push(disconnected).is_err() {
+            if producer.push(InputEvent::DeviceStateReset { device: self.device }).is_err() {
                 stats.dropped = 1;
-                self.dropped_events = self.dropped_events.saturating_add(1);
-                return Ok(stats);
-            }
-            stats.published = stats.published.saturating_add(1);
-            if producer.push(connected).is_err() {
-                stats.dropped = stats.dropped.saturating_add(1);
                 self.dropped_events = self.dropped_events.saturating_add(1);
                 return Ok(stats);
             }
