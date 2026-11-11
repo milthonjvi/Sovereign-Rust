@@ -869,6 +869,23 @@ mod tests {
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
 
+        let group = super::super::ethernet::MacAddress([0x33, 0x33, 0, 0, 0, 1]);
+        let hash = E1000MulticastFilter::hash(group) as usize;
+        assert_eq!(device.set_multicast_filter(&[group]), Ok(()));
+        assert!(device.multicast_filter.accepts(group));
+        assert_eq!(
+            device.registers.writes.last(),
+            Some(&(REG_MTA_BASE + (hash >> 5) as u32 * 4, 1u32 << (hash & 0x1f))),
+        );
+        let writes_before_invalid = device.registers.writes.len();
+        assert_eq!(
+            device.set_multicast_filter(&[super::super::ethernet::MacAddress([0x02, 0, 0, 0, 0, 1])]),
+            Err(DriverError::InvalidConfiguration),
+        );
+        assert_eq!(device.registers.writes.len(), writes_before_invalid);
+        assert_eq!(device.set_multicast_filter(&[]), Ok(()));
+        assert!(device.multicast_filter.is_empty());
+
         let mut first = [0u8; 128];
         let mut second = [0u8; 128];
         let mut outputs: [&mut [u8]; 2] = [&mut first, &mut second];
