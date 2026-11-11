@@ -4,7 +4,11 @@
 //! TSC-deadline access use the architectural MSR register bank. The local APIC
 //! and interrupt vector must be initialized before any timer source is unmasked.
 
-use core::{marker::PhantomData, ptr::{read_volatile, write_volatile, NonNull}};
+use core::{
+    marker::PhantomData,
+    ptr::{read_volatile, write_volatile, NonNull},
+    sync::atomic::{compiler_fence, Ordering},
+};
 use crate::{
     arch::x86_64::x2apic::{X2Apic, X2ApicError},
     drivers::api::DriverError,
@@ -372,10 +376,12 @@ impl X2ApicTimer {
         apic.configure_one_shot_timer(vector, divide.encoding())
             .map_err(map_x2apic_error)?;
         let tsc_before_start = read_tsc_serialized();
+        compiler_fence(Ordering::SeqCst);
         if apic.load_masked_one_shot_count(u32::MAX).is_err() {
             apic.stop_one_shot_timer();
             return Err(DriverError::InvalidConfiguration);
         }
+        compiler_fence(Ordering::SeqCst);
         let tsc_after_start = read_tsc_serialized();
         let tsc_start = midpoint_u64(tsc_before_start, tsc_after_start);
 
@@ -394,7 +400,9 @@ impl X2ApicTimer {
         }
 
         let tsc_before_end = read_tsc_serialized();
+        compiler_fence(Ordering::SeqCst);
         let current_count = apic.timer_current_count();
+        compiler_fence(Ordering::SeqCst);
         let tsc_after_end = read_tsc_serialized();
         let tsc_end = midpoint_u64(tsc_before_end, tsc_after_end);
         apic.stop_one_shot_timer();
