@@ -171,7 +171,11 @@ const fn decode_redirection_state(low: u32, high: u32) -> RedirectionState {
     }
 }
 
-/// One I/O APIC redirection entry.
+/// Requested fixed-delivery, physical-destination I/O APIC route attributes.
+///
+/// The hardware redirection format supports additional delivery modes, but
+/// this driver deliberately emits fixed delivery and physical destination
+/// only. The route is always programmed masked by `configure_masked`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RedirectionEntry {
     pub vector: u8,
