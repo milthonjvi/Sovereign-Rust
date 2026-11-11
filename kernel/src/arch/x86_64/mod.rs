@@ -9,4 +9,5 @@ pub mod apic;
 pub mod cpuid;
 pub mod io;
 pub mod msr;
+pub mod tss;
 pub mod init;
