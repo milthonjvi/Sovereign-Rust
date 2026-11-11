@@ -10,6 +10,18 @@ pub struct FramebufferSurface<'a> {
     _mapping: core::marker::PhantomData<&'a mut [u8]>,
 }
 
+/// Compute round(a * b / divisor) without overflowing while adding the
+/// rounding bias. Callers guarantee a <= divisor and all operands originate
+/// from differences of i64 coordinates, so the product fits in u128.
+#[inline]
+fn rounded_mul_div(a: u128, b: u128, divisor: u128) -> u128 {
+    if divisor == 0 { return 0; }
+    let product = a * b;
+    let quotient = product / divisor;
+    let remainder = product % divisor;
+    quotient + u128::from(remainder >= divisor / 2 + divisor % 2)
+}
+
 impl<'a> FramebufferSurface<'a> {
     /// Construct a surface over a writable virtual mapping.
     ///
@@ -204,7 +216,7 @@ impl<'a> FramebufferSurface<'a> {
             let y_direction = if y1 >= y0 { 1i128 } else { -1i128 };
             for x in visible_start..=visible_end {
                 let distance = (x as i128 - x0 as i128).unsigned_abs();
-                let offset = (distance * dy as u128 + dx as u128 / 2) / dx as u128;
+                let offset = rounded_mul_div(distance, dy as u128, dx as u128);
                 let y = y0 as i128 + y_direction * offset as i128;
                 if y >= 0 && y < self.info.height as i128 {
                     let _ = self.put_pixel(x as usize, y as usize, color);
@@ -218,7 +230,7 @@ impl<'a> FramebufferSurface<'a> {
             let x_direction = if x1 >= x0 { 1i128 } else { -1i128 };
             for y in visible_start..=visible_end {
                 let distance = (y as i128 - y0 as i128).unsigned_abs();
-                let offset = (distance * dx as u128 + dy as u128 / 2) / dy as u128;
+                let offset = rounded_mul_div(distance, dx as u128, dy as u128);
                 let x = x0 as i128 + x_direction * offset as i128;
                 if x >= 0 && x < self.info.width as i128 {
                     let _ = self.put_pixel(x as usize, y as usize, color);
@@ -597,6 +609,38 @@ mod raster_tests {
 
         assert_eq!(&memory[0..4], &[10, 20, 30, 0]);
         assert_eq!(&memory[4..8], &[10, 20, 30, 0]);
+    }
+
+    #[test]
+    fn line_clipping_handles_extreme_signed_endpoints() {
+        use super::super::color::{Color, PixelFormat};
+        use super::super::info::FramebufferInfo;
+        use super::FramebufferSurface;
+
+        let mut memory = [0u8; 8 * 8 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 8,
+            height: 8,
+            pitch: 8 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the test array is writable, correctly sized, and exclusively borrowed.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        target.draw_line(i64::MIN, i64::MIN, i64::MAX, i64::MAX, Color::RED);
+        target.draw_line(i64::MIN, i64::MAX, i64::MAX, i64::MIN, Color::GREEN);
+        drop(target);
+
+        // Both diagonals cross the visible surface. The reserved byte remains zero.
+        for y in 0..8 {
+            assert_eq!(memory[(y * 8 + y) * 4 + 3], 0);
+            assert_eq!(memory[(y * 8 + (7 - y)) * 4 + 3], 0);
+        }
+        assert_eq!(memory[0], 255);
+        assert_eq!(memory[(7 * 8 + 7) * 4], 255);
     }
 
     #[test]
