@@ -295,7 +295,7 @@ pub fn issue_command<R:AhciRegisterIo>(
     let mut ready=false;
     for _ in 0..polls{
         let status=io.read32(tfd)?;
-        if status&1!=0{return Err(AhciError::DeviceFault);}
+        if status&(1|(1<<5))!=0{return Err(AhciError::DeviceFault);}
         if status&(0x80|0x08)==0{ready=true;break;}
         core::hint::spin_loop();
     }
@@ -319,7 +319,8 @@ pub fn command_complete<R:AhciRegisterIo>(
 )->Result<bool,AhciError>{
     if slot>=32{return Err(AhciError::InvalidPort);}
     let status=io.read32(port_register(base,0x10)?)?;
-    if status&(1<<30)!=0{return Err(AhciError::DeviceFault);}
+    let task_file=io.read32(port_register(base,0x20)?)?;
+    if status&(1<<30)!=0 || task_file&(1|(1<<5))!=0{return Err(AhciError::DeviceFault);}
     let bit=1u32<<slot;
     if io.read32(port_register(base,0x38)?)?&bit!=0{return Ok(false);}
     if ncq && io.read32(port_register(base,0x34)?)?&bit!=0{return Ok(false);}
@@ -360,6 +361,8 @@ mod port_tests {
         assert_eq!(command_complete(&mut regs,0,3,true),Ok(false));
         regs.0[0x34/4]=0;regs.0[0x38/4]=0;
         assert_eq!(command_complete(&mut regs,0,3,true),Ok(true));
+        regs.0[0x20/4]=1<<5;
+        assert_eq!(command_complete(&mut regs,0,3,true),Err(AhciError::DeviceFault));
     }
     #[test]
     fn rejects_unaligned_port_dma_memory() {
