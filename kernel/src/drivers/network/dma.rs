@@ -41,6 +41,10 @@ impl<'a> DmaBuffer<'a> {
     /// the required cache maintenance before ownership is transferred. A valid,
     /// aligned address alone does not establish any of these properties.
     pub unsafe fn new(dma_address: u64, bytes: &'a mut [u8]) -> Result<Self, DmaBufferError> {
+        Self::from_parts(dma_address, bytes)
+    }
+
+    fn from_parts(dma_address: u64, bytes: &'a mut [u8]) -> Result<Self, DmaBufferError> {
         if bytes.is_empty() {
             return Err(DmaBufferError::Empty);
         }
@@ -50,6 +54,15 @@ impl<'a> DmaBuffer<'a> {
         dma_address.checked_add(bytes.len() as u64)
             .ok_or(DmaBufferError::AddressRangeOverflow)?;
         Ok(Self { dma_address, bytes })
+    }
+
+    /// Construct a synthetic buffer for unit tests that never hand it to hardware.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        dma_address: u64,
+        bytes: &'a mut [u8],
+    ) -> Result<Self, DmaBufferError> {
+        Self::from_parts(dma_address, bytes)
     }
 
     pub const fn dma_address(&self) -> u64 {
@@ -117,8 +130,7 @@ mod tests {
     use super::*;
 
     fn mock_dma_buffer<'a>(address: u64, bytes: &'a mut [u8]) -> DmaBuffer<'a> {
-        // SAFETY: unit tests validate address arithmetic and ownership only; no device performs DMA.
-        unsafe { DmaBuffer::new(address, bytes) }.unwrap()
+        DmaBuffer::new_for_test(address, bytes).unwrap()
     }
 
     #[test]
@@ -133,9 +145,9 @@ mod tests {
     #[test]
     fn rejects_empty_and_misaligned_buffers() {
         let mut empty = [];
-        assert_eq!(unsafe { DmaBuffer::new(0x4000, &mut empty) }.err(), Some(DmaBufferError::Empty));
+        assert_eq!(DmaBuffer::new_for_test(0x4000, &mut empty).err(), Some(DmaBufferError::Empty));
         let mut bytes = [0u8; 32];
-        assert_eq!(unsafe { DmaBuffer::new(0x4001, &mut bytes) }.err(), Some(DmaBufferError::MisalignedAddress));
+        assert_eq!(DmaBuffer::new_for_test(0x4001, &mut bytes).err(), Some(DmaBufferError::MisalignedAddress));
     }
 
     #[test]
