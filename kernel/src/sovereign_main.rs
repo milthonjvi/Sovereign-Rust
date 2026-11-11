@@ -8,8 +8,6 @@ use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt};
 use sovereign_kernel::arch::x86_64::init::initialize_baseline;
 use sovereign_kernel::boot::sovereign::{SovereignBootInfo, SovereignBootError};
 
-const EFI_LOADER_DATA: u32 = 2;
-
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
     // The UEFI loader enters in long mode with the new Sovereign page tables.
@@ -27,17 +25,15 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
     let memory_map = unsafe {
         boot_info.memory_map().unwrap_or_else(|_| fatal_halt())
     };
-    let mut previous_end = 0u64;
     for index in 0..memory_map.len() {
         let descriptor = memory_map.descriptor(index).unwrap_or_else(|_| fatal_halt());
         let region_size = descriptor.number_of_pages.checked_mul(4096)
             .unwrap_or_else(|| fatal_halt());
         let region_end = descriptor.physical_start.checked_add(region_size)
             .unwrap_or_else(|| fatal_halt());
-        if descriptor.number_of_pages == 0 || descriptor.physical_start < previous_end {
+        if descriptor.number_of_pages == 0 || region_end < descriptor.physical_start {
             fatal_halt();
         }
-        previous_end = region_end;
     }
 
     // Install the kernel's GDT/TSS, IDT, and masked legacy PIC only after the
@@ -50,7 +46,6 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
     // The initial Sovereign entry deliberately does not enable interrupts or
     // reclaim loader memory. Those actions wait for the memory manager and
     // subsystem ownership model to be initialized.
-    let _kernel_image_is_loader_data = EFI_LOADER_DATA;
     let _boot_info = boot_info;
     loop {
         // SAFETY: IF remains clear; HLT is valid at CPL 0.
