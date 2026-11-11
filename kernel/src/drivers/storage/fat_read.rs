@@ -171,7 +171,7 @@ pub fn enumerate_directory<D: BlockDevice>(
                 .map_err(FatError::Block)?;
             for raw in cluster_buf[..bps].chunks_exact(32) {
                 if raw[0] == 0 { stopped = true; break; }
-                if let Some(entry) = FatDirEntry::parse(raw)? {
+                if let Some(entry) = FatDirEntry::parse_for_kind(raw, volume.bpb.kind)? {
                     if count == entries.len() { entries.fill(None); return Err(FatError::DirectoryFull); }
                     entries[count] = Some(entry);
                     count += 1;
@@ -189,7 +189,7 @@ pub fn enumerate_directory<D: BlockDevice>(
         read_cluster(device, volume, cluster, cluster_buf)?;
         for raw in cluster_buf.chunks_exact(32) {
             if raw[0] == 0 { stopped = true; break; }
-            if let Some(entry) = FatDirEntry::parse(raw)? {
+            if let Some(entry) = FatDirEntry::parse_for_kind(raw, volume.bpb.kind)? {
                 if count == entries.len() { entries.fill(None); return Err(FatError::DirectoryFull); }
                 entries[count] = Some(entry);
                 count += 1;
