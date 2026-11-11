@@ -76,6 +76,12 @@ impl TxDescriptor {
     /// Build a single-buffer transmit descriptor requesting FCS and write-back.
     /// The caller must retain the DMA buffer until the device sets DD.
     pub fn for_frame(buffer_address: u64, length: usize) -> Result<Self, E1000Error> {
+        if buffer_address == 0 {
+            return Err(E1000Error::NullDmaAddress);
+        }
+        if buffer_address & 0xf != 0 {
+            return Err(E1000Error::MisalignedDmaAddress);
+        }
         if length == 0 || length > u16::MAX as usize {
             return Err(E1000Error::InvalidDescriptorLength);
         }
@@ -118,6 +124,8 @@ mod tests {
         assert!(!descriptor.is_complete());
         assert!(matches!(TxDescriptor::for_frame(0x3000, 0), Err(E1000Error::InvalidDescriptorLength)));
         assert!(matches!(TxDescriptor::for_frame(0x3000, u16::MAX as usize + 1), Err(E1000Error::InvalidDescriptorLength)));
+        assert!(matches!(TxDescriptor::for_frame(0, 64), Err(E1000Error::NullDmaAddress)));
+        assert!(matches!(TxDescriptor::for_frame(0x3001, 64), Err(E1000Error::MisalignedDmaAddress)));
     }
 
     #[test]
