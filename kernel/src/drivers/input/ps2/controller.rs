@@ -183,18 +183,28 @@ impl Ps2Controller {
         Ok(())
     }
 
-    /// Sends a command byte to the PS/2 keyboard device.
-    /// The caller must consume/interpret the device response from the output buffer.
-    pub fn write_keyboard(&self, value: u8) -> Result<(), Ps2Error> {
+    fn send_device_byte(&self, auxiliary: bool, value: u8) -> Result<(), Ps2Error> {
         self.ensure_initialized()?;
-        self.write_data(value)
+        for _ in 0..3 {
+            if auxiliary { self.command(CMD_WRITE_MOUSE)?; }
+            self.write_data(value)?;
+            match self.read_data()? {
+                0xFA => return Ok(()),
+                0xFE => continue,
+                response => return Err(Ps2Error::DeviceRejected(response)),
+            }
+        }
+        Err(Ps2Error::DeviceRejected(0xFE))
     }
 
-    /// Sends a command byte to the PS/2 auxiliary (mouse) device.
-    pub fn write_mouse(&self, value: u8) -> Result<(), Ps2Error> {
-        self.ensure_initialized()?;
-        self.command(CMD_WRITE_MOUSE)?;
-        self.write_data(value)
+    /// Sends one keyboard command and validates ACK/RESEND responses.
+    pub fn send_keyboard_command(&self, value: u8) -> Result<(), Ps2Error> {
+        self.send_device_byte(false, value)
+    }
+
+    /// Sends one auxiliary mouse command and validates ACK/RESEND responses.
+    pub fn send_mouse_command(&self, value: u8) -> Result<(), Ps2Error> {
+        self.send_device_byte(true, value)
     }
 
     pub fn try_read_byte(&self) -> Result<Option<u8>, Ps2Error> {
