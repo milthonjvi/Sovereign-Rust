@@ -248,14 +248,22 @@ impl Fadt {
         let choose = |gas: Option<GenericAddress>, legacy: u32, length: u8|
             -> Result<Option<PmRegisterAddress>, AcpiError> {
             if let Some(gas) = gas.filter(|g| g.is_present()) {
-                return Ok(Some(PmRegisterAddress::Gas(gas)));
+                // A structurally valid extended descriptor has priority. If
+                // this x86 target cannot address it, ACPI permits the legacy
+                // 32-bit field to be used instead.
+                if gas.is_addressable_for_x86(length) {
+                    return Ok(Some(PmRegisterAddress::Gas(gas)));
+                }
             }
             if legacy == 0 || length == 0 {
+                if gas.map(|g| g.is_present()).unwrap_or(false) {
+                    return Err(AcpiError::UnsupportedAddress);
+                }
                 return Ok(None);
             }
 
             // This kernel targets x86_64, whose processor I/O-port space is
-            // 16-bit. Validate the complete block before exposing its base.
+            // 16-bit. Validate the complete legacy block before exposing it.
             let end = legacy.checked_add(length as u32).ok_or(AcpiError::UnsupportedAddress)?;
             if legacy > u16::MAX as u32 || end > 0x1_0000 {
                 return Err(AcpiError::UnsupportedAddress);
@@ -291,7 +299,10 @@ impl Fadt {
         let extended = self.extended_pm_registers;
         lengths.validate()?;
         if let Some(registers) = extended {
-            registers.validate_against_lengths(lengths)?;
+            // Validate descriptor encoding and register geometry separately
+            // from CPU addressability so the resolver can apply ACPI's
+            // extended-to-legacy fallback rule.
+            registers.validate_structure_against_lengths(lengths)?;
         }
 
         let present = |gas: Option<GenericAddress>, address: u32| {
@@ -440,7 +451,9 @@ pub struct ExtendedPmRegisters {
 
 impl ExtendedPmRegisters {
     /// Validate populated GAS descriptors and their FADT-declared block sizes.
-    pub fn validate_against_lengths(
+    /// Addressability is checked separately so callers can fall back to the
+    /// corresponding legacy address when an extended address is unusable.
+    pub fn validate_structure_against_lengths(
         &self,
         lengths: PmRegisterBlockLengths,
     ) -> Result<(), AcpiError> {
@@ -464,11 +477,29 @@ impl ExtendedPmRegisters {
                 _ if gas.bit_width as u16 != (length as u16) * 8 => return Err(AcpiError::InvalidGas),
                 _ => {},
             }
-            let end = gas.address.checked_add(length as u64)
-                .ok_or(AcpiError::UnsupportedAddress)?;
-            if gas.address_space == GenericAddress::ADDRESS_SPACE_SYSTEM_IO
-                && (gas.address > u16::MAX as u64 || end > 0x1_0000)
-            {
+        }
+        Ok(())
+    }
+
+    /// Validate both GAS structure and addressability on the x86 port-space
+    /// model. The PM map resolver uses the structural validator first so it
+    /// can fall back to legacy addresses when only addressability fails.
+    pub fn validate_against_lengths(
+        &self,
+        lengths: PmRegisterBlockLengths,
+    ) -> Result<(), AcpiError> {
+        self.validate_structure_against_lengths(lengths)?;
+        for (gas, length) in [
+            (self.pm1a_event, lengths.pm1_event),
+            (self.pm1b_event, lengths.pm1_event),
+            (self.pm1a_control, lengths.pm1_control),
+            (self.pm1b_control, lengths.pm1_control),
+            (self.pm2_control, lengths.pm2_control),
+            (self.pm_timer, lengths.pm_timer),
+            (self.gpe0, lengths.gpe0),
+            (self.gpe1, lengths.gpe1),
+        ] {
+            if gas.is_present() && !gas.is_addressable_for_x86(length) {
                 return Err(AcpiError::UnsupportedAddress);
             }
         }
@@ -540,6 +571,24 @@ impl GenericAddress {
     /// the fixed register's declared 8-bit width.
     pub const fn has_byte_access_encoding(self) -> bool {
         self.access_size == Self::ACCESS_UNDEFINED || self.access_size == Self::ACCESS_BYTE
+    }
+
+    /// Whether this complete register block is addressable by this x86 target.
+    /// System-memory physical width is deliberately not guessed: only arithmetic
+    /// overflow and the architectural 16-bit I/O-port limit are enforced.
+    pub const fn is_addressable_for_x86(self, length: u8) -> bool {
+        if length == 0 {
+            return false;
+        }
+        let end = match self.address.checked_add(length as u64) {
+            Some(end) => end,
+            None => return false,
+        };
+        if self.address_space == Self::ADDRESS_SPACE_SYSTEM_IO {
+            self.address <= u16::MAX as u64 && end <= 0x1_0000
+        } else {
+            self.address_space == Self::ADDRESS_SPACE_SYSTEM_MEMORY
+        }
     }
 
     /// Validate GAS field encoding and arithmetic without dereferencing address.
