@@ -221,15 +221,9 @@ mod tests {
 
 
 impl core::fmt::Write for Uart16550 {
-    /// Writes UTF-8 text to the UART, normalizing LF to CRLF for terminals.
     fn write_str(&mut self, text: &str) -> core::fmt::Result {
-        let mut previous_was_cr = false;
         for byte in text.bytes() {
-            if byte == b'\n' && !previous_was_cr {
-                self.write_byte(b'\r').map_err(|_| core::fmt::Error)?;
-            }
             self.write_byte(byte).map_err(|_| core::fmt::Error)?;
-            previous_was_cr = byte == b'\r';
         }
         Ok(())
     }
