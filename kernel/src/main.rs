@@ -28,6 +28,17 @@ pub extern "C" fn _start() -> ! {
             .unwrap_or_else(|| fatal_halt())
     };
 
+    // ACPI is optional. When firmware provides an RSDP, validate it and
+    // discover the platform tables through the bootloader's HHDM mapping.
+    // A missing or malformed ACPI table set is non-fatal at this stage;
+    // interrupt controllers and timers remain disabled until later setup.
+    let _acpi_tables = unsafe {
+        _boot_info.acpi_rsdp()
+            .ok()
+            .flatten()
+            .and_then(|rsdp| _boot_info.discover_acpi(&rsdp).ok())
+    };
+
     // Initialize the boot-provided display when Limine exposes a supported
     // 32-bit RGB/BGR framebuffer. Unsupported formats remain non-fatal.
     // SAFETY: LimineBootInfo was collected after handoff and its response
