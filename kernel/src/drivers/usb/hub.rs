@@ -333,7 +333,8 @@ impl HubPortMachine{
   match action{
    HubPortAction::PowerOn if self.state==HubPortState::PowerGoodWait=>self.state=HubPortState::Unpowered,
    HubPortAction::Reset|HubPortAction::WarmReset if self.state==HubPortState::Resetting=>{self.state=HubPortState::ResetRequired;self.reset_elapsed_ms=0;},
-   HubPortAction::ClearResetChange|HubPortAction::ClearWarmResetChange if self.state==HubPortState::Ready=>{self.state=HubPortState::ClearResetChange;if action==HubPortAction::ClearWarmResetChange{self.clear_warm_reset_change=true;}},
+   HubPortAction::ClearResetChange=>self.clear_reset_change=true,
+   HubPortAction::ClearWarmResetChange=>self.clear_warm_reset_change=true,
    HubPortAction::ClearConnectionChange=>self.clear_connection_change=true,
    HubPortAction::ClearEnableChange=>self.clear_enable_change=true,
    HubPortAction::ClearSuspendChange=>self.clear_suspend_change=true,
@@ -508,3 +509,5 @@ mod hub_change_bitmap_ack_tests{
 }
 
 #[cfg(test)]mod superspeed_change_ack_tests{use super::*;#[test]fn link_and_config_changes_are_acknowledged(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0xc0,0]).unwrap());assert_eq!(p.take_action(),Some(HubPortAction::ClearLinkStateChange));assert_eq!(p.take_action(),Some(HubPortAction::ClearConfigErrorChange));assert_eq!(p.take_action(),None);assert_eq!(port_action(1,HubPortAction::ClearLinkStateChange).value,25);assert_eq!(port_action(1,HubPortAction::ClearConfigErrorChange).value,26);}#[test]fn superspeed_change_clear_retries_after_failure(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0x40,0]).unwrap());let a=p.take_action().unwrap();p.action_failed(a);assert_eq!(p.take_action(),Some(a));}}
+
+#[cfg(test)]mod reset_change_retry_no_duplicate_tests{use super::*;#[test]fn failed_reset_change_clear_retries_without_second_clear(){let mut p=HubPortMachine::new(1,0);p.start().unwrap();p.elapse_ms(0);p.observe(HubPortStatus{status:HubPortStatus::CONNECTION,change:0});p.elapse_ms(100);assert_eq!(p.take_action(),Some(HubPortAction::Reset));p.observe(HubPortStatus{status:HubPortStatus::CONNECTION|HubPortStatus::ENABLE,change:HubPortStatus::C_RESET});let a=p.take_action().unwrap();assert_eq!(a,HubPortAction::ClearResetChange);p.action_failed(a);assert_eq!(p.take_action(),Some(HubPortAction::ClearResetChange));assert_eq!(p.take_action(),None);}#[test]fn failed_warm_reset_change_clear_retries_without_replaying_reset(){let mut p=HubPortMachine::new_superspeed(1,0);p.start().unwrap();p.elapse_ms(0);p.observe_superspeed(SuperSpeedPortStatus::parse(&[1,0,0,0]).unwrap());p.elapse_ms(100);assert_eq!(p.take_action(),Some(HubPortAction::WarmReset));p.observe_superspeed(SuperSpeedPortStatus::parse(&[3,0,0x20,0]).unwrap());let a=p.take_action().unwrap();assert_eq!(a,HubPortAction::ClearWarmResetChange);p.action_failed(a);assert_eq!(p.take_action(),Some(HubPortAction::ClearWarmResetChange));assert_eq!(p.take_action(),None);}}
