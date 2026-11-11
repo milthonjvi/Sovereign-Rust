@@ -27,7 +27,6 @@ const RX_INTERRUPT_ENABLE: u8 = 1;
 const LINE_STATUS_INTERRUPT_ENABLE: u8 = 1 << 2;
 const RX_IRQ_ENABLES: u8 = RX_INTERRUPT_ENABLE | LINE_STATUS_INTERRUPT_ENABLE;
 const THRE_INTERRUPT_ENABLE: u8 = 1 << 1;
-const THRE_INTERRUPT_ID: u8 = 0x02;
 const MAX_TX_PER_IRQ: usize = 64;
 const MAX_IRQ_CAUSES: usize = 32;
 const OVERRUN_ERROR: u8 = 1 << 1;
@@ -401,13 +400,13 @@ fn service_port(
                 // Reading MSR clears delta-CTS/DSR/RI/DCD and deasserts this
                 // source if a UART or firmware left modem IRQ enabled.
                 // SAFETY: The handler exclusively owns the attached UART.
-                let _ = unsafe { io::in8(base + MODEM_STATUS); };
+                let _ = unsafe { io::in8(base + MODEM_STATUS) };
             }
             _ => {
                 // Unknown/reserved IIR cause: read status registers once to
                 // acknowledge any implementation-specific latched condition.
                 // SAFETY: The handler exclusively owns the attached UART.
-                let _ = unsafe { io::in8(base + LSR); };
+                let _ = unsafe { io::in8(base + LSR) };
                 let _ = unsafe { io::in8(base + MODEM_STATUS); };
             }
         }
