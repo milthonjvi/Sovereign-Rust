@@ -56,6 +56,7 @@ impl MsiCapability {
 
         let header = read_standard(io, address, offset)?;
         let control = (header >> 16) as u16;
+        if control & 0xfe00 != 0 { return Err(ConfigError::OutOfRange); }
         let is_64 = control & (1 << 7) != 0;
         let masking = control & (1 << 8) != 0;
         let mmc = ((control >> 1) & 0x7) as u8;
@@ -119,6 +120,7 @@ pub unsafe fn disable_msi<A: ConfigAccess>(
     }
     let header = read_standard(io, address, offset)?;
     let control = (header >> 16) as u16;
+    if control & 0xfe00 != 0 { return Err(ConfigError::OutOfRange); }
     let disabled_control = control & !1;
     io.write_u32(
         address,
@@ -151,6 +153,7 @@ pub unsafe fn disable_msix<A: ConfigAccess>(
     }
     let header = read_standard(io, address, offset)?;
     let control = (header >> 16) as u16;
+    if control & 0x3800 != 0 { return Err(ConfigError::OutOfRange); }
     let function_masked = control | (1 << 14);
     io.write_u32(
         address,
@@ -213,6 +216,7 @@ pub unsafe fn set_msix_function_mask<A: ConfigAccess>(
     }
     let header = read_standard(io, address, offset)?;
     let mut control = (header >> 16) as u16;
+    if control & 0x3800 != 0 { return Err(ConfigError::OutOfRange); }
     if masked { control |= 1 << 14; } else { control &= !(1 << 14); }
     io.write_u32(address, offset, (header & 0xffff) | ((control as u32) << 16))
 }
@@ -351,6 +355,7 @@ impl MsixCapability {
 
         let header = read_standard(io, address, offset)?;
         let control = (header >> 16) as u16;
+        if control & 0x3800 != 0 { return Err(ConfigError::OutOfRange); }
         let table = read_standard(io, address, offset + 4)?;
         let pba = read_standard(io, address, offset + 8)?;
         let table_bar = (table & 0x7) as u8;
@@ -535,6 +540,22 @@ mod tests {
         assert_eq!(msi.message_data, 0x40);
         assert_eq!(msi.mask_bits, Some(3));
         assert_eq!(msi.pending_bits, Some(1));
+    }
+
+    #[test]
+    fn rejects_reserved_msi_control_bits() {
+        let mut registers = [0u32; 1024];
+        registers[0x50 / 4] = 0x0201_0005;
+        let io = MockConfig { registers };
+        assert_eq!(MsiCapability::read(&io, address(), Capability { id: MSI_CAPABILITY_ID, offset: 0x50 }), Err(ConfigError::OutOfRange));
+    }
+
+    #[test]
+    fn rejects_reserved_msix_control_bits() {
+        let mut registers = [0u32; 1024];
+        registers[0x60 / 4] = 0x0800_0000;
+        let io = MockConfig { registers };
+        assert_eq!(MsixCapability::read(&io, address(), Capability { id: MSIX_CAPABILITY_ID, offset: 0x60 }), Err(ConfigError::OutOfRange));
     }
 
     #[test]
