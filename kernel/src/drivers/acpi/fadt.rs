@@ -1008,6 +1008,87 @@ mod tests {
     }
 
     #[test]
+    fn falls_back_to_legacy_when_extended_io_block_is_not_addressable() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x400u32.to_le_bytes());
+        b[88] = 4;
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes());
+        b[89] = 2;
+        b[172] = GenericAddress::ADDRESS_SPACE_SYSTEM_IO;
+        b[173] = 16;
+        b[175] = GenericAddress::ACCESS_WORD;
+        b[176..184].copy_from_slice(&0x1_0000u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(
+            fadt.resolve_pm_register_map().unwrap().pm1a_control,
+            Some(PmRegisterAddress::SystemIo(0x404)),
+        );
+    }
+
+    #[test]
+    fn unsupported_extended_pm_address_without_legacy_fallback_is_rejected() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x400u32.to_le_bytes());
+        b[88] = 4;
+        b[89] = 2;
+        b[172] = GenericAddress::ADDRESS_SPACE_SYSTEM_IO;
+        b[173] = 16;
+        b[175] = GenericAddress::ACCESS_WORD;
+        b[176..184].copy_from_slice(&0x1_0000u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(
+            fadt.resolve_pm_register_map(),
+            Err(AcpiError::UnsupportedAddress),
+        );
+    }
+
+    #[test]
+    fn extended_gas_structural_errors_are_not_hidden_by_legacy_fallback() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x400u32.to_le_bytes());
+        b[88] = 4;
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes());
+        b[89] = 2;
+        // PCI configuration space is not permitted for FADT PM blocks.
+        b[172] = GenericAddress::ADDRESS_SPACE_PCI_CONFIG;
+        b[173] = 16;
+        b[175] = GenericAddress::ACCESS_WORD;
+        b[176..184].copy_from_slice(&0x1000u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.resolve_pm_register_map(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn extended_system_memory_address_is_not_limited_by_guessed_physical_width() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x400u32.to_le_bytes());
+        b[88] = 4;
+        b[64..68].copy_from_slice(&0x404u32.to_le_bytes());
+        b[89] = 2;
+        b[172] = GenericAddress::ADDRESS_SPACE_SYSTEM_MEMORY;
+        b[173] = 16;
+        b[175] = GenericAddress::ACCESS_WORD;
+        b[176..184].copy_from_slice(&0x0000_FFFF_FFFF_F000u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+
+        let fadt = Fadt::parse(&b).unwrap();
+        assert!(matches!(
+            fadt.resolve_pm_register_map().unwrap().pm1a_control,
+            Some(PmRegisterAddress::Gas(_)),
+        ));
+    }
+
+    #[test]
     fn rejects_legacy_io_blocks_outside_the_x86_port_space() {
         for (base, length) in [(0x1_0000u32, 2u8), (0xFFFF, 2)] {
             let mut b = make_fadt(244, 0, None, None);
