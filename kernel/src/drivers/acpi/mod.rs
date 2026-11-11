@@ -19,6 +19,7 @@ pub enum AcpiError {
     InvalidRevision,
     InvalidLength,
     InvalidChecksum,
+    InvalidGas,
     UnsupportedAddress,
     MisalignedTable,
     MalformedTable,
