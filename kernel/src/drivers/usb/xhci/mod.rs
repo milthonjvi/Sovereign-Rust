@@ -251,8 +251,13 @@ pub struct XhciController{pub state:ControllerState,pub capabilities:CapabilityR
 impl XhciController{
  pub fn discover<I:RegisterIo>(io:&I)->Result<Self,XhciError>{
   let cap0=io.read32(0)?;let hcs1=io.read32(4)?;
-  let capabilities=CapabilityRegisters::parse(cap0,hcs1)?;
-  Ok(Self{state:ControllerState::Discovered,capabilities,operational_base:capabilities.capability_length as usize,enabled_slots:0})
+  let hcs2=io.read32(8)?;let hcc1=io.read32(0x10)?;
+  let capabilities=CapabilityRegisters::parse_extended(cap0,hcs1,hcs2,hcc1)?;
+  let doorbell_base=(io.read32(0x14)?&!3)as usize;
+  let runtime_base=(io.read32(0x18)?&!0x1f)as usize;
+  Ok(Self{state:ControllerState::Discovered,capabilities,
+   operational_base:capabilities.capability_length as usize,runtime_base,doorbell_base,
+   enabled_slots:0,dma_configured:false,event_ring_configured:false})
  }
  fn op(&self,offset:usize)->usize{self.operational_base+offset}
  pub fn request_halt<I:RegisterIo>(&mut self,io:&mut I)->Result<(),XhciError>{
@@ -279,7 +284,8 @@ impl XhciController{
  /// Addresses must be physical, DMA-visible and aligned as required by xHCI.
  pub fn configure_dma<I:RegisterIo>(&mut self,io:&mut I,dcbaa:u64,command_ring:u64,slots:u8)->Result<(),XhciError>{
   if self.state!=ControllerState::Reset{return Err(XhciError::InvalidState)}
-  if dcbaa&0x3f!=0||command_ring&0x3f!=0||(!self.capabilities.address_64bit&&(dcbaa>>32!=0||command_ring>>32!=0)){return Err(XhciError::InvalidDmaAddress)}\n  if self.capabilities.scratchpad_buffers!=0{return Err(XhciError::NotReady)}
+  if dcbaa&0x3f!=0||command_ring&0x3f!=0||(!self.capabilities.address_64bit&&(dcbaa>>32!=0||command_ring>>32!=0)){return Err(XhciError::InvalidDmaAddress)}
+  if self.capabilities.scratchpad_buffers!=0{return Err(XhciError::NotReady)}
   if slots==0||slots>self.capabilities.max_device_slots{return Err(XhciError::InvalidCapability)}
   io.write32(self.op(OP_DCBAAP)+4,(dcbaa>>32)as u32)?;
   io.write32(self.op(OP_DCBAAP),dcbaa as u32)?;
