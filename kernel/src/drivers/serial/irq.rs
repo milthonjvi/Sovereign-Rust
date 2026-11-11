@@ -16,6 +16,12 @@ const LSR: u16 = 5;
 const DATA_READY: u8 = 1;
 const IER: u16 = 1;
 const IIR: u16 = 2;
+const MODEM_STATUS: u16 = 6;
+const IIR_LINE_STATUS: u8 = 0x06;
+const IIR_RECEIVE_DATA: u8 = 0x04;
+const IIR_RECEIVE_TIMEOUT: u8 = 0x0C;
+const IIR_TRANSMIT_EMPTY: u8 = 0x02;
+const IIR_MODEM_STATUS: u8 = 0x00;
 const THR_EMPTY: u8 = 1 << 5;
 const RX_INTERRUPT_ENABLE: u8 = 1;
 const LINE_STATUS_INTERRUPT_ENABLE: u8 = 1 << 2;
@@ -23,6 +29,7 @@ const RX_IRQ_ENABLES: u8 = RX_INTERRUPT_ENABLE | LINE_STATUS_INTERRUPT_ENABLE;
 const THRE_INTERRUPT_ENABLE: u8 = 1 << 1;
 const THRE_INTERRUPT_ID: u8 = 0x02;
 const MAX_TX_PER_IRQ: usize = 64;
+const MAX_IRQ_CAUSES: usize = 32;
 const OVERRUN_ERROR: u8 = 1 << 1;
 const PARITY_ERROR: u8 = 1 << 2;
 const FRAMING_ERROR: u8 = 1 << 3;
@@ -339,43 +346,92 @@ fn drain_port(
     }
 }
 
-fn service_transmit(base: u16, queue: &'static UartTxBuffer, depth: &'static AtomicUsize, stats: &'static AtomicTxStatistics) {
-    for _ in 0..MAX_TX_PER_IRQ {
-        // SAFETY: This shared handler owns the attached UART's registers.
+fn service_transmit(
+    base: u16,
+    queue: &'static UartTxBuffer,
+    depth: &'static AtomicUsize,
+    stats: &'static AtomicTxStatistics,
+) {
+    // THRE means the transmit FIFO can accept one hardware-sized burst.
+    // SAFETY: This shared handler owns the attached UART's registers.
+    if unsafe { io::in8(base + LSR) } & THR_EMPTY == 0 {
+        return;
+    }
+    let limit = core::cmp::min(depth.load(Ordering::Acquire), MAX_TX_PER_IRQ);
+    let mut sent = 0;
+    while sent < limit {
+        // SAFETY: IRQ is the sole consumer of this SPSC queue.
+        let Some(byte) = (unsafe { queue.pop() }) else { break; };
+        // SAFETY: THRE reports that the transmitter can accept this FIFO burst.
+        unsafe { io::out8(base + DATA, byte); }
+        sent += 1;
+    }
+    stats.transmitted.fetch_add(sent, Ordering::Relaxed);
+    if queue.is_empty() {
+        // Disable THRE only; RX-ready and line-status IRQs remain enabled.
+        // SAFETY: RX_IRQ_ENABLES preserves both receive interrupt sources.
+        unsafe { io::out8(base + IER, RX_IRQ_ENABLES); }
+    }
+}
+
+fn service_port(
+    base: u16,
+    rx: &'static UartRxBuffer<RX_CAPACITY>,
+    rx_stats: &'static AtomicRxStatistics,
+    tx: &'static UartTxBuffer,
+    tx_depth: &'static AtomicUsize,
+    tx_stats: &'static AtomicTxStatistics,
+) {
+    // A shared IRQ may represent several UART causes. IIR reports the highest
+    // priority pending cause; acknowledge it and re-read until quiescent.
+    for _ in 0..MAX_IRQ_CAUSES {
+        // SAFETY: The registered handler owns this UART's interrupt registers.
         let iir = unsafe { io::in8(base + IIR) };
-        if iir & 1 != 0 || iir & 0x0E != THRE_INTERRUPT_ID { break; }
-        // SAFETY: IIR identifies THRE as the pending interrupt cause.
-        if unsafe { io::in8(base + LSR) } & THR_EMPTY == 0 { break; }
-        let limit = core::cmp::min(depth.load(Ordering::Acquire), 64);
-        let mut sent = 0;
-        while sent < limit {
-            // SAFETY: IRQ is the sole consumer of this SPSC queue.
-            let Some(byte) = (unsafe { queue.pop() }) else { break; };
-            // SAFETY: THRE reports FIFO space for this burst.
-            unsafe { io::out8(base + DATA, byte); }
-            sent += 1;
-        }
-        stats.transmitted.fetch_add(sent, Ordering::Relaxed);
-        if queue.is_empty() {
-            // Disable THRE only; RX-ready and line-status IRQs remain enabled.
-            // SAFETY: RX_IRQ_ENABLES preserves both receive interrupt sources.
-            unsafe { io::out8(base + IER, RX_IRQ_ENABLES); }
+        if iir & 1 != 0 {
             break;
         }
-        if sent == 0 { break; }
+        match iir & 0x0E {
+            IIR_LINE_STATUS | IIR_RECEIVE_DATA | IIR_RECEIVE_TIMEOUT => {
+                drain_port(base, rx, rx_stats);
+            }
+            IIR_TRANSMIT_EMPTY => {
+                service_transmit(base, tx, tx_depth, tx_stats);
+            }
+            IIR_MODEM_STATUS => {
+                // Reading MSR clears delta-CTS/DSR/RI/DCD and deasserts this
+                // source if a UART or firmware left modem IRQ enabled.
+                // SAFETY: The handler exclusively owns the attached UART.
+                let _ = unsafe { io::in8(base + MODEM_STATUS); };
+            }
+            _ => {
+                // Unknown/reserved IIR cause: read status registers once to
+                // acknowledge any implementation-specific latched condition.
+                // SAFETY: The handler exclusively owns the attached UART.
+                let _ = unsafe { io::in8(base + LSR); };
+                let _ = unsafe { io::in8(base + MODEM_STATUS); };
+            }
+        }
     }
 }
 
 extern "C" fn irq3_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM2_BIT != 0 { service_transmit(0x2F8, &COM2_TX, &COM2_TX_DEPTH, &COM2_TX_STATS); drain_port(0x2F8, &COM2_RX, &COM2_STATS); }
-    if attached & COM4_BIT != 0 { service_transmit(0x2E8, &COM4_TX, &COM4_TX_DEPTH, &COM4_TX_STATS); drain_port(0x2E8, &COM4_RX, &COM4_STATS); }
+    if attached & COM2_BIT != 0 {
+        service_port(0x2F8, &COM2_RX, &COM2_STATS, &COM2_TX, &COM2_TX_DEPTH, &COM2_TX_STATS);
+    }
+    if attached & COM4_BIT != 0 {
+        service_port(0x2E8, &COM4_RX, &COM4_STATS, &COM4_TX, &COM4_TX_DEPTH, &COM4_TX_STATS);
+    }
 }
 
 extern "C" fn irq4_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM1_BIT != 0 { service_transmit(0x3F8, &COM1_TX, &COM1_TX_DEPTH, &COM1_TX_STATS); drain_port(0x3F8, &COM1_RX, &COM1_STATS); }
-    if attached & COM3_BIT != 0 { service_transmit(0x3E8, &COM3_TX, &COM3_TX_DEPTH, &COM3_TX_STATS); drain_port(0x3E8, &COM3_RX, &COM3_STATS); }
+    if attached & COM1_BIT != 0 {
+        service_port(0x3F8, &COM1_RX, &COM1_STATS, &COM1_TX, &COM1_TX_DEPTH, &COM1_TX_STATS);
+    }
+    if attached & COM3_BIT != 0 {
+        service_port(0x3E8, &COM3_RX, &COM3_STATS, &COM3_TX, &COM3_TX_DEPTH, &COM3_TX_STATS);
+    }
 }
 
 /// Reports whether a UART port is currently connected to its shared IRQ line.
@@ -386,6 +442,15 @@ pub(super) fn is_attached(base: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iir_cause_ids_match_16550_priority_encoding() {
+        assert_eq!(IIR_LINE_STATUS & 0x0E, 0x06);
+        assert_eq!(IIR_RECEIVE_DATA & 0x0E, 0x04);
+        assert_eq!(IIR_RECEIVE_TIMEOUT & 0x0E, 0x0C);
+        assert_eq!(IIR_TRANSMIT_EMPTY & 0x0E, 0x02);
+        assert_eq!(IIR_MODEM_STATUS & 0x0E, 0x00);
+    }
 
     #[test]
     fn receive_irq_mask_keeps_line_errors_enabled_without_modem_irqs() {
