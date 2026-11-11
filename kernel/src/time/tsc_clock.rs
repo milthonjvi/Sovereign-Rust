@@ -88,3 +88,55 @@ impl ClockSource for TscClockSource {
     #[inline]
     fn mask(&self) -> u64 { u64::MAX }
 }
+
+/// Convert an absolute monotonic deadline to the corresponding absolute TSC
+/// deadline using a simultaneous monotonic/TSC sample.
+///
+/// Returns None for an infinite deadline, zero frequency, or arithmetic
+/// overflow. Expired deadlines are mapped to the next TSC tick, never zero
+/// (zero has the architectural meaning "disarmed").
+pub fn monotonic_deadline_to_tsc(
+    deadline_ns: u64,
+    now_ns: u64,
+    now_tsc: u64,
+    tsc_frequency_hz: u64,
+) -> Option<u64> {
+    if deadline_ns == u64::MAX || tsc_frequency_hz == 0 {
+        return None;
+    }
+    let remaining_ns = deadline_ns.saturating_sub(now_ns);
+    let delta = if remaining_ns == 0 {
+        1
+    } else {
+        let numerator = (remaining_ns as u128).checked_mul(tsc_frequency_hz as u128)?;
+        let ticks = numerator.checked_add(999_999_999)? / 1_000_000_000;
+        if ticks > u64::MAX as u128 { return None; }
+        core::cmp::max(1, ticks as u64)
+    };
+    let absolute = now_tsc.checked_add(delta)?;
+    if absolute == 0 { None } else { Some(absolute) }
+}
+
+#[cfg(test)]
+mod deadline_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn converts_relative_monotonic_deadline_to_absolute_tsc() {
+        assert_eq!(
+            monotonic_deadline_to_tsc(2_000_000_000, 1_000_000_000, 500, 2_500_000_000),
+            Some(2_500_000_500)
+        );
+    }
+
+    #[test]
+    fn expired_deadline_is_armed_for_next_tsc_tick() {
+        assert_eq!(monotonic_deadline_to_tsc(10, 20, 100, 1_000_000_000), Some(101));
+    }
+
+    #[test]
+    fn infinite_or_unrepresentable_deadlines_are_rejected() {
+        assert_eq!(monotonic_deadline_to_tsc(u64::MAX, 0, 1, 1_000_000_000), None);
+        assert_eq!(monotonic_deadline_to_tsc(1, 0, u64::MAX, 1_000_000_000), None);
+    }
+}
