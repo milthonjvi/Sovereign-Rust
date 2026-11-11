@@ -239,6 +239,41 @@ mod tests {
     }
 
     #[test]
+    fn scaled_blit_uses_nearest_neighbor_mapping() {
+        use super::super::color::PixelFormat;
+        use super::super::info::FramebufferInfo;
+        use super::super::surface::FramebufferSurface;
+
+        let source = [Color::RED, Color::BLUE];
+        let image = ImageView::new(&source, 2, 1, 2).unwrap();
+        let mut memory = [0u8; 8 * 4 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 8,
+            height: 4,
+            pitch: 8 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the backing array is writable, correctly sized and exclusively borrowed.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        image.draw_scaled(&mut target, 1, 1, 4, 2).unwrap();
+        drop(target);
+
+        let pixel = |x: usize, y: usize| {
+            let offset = (y * 8 + x) * 4;
+            [memory[offset], memory[offset + 1], memory[offset + 2], memory[offset + 3]]
+        };
+        assert_eq!(pixel(1, 1), [255, 0, 0, 0]);
+        assert_eq!(pixel(2, 1), [255, 0, 0, 0]);
+        assert_eq!(pixel(3, 1), [0, 0, 255, 0]);
+        assert_eq!(pixel(4, 1), [0, 0, 255, 0]);
+        assert_eq!(pixel(4, 2), [0, 0, 255, 0]);
+    }
+
+    #[test]
     fn validates_last_row_extent() {
         let pixels = [Color::BLACK; 5];
         assert_eq!(
