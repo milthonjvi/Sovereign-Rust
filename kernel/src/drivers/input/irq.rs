@@ -12,7 +12,6 @@ use crate::drivers::input::event::InputEvent;
 use crate::drivers::input::pipeline::Ps2InputPipeline;
 use crate::drivers::input::ps2::Ps2Controller;
 use crate::drivers::input::queue::{SpscConsumer, SpscQueue};
-use crate::interrupts::dispatch;
 
 const KEYBOARD_VECTOR: u8 = 0x21;
 const MOUSE_VECTOR: u8 = 0x2C;
@@ -36,6 +35,8 @@ pub enum Ps2IrqError {
     InvalidQueueCapacity,
     ContextAlreadyInstalled,
     HandlerAlreadyRegistered,
+    ControllerNotInitialized,
+    InterruptsEnabled,
 }
 
 /// Owns a permanent IRQ-side pipeline. Once registered, the service remains
@@ -90,23 +91,56 @@ impl<const N: usize> Ps2IrqService<N> {
     /// controller must have exclusive ownership, and the dispatcher/IDT/
     /// central EOI path must already be live.
     pub unsafe fn register_legacy_irqs(&'static self) -> Result<(), Ps2IrqError> {
+        if !self.controller.is_initialized() {
+            return Err(Ps2IrqError::ControllerNotInitialized);
+        }
+
+        // Registration mutates the legacy PIC and must happen with IF clear.
+        // Check rather than silently changing the caller's interrupt state.
+        let flags: u64;
+        // SAFETY: Reading RFLAGS is valid in ring 0; this API is unsafe and
+        // its caller must already execute in the kernel on the BSP.
+        unsafe {
+            core::arch::asm!(
+                "pushfq",
+                "pop {flags}",
+                flags = out(reg) flags,
+                options(nomem, preserves_flags)
+            );
+        }
+        if flags & (1 << 9) != 0 {
+            return Err(Ps2IrqError::InterruptsEnabled);
+        }
+
         self.header.context.store(self as *const Self as *mut (), Ordering::Relaxed);
         let header_ptr = &self.header as *const IrqContextHeader as *mut IrqContextHeader;
-        if dispatch::register(KEYBOARD_VECTOR, ps2_irq_handler).is_err() {
-            return Err(Ps2IrqError::HandlerAlreadyRegistered);
-        }
-        if dispatch::register(MOUSE_VECTOR, ps2_irq_handler).is_err() {
-            let _ = dispatch::unregister(KEYBOARD_VECTOR, ps2_irq_handler);
-            return Err(Ps2IrqError::HandlerAlreadyRegistered);
-        }
         if ACTIVE_PS2_CONTEXT
             .compare_exchange(ptr::null_mut(), header_ptr, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            let _ = dispatch::unregister(MOUSE_VECTOR, ps2_irq_handler);
-            let _ = dispatch::unregister(KEYBOARD_VECTOR, ps2_irq_handler);
             return Err(Ps2IrqError::ContextAlreadyInstalled);
         }
+
+        // Use the interrupt subsystem's registration API. It verifies that
+        // bootstrap PIC initialization completed and masks each line before
+        // publishing the callback. The caller unmasks only after the i8042
+        // and device protocol are configured.
+        // SAFETY: IF was verified clear above; service lifetime is static.
+        if unsafe { crate::interrupts::init::register_legacy_irq(1, ps2_irq_handler) }.is_err() {
+            ACTIVE_PS2_CONTEXT.store(ptr::null_mut(), Ordering::Release);
+            return Err(Ps2IrqError::HandlerAlreadyRegistered);
+        }
+
+        // SAFETY: Same BSP/IF-clear contract. Roll back IRQ1 if IRQ12 cannot
+        // be registered, leaving both device lines masked.
+        if unsafe { crate::interrupts::init::register_legacy_irq(12, ps2_irq_handler) }.is_err() {
+            let _ = unsafe {
+                crate::interrupts::init::unregister_legacy_irq(1, ps2_irq_handler)
+            };
+            ACTIVE_PS2_CONTEXT.store(ptr::null_mut(), Ordering::Release);
+            return Err(Ps2IrqError::HandlerAlreadyRegistered);
+        }
+
         Ok(())
     }
 }
