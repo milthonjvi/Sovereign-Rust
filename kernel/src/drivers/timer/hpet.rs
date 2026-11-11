@@ -65,6 +65,16 @@ impl HpetCapabilities {
     }
 }
 
+/// Compute elapsed main-counter ticks, accounting for a 32-bit counter
+/// wrapping once between samples.
+pub const fn counter_delta(start: u64, end: u64, counter_64_bit: bool) -> u64 {
+    if counter_64_bit {
+        end.wrapping_sub(start)
+    } else {
+        (end as u32).wrapping_sub(start as u32) as u64
+    }
+}
+
 /// A mapped HPET register block.
 ///
 /// # Safety
@@ -123,6 +133,12 @@ impl Hpet {
     pub fn read_counter(&self) -> u64 {
         let value = self.read_register(MAIN_COUNTER);
         if self.capabilities.counter_64_bit { value } else { value & 0xffff_ffff }
+    }
+
+    /// Return elapsed ticks since a previously sampled main-counter value.
+    /// Valid when fewer than one full counter period elapsed between samples.
+    pub fn elapsed_ticks_since(&self, start: u64) -> u64 {
+        counter_delta(start, self.read_counter(), self.capabilities.counter_64_bit)
     }
 
     /// Reset the main counter. The HPET must be disabled first.
@@ -239,6 +255,13 @@ mod tests {
         assert_eq!(caps.timer_count, 3);
         assert!(caps.counter_64_bit);
         assert_eq!(caps.ticks_to_nanoseconds(10).unwrap(), 1000);
+    }
+
+    #[test]
+    fn computes_counter_deltas_across_wraparound() {
+        assert_eq!(counter_delta(100, 150, true), 50);
+        assert_eq!(counter_delta(u64::MAX - 4, 3, true), 8);
+        assert_eq!(counter_delta(0xffff_fffe, 2, false), 4);
     }
 
     #[test]
