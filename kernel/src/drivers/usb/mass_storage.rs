@@ -205,3 +205,37 @@ impl ScsiCapacity10{
   assert_eq!(bot.select_lun(16),Err(UsbError::MalformedDescriptor));
  }
 }
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ScsiInquiryData{pub peripheral_type:u8,pub removable:bool,pub version:u8,pub response_data_format:u8,pub vendor:[u8;8],pub product:[u8;16],pub revision:[u8;4]}
+impl ScsiInquiryData{
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<36{return Err(UsbError::BufferTooShort)}
+  let mut vendor=[0;8];vendor.copy_from_slice(&bytes[8..16]);
+  let mut product=[0;16];product.copy_from_slice(&bytes[16..32]);
+  let mut revision=[0;4];revision.copy_from_slice(&bytes[32..36]);
+  Ok(Self{peripheral_type:bytes[0]&0x1f,removable:bytes[1]&0x80!=0,version:bytes[2],response_data_format:bytes[3]&0x0f,vendor,product,revision})
+ }
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ScsiSenseFixed{pub response_code:u8,pub sense_key:u8,pub additional_sense_code:u8,pub additional_sense_qualifier:u8}
+impl ScsiSenseFixed{
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<14{return Err(UsbError::BufferTooShort)}
+  let response=bytes[0]&0x7f;
+  if response!=0x70&&response!=0x71{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{response_code:response,sense_key:bytes[2]&0x0f,additional_sense_code:bytes[12],additional_sense_qualifier:bytes[13]})
+ }
+}
+#[cfg(test)]mod scsi_response_tests{
+ use super::*;
+ #[test]fn parses_inquiry_identity_fields(){
+  let mut b=[0u8;36];b[0]=0;b[1]=0x80;b[2]=6;b[3]=2;
+  b[8..16].copy_from_slice(b"VENDOR  ");b[16..32].copy_from_slice(b"USB DISK        ");b[32..36].copy_from_slice(b"1.00");
+  let d=ScsiInquiryData::parse(&b).unwrap();assert!(d.removable);assert_eq!(&d.vendor,b"VENDOR  ");assert_eq!(&d.revision,b"1.00");
+ }
+ #[test]fn parses_fixed_sense_information(){
+  let mut b=[0u8;18];b[0]=0x70;b[2]=0x06;b[12]=0x28;b[13]=0;
+  let s=ScsiSenseFixed::parse(&b).unwrap();assert_eq!(s.sense_key,6);assert_eq!(s.additional_sense_code,0x28);
+ }
+}
