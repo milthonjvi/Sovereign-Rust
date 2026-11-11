@@ -12,7 +12,7 @@ unsafe extern "C" {
 
 /// Installs the 16 legacy PIC IRQ gates at the requested vector offset.
 ///
-/// The offset must be 8-aligned, at least 0x20, and leave room for all 16 IRQs.
+/// The offset is fixed at 0x20 because the entry stubs encode vectors 0x20..=0x2F.
 ///
 /// # Safety
 /// The active CS selector must name a valid 64-bit code segment. The vector
@@ -22,10 +22,8 @@ pub unsafe fn install_irq_gates(
     idt: &mut Idt,
     vector_offset: u8,
 ) -> Result<(), IrqGateError> {
-    if vector_offset < 0x20
-        || vector_offset & 0x07 != 0
-        || vector_offset as u16 + 16 > 256
-    {
+    // These assembly stubs encode vectors 0x20..=0x2F directly.
+    if vector_offset != 0x20 {
         return Err(IrqGateError::InvalidVectorOffset);
     }
 
