@@ -110,7 +110,12 @@ pub fn build_prdt(physical:u64,byte_len:usize,entries:&mut[AhciPrdtEntry],suppor
 
 pub fn command_header(table_phys:u64,prdt_count:u16,write:bool,command_fis_dwords:u8,supports_64bit_dma:bool)->Result<AhciCommandHeader,AhciError>{
     if table_phys&0x7F!=0 || command_fis_dwords<5 || command_fis_dwords>16{return Err(AhciError::InvalidAlignment);}
-    if !supports_64bit_dma && table_phys>u32::MAX as u64{return Err(AhciError::UnsupportedAddressing);}
+    // The command table contains a fixed 128-byte prefix followed by PRDT entries.
+    // Validate the entire DMA extent, not only the base programmed into CTBA.
+    let table_bytes=128u64.checked_add((prdt_count as u64).checked_mul(16).ok_or(AhciError::AddressOverflow)?)
+        .ok_or(AhciError::AddressOverflow)?;
+    let table_end=table_phys.checked_add(table_bytes).ok_or(AhciError::AddressOverflow)?;
+    if !supports_64bit_dma && table_end>u32::MAX as u64+1{return Err(AhciError::UnsupportedAddressing);}
     Ok(AhciCommandHeader{flags:command_fis_dwords as u16|if write{1<<6}else{0},
         prdt_length:prdt_count,transferred_bytes:0,command_table_base:table_phys as u32,
         command_table_base_upper:(table_phys>>32) as u32,reserved:[0;4]})
@@ -139,6 +144,36 @@ impl AhciIdentify {
     }
     pub fn geometry(self)->Result<BlockGeometry,BlockError>{
         BlockGeometry{block_count:self.sector_count,block_size:self.logical_sector_size}.validate()
+    }
+}
+
+#[cfg(test)]
+mod command_header_extent_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_command_table_crossing_32_bit_dma_boundary() {
+        assert_eq!(
+            command_header(u32::MAX as u64 - 127, 0, false, 5, false),
+            Err(AhciError::UnsupportedAddressing)
+        );
+    }
+
+    #[test]
+    fn validates_full_prdt_table_extent() {
+        assert_eq!(
+            command_header(u32::MAX as u64 - 255, 8, false, 5, false),
+            Err(AhciError::UnsupportedAddressing)
+        );
+        assert!(command_header(0x1000, 8, false, 5, false).is_ok());
+    }
+
+    #[test]
+    fn rejects_command_table_extent_overflow() {
+        assert_eq!(
+            command_header(u64::MAX - 127, 0, false, 5, true),
+            Err(AhciError::AddressOverflow)
+        );
     }
 }
 
