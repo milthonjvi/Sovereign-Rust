@@ -312,6 +312,7 @@ use super::*;
 
         let mut batch_observed = [0u8; 64];
         let mut batch_observed_length = 0usize;
+        let read_barriers_before_batch = device.registers.read_barriers;
         assert_eq!(
             device.receive_with_batch(&mut completions, &mut backup, |frame| {
                 batch_observed_length = frame.len();
@@ -321,6 +322,7 @@ use super::*;
         );
         assert_eq!(batch_observed_length, 64);
         assert_eq!(batch_observed, [0x64; 64]);
+        assert_eq!(device.registers.read_barriers, read_barriers_before_batch + 1);
         assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_RDT).count(), 3);
         assert!(device.registers.writes.contains(&(REG_RDT, 3)));
     }
