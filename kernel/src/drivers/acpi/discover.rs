@@ -153,6 +153,16 @@ impl AcpiTables {
                 let bytes = map_facs(address).ok_or(AcpiError::UnsupportedAddress)?;
                 let _facs = Facs::parse(address, bytes)?;
                 found.facs = Some(address);
+                facs_mapped = true;
+            }
+            // ACPI requires a FACS for full fixed-hardware platforms. It is
+            // optional only when HW_REDUCED_ACPI is advertised. A nonzero
+            // pointer that could not be mapped is not equivalent to absence.
+            if !facs_mapped && fadt.pm_hardware_mode() != super::fadt::PmHardwareMode::HardwareReduced {
+                if extended_facs.is_some() {
+                    return Err(AcpiError::UnsupportedAddress);
+                }
+                return Err(AcpiError::MalformedTable);
             }
 
             // DSDT is reached through FADT, never through the root table.
@@ -212,8 +222,18 @@ mod tests {
         bytes
     }
 
+    fn make_facs() -> std::vec::Vec<u8> {
+        let mut bytes = std::vec![0u8; 64];
+        bytes[0..4].copy_from_slice(b"FACS");
+        bytes[4..8].copy_from_slice(&64u32.to_le_bytes());
+        bytes
+    }
+
     fn make_fadt(legacy_dsdt: u32, extended_dsdt: u64) -> std::vec::Vec<u8> {
         let mut bytes = make_sdt(*b"FACP", 148);
+        // Full fixed-hardware FADTs require a FACS. Tests that model a
+        // Hardware Reduced platform explicitly clear both FACS pointers.
+        bytes[36..40].copy_from_slice(&0x5000u32.to_le_bytes());
         bytes[40..44].copy_from_slice(&legacy_dsdt.to_le_bytes());
         bytes[140..148].copy_from_slice(&extended_dsdt.to_le_bytes());
         bytes[9] = 0;
