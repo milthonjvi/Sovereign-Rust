@@ -71,7 +71,7 @@ impl VolatileE1000Registers {
     }
 }
 
-impl E1000Registers for VolatileE1000Registers {
+unsafe impl E1000Registers for VolatileE1000Registers {
     type Error = E1000MmioError;
 
     fn read32(&mut self, offset: u32) -> Result<u32, Self::Error> {
