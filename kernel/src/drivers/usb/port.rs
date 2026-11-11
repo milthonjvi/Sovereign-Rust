@@ -132,3 +132,19 @@ mod tests{
   let mut p=UsbPortMachine::new(1,0);assert_eq!(p.enumeration_complete(true),Err(UsbError::Unsupported));
  }
 }
+
+#[cfg(test)]
+mod retry_tests{
+ use super::*;
+ #[test]fn failed_port_requires_explicit_retry(){
+  let mut p=UsbPortMachine::new(1,0);p.start().unwrap();
+  let empty=PortObservation{connected:false,enabled:false,reset_asserted:false,connection_changed:false,reset_changed:false};
+  let connected=PortObservation{connected:true,..empty};
+  p.advance(0,connected);p.advance(100,connected);
+  let reset_done=PortObservation{connected:true,enabled:true,reset_asserted:false,connection_changed:false,reset_changed:false};
+  p.advance(0,reset_done);p.advance(10,reset_done);
+  p.enumeration_complete(false).unwrap();assert_eq!(p.phase,PortPhase::Failed);
+  p.advance(100,reset_done);assert_eq!(p.phase,PortPhase::Failed);
+  p.retry().unwrap();assert_eq!(p.phase,PortPhase::Debouncing);
+ }
+}
