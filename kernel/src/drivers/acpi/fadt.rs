@@ -4,6 +4,7 @@ use super::{AcpiError, sdt::Sdt};
 
 pub const FADT_SIGNATURE: [u8; 4] = *b"FACP";
 const FADT_RESET_REG_SUP: u32 = 1 << 10;
+const FADT_LOW_POWER_S0_IDLE_CAPABLE: u32 = 1 << 21;
 const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
 
 /// Common FADT fields needed for early platform and power-management setup.
@@ -220,6 +221,34 @@ impl Fadt {
             return self.validate_hardware_mode();
         }
         self.register_block_lengths.validate()
+    }
+
+    /// Whether firmware advertises Low Power S0 Idle capability (FADT Flags bit 21).
+    ///
+    /// This is a platform capability hint, not proof that a particular S0 idle
+    /// policy or device wake configuration is usable.
+    pub const fn low_power_s0_idle_capable(&self) -> bool {
+        self.flags & FADT_LOW_POWER_S0_IDLE_CAPABLE != 0
+    }
+
+    /// Encode an AML-provided Hardware Reduced _Sx sleep type for SLEEP_CONTROL_REG.
+    ///
+    /// The sleep type is a three-bit value returned by the relevant _Sx object;
+    /// this helper only places it in bits 2..4 and sets SLP_EN (bit 5).
+    /// It does not evaluate AML, quiesce CPUs/devices, arm wake sources, or
+    /// perform the register write. The caller must complete those steps first.
+    pub const fn encode_hardware_reduced_sleep_control(
+        &self,
+        sleep_type: u8,
+    ) -> Result<u8, AcpiError> {
+        if self.pm_hardware_mode() != PmHardwareMode::HardwareReduced {
+            return Err(AcpiError::MalformedTable);
+        }
+        self.validate_hardware_mode()?;
+        if sleep_type > 0b111 {
+            return Err(AcpiError::MalformedTable);
+        }
+        Ok((sleep_type << 2) | (1 << 5))
     }
 
     /// Return validated sleep-control/status GAS descriptors for
@@ -1651,6 +1680,38 @@ mod tests {
         );
         let reduced = Fadt::parse(&reduced).unwrap();
         assert_eq!(reduced.s4bios_request_value(&facs), None);
+    }
+
+    #[test]
+    fn encodes_hardware_reduced_sleep_type_and_enable_bit() {
+        let fadt = Fadt::parse(&make_fadt(268, FADT_HW_REDUCED_ACPI, None, None)).unwrap();
+        assert_eq!(fadt.encode_hardware_reduced_sleep_control(0), Ok(0x20));
+        assert_eq!(fadt.encode_hardware_reduced_sleep_control(3), Ok(0x2C));
+        assert_eq!(fadt.encode_hardware_reduced_sleep_control(7), Ok(0x3C));
+        assert_eq!(
+            fadt.encode_hardware_reduced_sleep_control(8),
+            Err(AcpiError::MalformedTable),
+        );
+
+        let legacy = Fadt::parse(&make_fadt(148, 0, None, None)).unwrap();
+        assert_eq!(
+            legacy.encode_hardware_reduced_sleep_control(3),
+            Err(AcpiError::MalformedTable),
+        );
+    }
+
+    #[test]
+    fn exposes_low_power_s0_idle_capability_without_claiming_policy() {
+        let capable = Fadt::parse(&make_fadt(
+            268,
+            FADT_HW_REDUCED_ACPI | FADT_LOW_POWER_S0_IDLE_CAPABLE,
+            None,
+            None,
+        )).unwrap();
+        assert!(capable.low_power_s0_idle_capable());
+
+        let ordinary = Fadt::parse(&make_fadt(268, FADT_HW_REDUCED_ACPI, None, None)).unwrap();
+        assert!(!ordinary.low_power_s0_idle_capable());
     }
 
     #[test]
