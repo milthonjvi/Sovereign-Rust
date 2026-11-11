@@ -2,7 +2,7 @@
 
 use crate::time::{
     ApicCountdownInitError, ApicCountdownQueue, ApicCountdownQueueError,
-    ClockSource, Deadline, TimerCancelReport, TimerEvent, TimerId, TimerProcessReport,
+    ClockSource, Deadline, TimerEvent, TimerId,
 };
 
 use super::{
