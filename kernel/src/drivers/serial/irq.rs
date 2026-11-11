@@ -243,6 +243,7 @@ pub enum UartIrqError {
     InterruptSubsystem,
     HandlerAlreadyOwned,
     TransmitPending,
+    InvalidWatermarks,
 }
 
 struct PortBinding {
@@ -257,6 +258,7 @@ struct PortBinding {
     tx_stats: &'static AtomicTxStatistics,
     irq_stats: &'static AtomicIrqStatistics,
     cts_flow: &'static AtomicU8,
+    rts_watermarks: &'static AtomicUsize,
 }
 
 fn binding(base: u16) -> Option<PortBinding> {
@@ -319,6 +321,7 @@ pub unsafe fn attach_interrupts(
     }
 
     port.cts_flow.store(0, Ordering::Release);
+    port.rts_watermarks.store(0, Ordering::Release);
     ATTACHED.fetch_or(port.bit, Ordering::Release);
 
     if let Err(error) = uart.enable_receive_interrupt() {
@@ -373,6 +376,7 @@ pub unsafe fn detach_interrupts(uart: &mut Uart16550) -> Result<(), UartIrqError
     uart.disable_interrupts().map_err(UartIrqError::Uart)?;
     ATTACHED.fetch_and(!port.bit, Ordering::AcqRel);
     port.cts_flow.store(0, Ordering::Release);
+    port.rts_watermarks.store(0, Ordering::Release);
 
     if last_on_line {
         // SAFETY: Source is masked and IF is clear; no callback is in flight.
@@ -710,6 +714,22 @@ pub(super) fn is_attached(base: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn rts_watermarks_encode_and_decode_without_loss() {
+        assert_eq!(decode_rts_watermarks(encode_rts_watermarks(900, 300)), (900, 300));
+    }
+
+    #[test]
+    fn rts_hysteresis_uses_inclusive_thresholds() {
+        assert!(!rts_should_deassert(899, 900));
+        assert!(rts_should_deassert(900, 900));
+        assert!(!rts_should_assert(301, 300));
+        assert!(rts_should_assert(300, 300));
+        assert!(rts_should_assert(0, 300));
+        assert!(!rts_should_deassert(1023, 0));
+    }
 
     #[test]
     fn every_legacy_uart_exposes_independent_interrupt_statistics() {
