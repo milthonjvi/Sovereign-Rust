@@ -147,18 +147,22 @@ impl<'a> SoftwareBuffer<'a> {
             return Ok(());
         }
 
+        let row_width = right - left;
+        let column_offset = left.checked_mul(4).ok_or(BufferError::SizeOverflow)?;
         for y in top..bottom {
-            let source_row = y * self.stride;
-            let target_row = y * info.pitch;
-            for x in left..right {
-                let offset = target_row
-                    .checked_add(x.checked_mul(4).ok_or(BufferError::SizeOverflow)?)
-                    .ok_or(BufferError::SizeOverflow)?;
-                // SAFETY: x/y are clipped to the framebuffer dimensions;
-                // FramebufferSurface validated the complete mapped extent.
-                unsafe {
-                    target.write_pixel_unchecked(offset, self.pixels[source_row + x]);
-                }
+            let source_start = y * self.stride + left;
+            let source_end = source_start + row_width;
+            let target_offset = y.checked_mul(info.pitch)
+                .and_then(|row| row.checked_add(column_offset))
+                .ok_or(BufferError::SizeOverflow)?;
+            // SAFETY: the source row is within the validated SoftwareBuffer;
+            // clipping and FramebufferSurface validation guarantee the full
+            // destination span is inside the mapped framebuffer.
+            unsafe {
+                target.write_pixels_unchecked(
+                    target_offset,
+                    &self.pixels[source_start..source_end],
+                );
             }
         }
         Ok(())
