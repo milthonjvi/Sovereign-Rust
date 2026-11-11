@@ -102,14 +102,27 @@ impl<'a> FramebufferSurface<'a> {
         if offset.checked_add(4).ok_or(FramebufferError::SizeOverflow)? > self.mapped_len {
             return Err(FramebufferError::BufferTooSmall);
         }
-        if source.alpha == 255 {
-            // The fourth framebuffer byte is reserved, not an alpha channel.
-            // SAFETY: the complete destination pixel was checked above.
-            unsafe { self.write_pixel_unchecked(offset, Color::new(source.red, source.green, source.blue)); }
-            return Ok(());
-        }
+        // SAFETY: bounds and mapping extent were checked above.
+        unsafe { self.blend_pixel_unchecked(offset, source); }
+        Ok(())
+    }
 
-        // SAFETY: the complete pixel range was checked above.
+    /// Composite a pixel at a prevalidated framebuffer byte offset.
+    ///
+    /// # Safety
+    /// The four bytes beginning at `offset` must be inside the validated
+    /// mapping, and the offset must identify a complete pixel.
+    #[inline]
+    pub(crate) unsafe fn blend_pixel_unchecked(&mut self, offset: usize, source: Color) {
+        if source.alpha == 0 {
+            return;
+        }
+        if source.alpha == 255 {
+            // SAFETY: guaranteed by this method's caller.
+            unsafe { self.write_pixel_unchecked(offset, source); }
+            return;
+        }
+        // SAFETY: guaranteed by this method's caller.
         let destination = unsafe { self.base.as_ptr().add(offset) };
         let mut bytes = [0u8; 4];
         unsafe {
@@ -131,9 +144,8 @@ impl<'a> FramebufferSurface<'a> {
             blend(source.green, green),
             blend(source.blue, blue),
         );
-        // SAFETY: offset remains within the mapping validated above.
+        // SAFETY: guaranteed by this method's caller.
         unsafe { self.write_pixel_unchecked(offset, output); }
-        Ok(())
     }
 
     pub fn clear(&mut self, color: Color) {
