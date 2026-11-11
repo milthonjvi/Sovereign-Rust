@@ -31,3 +31,12 @@ pub struct EfiSystemTable {
     pub number_of_table_entries: usize,
     pub configuration_table: *mut c_void,
 }
+
+
+/// Entry in the UEFI system configuration-table array.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct EfiConfigurationTable {
+    pub vendor_guid: super::EfiGuid,
+    pub vendor_table: *mut c_void,
+}
