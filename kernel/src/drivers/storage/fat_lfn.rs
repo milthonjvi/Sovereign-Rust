@@ -338,11 +338,12 @@ pub fn lookup_path<D: super::block::BlockDevice>(
         })?;
         let entry = match found { Some(value) => value, None => return Ok(None) };
         result = Some(entry);
+        let had_separator = cursor < path.len();
         let mut remaining = cursor;
         while remaining < path.len() && (path[remaining] == b'/' as u16 || path[remaining] == b'\\' as u16) { remaining += 1; }
-        if remaining < path.len() {
+        if had_separator {
             if !entry.is_directory() || entry.first_cluster < 2 { return Ok(None); }
-            directory = Some(entry.first_cluster);
+            if remaining < path.len() { directory = Some(entry.first_cluster); }
         }
     }
     Ok(result)
