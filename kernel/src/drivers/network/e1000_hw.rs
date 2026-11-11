@@ -291,6 +291,33 @@ impl E1000TxQueue {
         Ok(frames.len())
     }
 
+    /// Inspect the next producer slot without transferring ownership.
+    ///
+    /// The caller may write its matching DMA buffer only after this returns
+    /// Some(index). The queue still validates descriptor availability again
+    /// during submit(), so all accesses must remain externally serialized.
+    pub fn next_available_slot<R: E1000Registers>(
+        &self,
+        registers: &mut R,
+        descriptors: &[TxDescriptor],
+    ) -> Result<Option<u16>, E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+        if self.pending as usize >= descriptors.len() - 1 {
+            return Ok(None);
+        }
+        registers.dma_read_barrier();
+        let index = self.cursor.index() as usize;
+        // SAFETY: this is a read-only ownership check on the pinned DMA ring.
+        let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+        if descriptor.status & TXD_STATUS_DD != 0 {
+            Ok(Some(index as u16))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Return the next completed descriptor index in submission order.
     /// The caller can use this index to release the matching DMA buffer.
     pub fn reap_one<R: E1000Registers>(
