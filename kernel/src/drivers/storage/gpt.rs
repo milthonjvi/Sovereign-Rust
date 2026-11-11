@@ -160,50 +160,58 @@ pub fn enumerate_gpt_partitions<D: super::block::BlockDevice>(
         return Err(GptError::TableOutOfBounds);
     }
 
+    // One sequential pass performs CRC validation and entry decoding together.
+    // Results remain provisional until the complete array CRC has been verified.
     output.fill(None);
     let mut crc = !0u32;
-    let mut offset = 0u64;
-    while offset < bytes {
-        let block_index = offset / geo.block_size as u64;
-        let within = (offset % geo.block_size as u64) as usize;
-        let n = core::cmp::min(block_buffer.len() - within, (bytes - offset) as usize);
-        let lba = header.entries_lba.checked_add(block_index).ok_or(GptError::AddressOverflow)?;
-        let range = BlockRange::new(lba, 1);
-        validate_buffer(geo, range, block_buffer.len()).map_err(|_| GptError::TableOutOfBounds)?;
-        device.read_blocks(range, block_buffer).map_err(|_| GptError::DeviceReadFailed)?;
-        crc = crc32_update(crc, &block_buffer[within..within + n]);
-        offset += n as u64;
-    }
-    if !crc != header.entries_crc32 { return Err(GptError::EntryArrayCrcMismatch); }
-
-    // Second sequential pass: decode entries while reading each table block once.
-    // This avoids one device read per GPT entry, including entries crossing block edges.
     let mut count = 0usize;
     let mut entry_fill = 0usize;
-    let mut table_offset = 0u64;
-    while table_offset < bytes {
-        let block_index = table_offset / block_size;
-        let within = (table_offset % block_size) as usize;
-        let n = core::cmp::min(block_buffer.len() - within, (bytes - table_offset) as usize);
-        let lba = header.entries_lba.checked_add(block_index).ok_or(GptError::AddressOverflow)?;
+    let mut offset = 0u64;
+    while offset < bytes {
+        let block_index = offset / block_size;
+        let within = (offset % block_size) as usize;
+        let n = core::cmp::min(block_buffer.len() - within, (bytes - offset) as usize);
+        let lba = match header.entries_lba.checked_add(block_index) {
+            Some(value) => value,
+            None => { output.fill(None); return Err(GptError::AddressOverflow); }
+        };
         let range = BlockRange::new(lba, 1);
-        validate_buffer(geo, range, block_buffer.len()).map_err(|_| GptError::TableOutOfBounds)?;
-        device.read_blocks(range, block_buffer).map_err(|_| GptError::DeviceReadFailed)?;
+        if validate_buffer(geo, range, block_buffer.len()).is_err() {
+            output.fill(None);
+            return Err(GptError::TableOutOfBounds);
+        }
+        if device.read_blocks(range, block_buffer).is_err() {
+            output.fill(None);
+            return Err(GptError::DeviceReadFailed);
+        }
+
+        let chunk = &block_buffer[within..within + n];
+        crc = crc32_update(crc, chunk);
         let mut consumed = 0usize;
         while consumed < n {
             let take = core::cmp::min(header.entry_size as usize - entry_fill, n - consumed);
             entry_buffer[entry_fill..entry_fill + take]
-                .copy_from_slice(&block_buffer[within + consumed..within + consumed + take]);
+                .copy_from_slice(&chunk[consumed..consumed + take]);
             entry_fill += take;
             consumed += take;
             if entry_fill == header.entry_size as usize {
-                decode_gpt_entry(entry_buffer, header, output, &mut count)?;
+                if let Err(error) = decode_gpt_entry(entry_buffer, header, output, &mut count) {
+                    output.fill(None);
+                    return Err(error);
+                }
                 entry_fill = 0;
             }
         }
-        table_offset += n as u64;
+        offset += n as u64;
     }
-    if entry_fill != 0 { return Err(GptError::InvalidEntryGeometry); }
+    if entry_fill != 0 {
+        output.fill(None);
+        return Err(GptError::InvalidEntryGeometry);
+    }
+    if !crc != header.entries_crc32 {
+        output.fill(None);
+        return Err(GptError::EntryArrayCrcMismatch);
+    }
     Ok(count)
 }
 
