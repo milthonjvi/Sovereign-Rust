@@ -509,9 +509,12 @@ fn transition_to_kernel(
             "cli",
             "cld",
             "lidt [r9]",
+            // Switch to the already-mapped bootstrap stack before changing
+            // CR3. This keeps NMI/exception delivery off the firmware stack
+            // throughout the address-space transition window.
+            "mov rsp, rcx",
             "mov cr3, rax",
             "mov rdi, rdx",
-            "mov rsp, rcx",
             "jmp r8",
             in("rax") page_table_root,
             in("rdx") boot_info_physical,
