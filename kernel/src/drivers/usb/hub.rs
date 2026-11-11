@@ -134,3 +134,38 @@ mod descriptor_length_tests{
   assert_eq!(d.ports,4);assert_eq!(d.header_decode_latency,1);
  }
 }
+
+
+/// Decodes the interrupt-IN bitmap returned by a hub status endpoint.
+/// Bit zero reports a hub-level change; bits 1..=N correspond to ports.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct HubChangeBitmap{bits:[u32;4],pub port_count:u8}
+impl HubChangeBitmap{
+ pub fn parse(bytes:&[u8],port_count:u8)->Result<Self,UsbError>{
+  if port_count==0||port_count>127{return Err(UsbError::MalformedDescriptor)}
+  let required=((port_count as usize+1)+7)/8;
+  if bytes.len()<required{return Err(UsbError::BufferTooShort)}
+  let mut bits=[0u32;4];
+  for (i,b) in bytes[..required].iter().enumerate(){
+   let word=i/4;let shift=(i%4)*8;bits[word]|=(*b as u32)<<shift;
+  }
+  Ok(Self{bits,port_count})
+ }
+ pub const fn hub_changed(self)->bool{self.bits[0]&1!=0}
+ pub fn port_changed(self,port:u8)->bool{
+  if port==0||port>self.port_count{return false}
+  let bit=port as usize;self.bits[bit/32]&(1u32<<(bit%32))!=0
+ }
+}
+#[cfg(test)]
+mod change_bitmap_tests{
+ use super::*;
+ #[test]fn maps_hub_and_port_change_bits(){
+  let map=HubChangeBitmap::parse(&[0b0001_0101],4).unwrap();
+  assert!(map.hub_changed());assert!(map.port_changed(2));assert!(map.port_changed(4));
+  assert!(!map.port_changed(1));assert!(!map.port_changed(5));
+ }
+ #[test]fn requires_full_bitmap_for_all_ports(){
+  assert_eq!(HubChangeBitmap::parse(&[0],8),Err(UsbError::BufferTooShort));
+ }
+}
