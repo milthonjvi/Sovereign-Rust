@@ -4,6 +4,8 @@
 //! local-APIC MMIO mapping requirement and supporting 32-bit APIC IDs. This
 //! module does not configure the I/O APIC or enable CPU interrupt delivery.
 
+use core::marker::PhantomData;
+
 use super::{cpuid::CpuInfo, msr};
 
 pub const IA32_APIC_BASE: u32 = 0x1B;
@@ -40,7 +42,6 @@ pub enum X2ApicError {
     FeatureUnavailable,
     InvalidPhysicalBase,
     InvalidVector,
-    InvalidDestination,
     DeliveryTimeout,
 }
 
@@ -92,6 +93,7 @@ pub unsafe fn enable() -> Result<u64, X2ApicError> {
 /// owning logical processor. It is cheap to construct after enable().
 pub struct X2Apic {
     _private: (),
+    _not_send_sync: PhantomData<*mut ()>,
 }
 
 impl X2Apic {
@@ -101,7 +103,7 @@ impl X2Apic {
     /// Caller must ensure IA32_APIC_BASE has both global-enable and x2APIC bits
     /// set on this CPU. The handle must not be shared across CPUs.
     pub unsafe fn new() -> Self {
-        Self { _private: () }
+        Self { _private: (), _not_send_sync: PhantomData }
     }
 
     #[inline]
