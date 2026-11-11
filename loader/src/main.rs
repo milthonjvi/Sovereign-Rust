@@ -10,7 +10,7 @@ use core::{mem, panic::PanicInfo};
 use crate::page_tables::{PagePermissions, PageTableBuilder};
 use uefi::{
     load_kernel_file, Console, EfiHandle, EfiStatus, EfiSystemTable, UefiPageTableMemory,
-    EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_SUCCESS,
+    EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_SUCCESS, EFI_UNSUPPORTED,
     EFI_SYSTEM_TABLE_SIGNATURE,
 };
 
@@ -117,8 +117,8 @@ pub extern "efiapi" fn efi_main(
     // identity mappings must be added before that transition is permitted.
     let _kernel_page_table_root = page_tables.root_physical();
     let _loaded_kernel = loaded_kernel;
-    if !console.write_ascii("Kernel image loaded and high-half page tables constructed.\\r\\n")
-        || !console.write_ascii("CR3 transition and kernel handoff remain pending.\\r\\n")
+    if !console.write_ascii("Kernel image loaded and high-half page tables constructed.\r\n")
+        || !console.write_ascii("CR3 transition and kernel handoff remain pending.\r\n")
     {
         return EFI_INVALID_PARAMETER;
     }
