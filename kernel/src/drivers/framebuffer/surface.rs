@@ -52,13 +52,20 @@ impl<'a> FramebufferSurface<'a> {
     #[inline]
     unsafe fn write_pixel_unchecked(&mut self, offset: usize, color: Color) {
         let bytes = color.memory_bytes(self.info.pixel_format);
-        // SAFETY: guaranteed by the caller; byte writes do not require alignment.
+        // SAFETY: guaranteed by the caller. Use one native 32-bit store when
+        // the framebuffer address is aligned; retain byte stores for unusual
+        // unaligned mappings. x86_64 is little-endian.
         unsafe {
             let destination = self.base.as_ptr().add(offset);
-            ptr::write_volatile(destination, bytes[0]);
-            ptr::write_volatile(destination.add(1), bytes[1]);
-            ptr::write_volatile(destination.add(2), bytes[2]);
-            ptr::write_volatile(destination.add(3), bytes[3]);
+            if (destination as usize) & (core::mem::align_of::<u32>() - 1) == 0 {
+                let pixel = u32::from_le_bytes(bytes);
+                ptr::write_volatile(destination.cast::<u32>(), pixel);
+            } else {
+                ptr::write_volatile(destination, bytes[0]);
+                ptr::write_volatile(destination.add(1), bytes[1]);
+                ptr::write_volatile(destination.add(2), bytes[2]);
+                ptr::write_volatile(destination.add(3), bytes[3]);
+            }
         }
     }
 
