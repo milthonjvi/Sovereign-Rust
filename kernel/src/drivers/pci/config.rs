@@ -133,8 +133,17 @@ impl EcamWindow{pub const fn contains(self,a:PciAddress)->bool{a.segment==self.s
 /// The output buffer must hold every decoded BAR; a 64-bit BAR consumes two
 /// configuration registers but produces one Bar entry.
 pub fn read_bars<A: ConfigAccess>(io: &A, function: PciFunction, out: &mut [Bar]) -> Result<usize, ConfigError> {
-    let count = function.identity.bar_register_count();
-    let mut index = 0u8;
+    let count = function.identity.bar_register_count() as usize;
+    if count > 6 {
+        return Err(ConfigError::InvalidBar);
+    }
+
+    // Stage results locally: errors never leave a partially updated output.
+    let mut decoded = [Bar {
+        index: 0, kind: BarKind::Memory32, prefetchable: false,
+        base: 0, raw_low: 0, raw_high: None,
+    }; 6];
+    let mut index = 0usize;
     let mut written = 0usize;
     while index < count {
         let register = 0x10u16 + (index as u16) * 4;
@@ -143,13 +152,18 @@ pub fn read_bars<A: ConfigAccess>(io: &A, function: PciFunction, out: &mut [Bar]
         let high = if is_64_bit_memory {
             if index + 1 >= count { return Err(ConfigError::InvalidBar); }
             Some(io.read_u32(function.address, register + 4)?)
-        } else { None };
-        let bar = Bar::decode(index, low, high).ok_or(ConfigError::InvalidBar)?;
-        if written >= out.len() { return Err(ConfigError::BufferTooSmall); }
-        out[written] = bar;
+        } else {
+            None
+        };
+        decoded[written] = Bar::decode(index as u8, low, high)
+            .ok_or(ConfigError::InvalidBar)?;
         written += 1;
         index += if is_64_bit_memory { 2 } else { 1 };
     }
+    if out.len() < written {
+        return Err(ConfigError::BufferTooSmall);
+    }
+    out[..written].copy_from_slice(&decoded[..written]);
     Ok(written)
 }
 
@@ -229,6 +243,53 @@ mod scan_report_tests {
         assert_eq!(report.written, 2);
         assert_eq!(report.devices_found, 2);
         assert!(!report.truncated);
+    }
+
+    #[test]
+    fn read_bars_preserves_output_on_invalid_later_bar() {
+        struct Mock([u32; 6]);
+        impl ConfigAccess for Mock {
+            fn read_u32(&self, _a: PciAddress, r: u16) -> Result<u32, ConfigError> {
+                self.0.get(((r - 0x10) / 4) as usize).copied().ok_or(ConfigError::OutOfRange)
+            }
+            fn write_u32(&self, _a: PciAddress, _r: u16, _v: u32) -> Result<(), ConfigError> {
+                Err(ConfigError::OutOfRange)
+            }
+        }
+        let a = PciAddress { segment: 0, bus: 0, device: 0, function: 0 };
+        let f = PciFunction { address: a, identity: PciIdentity {
+            vendor_id: 1, device_id: 2, command: 0, status: 0, revision: 0,
+            programming_interface: 0, subclass: 0, class_code: 0, header_type: 0,
+        }};
+        let sentinel = Bar { index: 5, kind: BarKind::Io, prefetchable: false,
+            base: 0x1234, raw_low: 0x1235, raw_high: None };
+        let mut out = [sentinel; 6];
+        assert_eq!(read_bars(&Mock([0x8000_0000, 0x1003, 0, 0, 0, 0]), f, &mut out),
+            Err(ConfigError::InvalidBar));
+        assert_eq!(out, [sentinel; 6]);
+    }
+
+    #[test]
+    fn read_bars_preserves_output_when_buffer_is_too_small() {
+        struct Mock;
+        impl ConfigAccess for Mock {
+            fn read_u32(&self, _a: PciAddress, r: u16) -> Result<u32, ConfigError> {
+                Ok(if r == 0x10 { 0x0000_0004 } else { 0 })
+            }
+            fn write_u32(&self, _a: PciAddress, _r: u16, _v: u32) -> Result<(), ConfigError> {
+                Err(ConfigError::OutOfRange)
+            }
+        }
+        let a = PciAddress { segment: 0, bus: 0, device: 0, function: 0 };
+        let f = PciFunction { address: a, identity: PciIdentity {
+            vendor_id: 1, device_id: 2, command: 0, status: 0, revision: 0,
+            programming_interface: 0, subclass: 0, class_code: 0, header_type: 0,
+        }};
+        let sentinel = Bar { index: 5, kind: BarKind::Io, prefetchable: false,
+            base: 0x1234, raw_low: 0x1235, raw_high: None };
+        let mut out = [sentinel; 1];
+        assert_eq!(read_bars(&Mock, f, &mut out), Err(ConfigError::BufferTooSmall));
+        assert_eq!(out, [sentinel; 1]);
     }
 
     #[test]
