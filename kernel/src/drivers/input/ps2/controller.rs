@@ -34,6 +34,7 @@ pub enum Ps2Error {
     MousePortTestFailed(u8),
     NotInitialized,
     DeviceRejected(u8),
+    UnsupportedMouseId(u8),
 }
 
 /// Result of controller diagnostics. A port test value of zero means success.
@@ -41,6 +42,17 @@ pub enum Ps2Error {
 pub struct Ps2Diagnostics {
     pub keyboard_port: u8,
     pub mouse_port: u8,
+}
+
+/// Protocol negotiated with a PS/2 mouse.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Ps2MouseProtocol {
+    /// Three-byte standard PS/2 packets.
+    Standard,
+    /// Four-byte IntelliMouse packets with a signed wheel delta.
+    Wheel,
+    /// Four-byte five-button IntelliMouse Explorer packets.
+    FiveButton,
 }
 
 /// One byte removed from the i8042 output buffer, including its status snapshot.
@@ -246,6 +258,30 @@ impl Ps2Controller {
     pub fn configure_mouse(&self) -> Result<(), Ps2Error> {
         self.send_mouse_command(0xF6)?;
         self.send_mouse_command(0xF4)
+    }
+
+    /// Negotiates the mouse packet format using the IntelliMouse sample-rate
+    /// sequence (200, 100, 80), queries the device ID, then enables reporting.
+    ///
+    /// The returned protocol must be used to construct `Ps2MouseDecoder`;
+    /// enabling four-byte decoding without this negotiation desynchronizes
+    /// standard three-byte mouse streams.
+    pub fn configure_mouse_with_wheel(&self) -> Result<Ps2MouseProtocol, Ps2Error> {
+        self.send_mouse_command(0xF6)?;
+        for rate in [200, 100, 80] {
+            self.send_mouse_command(0xF3)?;
+            self.send_mouse_command(rate)?;
+        }
+        self.send_mouse_command(0xF2)?;
+        let device_id = self.read_data()?;
+        let protocol = match device_id {
+            0 => Ps2MouseProtocol::Standard,
+            3 => Ps2MouseProtocol::Wheel,
+            4 => Ps2MouseProtocol::FiveButton,
+            other => return Err(Ps2Error::UnsupportedMouseId(other)),
+        };
+        self.send_mouse_command(0xF4)?;
+        Ok(protocol)
     }
 
     /// Enables IRQ generation only after the caller has installed and unmasked
