@@ -105,6 +105,20 @@ impl RecursivePageTable {
             executable &= entry & NO_EXECUTE == 0;
 
             let remaining_levels = self.levels as usize - depth;
+            // At the final PTE level bit 7 is PAT, not the huge-page flag.
+            if remaining_levels == 1 {
+                let physical_base = entry & ADDRESS_MASK;
+                return Ok(Translation {
+                    virtual_address,
+                    physical_address: physical_base | (virtual_address & (PAGE_SIZE - 1)),
+                    page_size: PAGE_SIZE,
+                    writable,
+                    user_accessible,
+                    executable,
+                    global: entry & GLOBAL != 0,
+                });
+            }
+
             if entry & HUGE_PAGE != 0 {
                 if remaining_levels != 3 && remaining_levels != 2 {
                     return Err(PagingError::CorruptEntry);
@@ -115,19 +129,6 @@ impl RecursivePageTable {
                     virtual_address,
                     physical_address: physical_base | (virtual_address & (page_size - 1)),
                     page_size,
-                    writable,
-                    user_accessible,
-                    executable,
-                    global: entry & GLOBAL != 0,
-                });
-            }
-
-            if remaining_levels == 1 {
-                let physical_base = entry & ADDRESS_MASK;
-                return Ok(Translation {
-                    virtual_address,
-                    physical_address: physical_base | (virtual_address & (PAGE_SIZE - 1)),
-                    page_size: PAGE_SIZE,
                     writable,
                     user_accessible,
                     executable,
