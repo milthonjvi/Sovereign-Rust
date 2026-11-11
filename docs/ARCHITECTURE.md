@@ -34,6 +34,16 @@ framebuffer metadata. The contract is currently a definition only: the loader
 does not yet populate or pass this structure, and the kernel does not yet
 consume it. The kernel must validate all ranges before dereferencing addresses.
 
+The loader also contains a four-level x86_64 page-table builder in
+`loader/src/page_tables.rs`, plus a UEFI `AllocatePages` provider in
+`loader/src/uefi/page_table_memory.rs`. It maps 4 KiB pages, rejects duplicate
+leaf mappings and writable+executable mappings, and requires the caller to
+confirm EFER.NXE is enabled before creating tables. The builder is not yet
+invoked by the entry point and does not switch CR3. The UEFI provider is valid
+only while Boot Services and the firmware's current address mappings remain
+active. A complete transition must map the loader's code, stack, handoff data,
+kernel segments, and memory-map buffer before changing CR3 or exiting firmware.
+
 This remains a validation stage, not a complete kernel loader. It does not yet
 allocate physical pages, copy segment contents, zero BSS, construct final page
 tables, acquire the final memory map, or call ExitBootServices.
