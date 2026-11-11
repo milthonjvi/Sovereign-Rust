@@ -592,6 +592,19 @@ mod tests {
     }
 
     #[test]
+    fn tx_next_available_slot_tracks_descriptor_ownership() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut queue = E1000TxQueue::new(8).unwrap();
+        assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(Some(0)));
+        assert_eq!(queue.submit(&mut regs, &mut descriptors, 0x8000, 64), Ok(0));
+        assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(None));
+        descriptors[0].status = TXD_STATUS_DD;
+        assert_eq!(queue.reap_one(&mut regs, &descriptors), Ok(Some(0)));
+        assert_eq!(queue.next_available_slot(&mut regs, &descriptors), Ok(Some(1)));
+    }
+
+    #[test]
     fn tx_batch_publishes_multiple_descriptors_with_one_tail_update() {
         let mut regs = MockRegisters::default();
         let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
