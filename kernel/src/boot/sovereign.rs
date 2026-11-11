@@ -168,3 +168,6 @@ const fn is_canonical(address: u64) -> bool {
     let sign = (address >> 47) & 1;
     (sign == 0 && upper == 0) || (sign == 1 && upper == 0xffff)
 }
+// ABI v1 layout is fixed at 160 bytes with 8-byte alignment.
+const _: [(); 160] = [(); core::mem::size_of::<SovereignBootInfo>()];
+const _: [(); 8] = [(); core::mem::align_of::<SovereignBootInfo>()];
