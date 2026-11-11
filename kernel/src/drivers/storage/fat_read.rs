@@ -20,6 +20,9 @@ impl FatVolume {
         }
         let fat_span = (bpb.fat_count as u32).checked_mul(bpb.sectors_per_fat)
             .ok_or(FatError::InvalidFatSize)?;
+        let root_bytes = (bpb.root_entry_count as u32).checked_mul(32).ok_or(FatError::InvalidRootDirectory)?;
+        let expected_root = root_bytes.checked_add(bps - 1).ok_or(FatError::InvalidRootDirectory)? / bps;
+        if expected_root != bpb.root_directory_sectors { return Err(FatError::InvalidRootDirectory); }
         let expected_first = (bpb.reserved_sectors as u32).checked_add(fat_span)
             .and_then(|v| v.checked_add(bpb.root_directory_sectors))
             .ok_or(FatError::InvalidTotalSectors)?;
@@ -29,10 +32,12 @@ impl FatVolume {
         let data_sectors = bpb.total_sectors - expected_first;
         let clusters = data_sectors / bpb.sectors_per_cluster as u32;
         let kind = if clusters < 4_085 { FatKind::Fat12 } else if clusters < 65_525 { FatKind::Fat16 } else { FatKind::Fat32 };
-        if data_sectors != bpb.data_sectors || clusters != bpb.cluster_count || kind != bpb.kind
+        if clusters == 0 || clusters >= 0x0FFF_FFF5 || data_sectors != bpb.data_sectors || clusters != bpb.cluster_count || kind != bpb.kind
             || (kind == FatKind::Fat32 && (bpb.root_entry_count != 0 || bpb.root_cluster.map_or(true, |v| v < 2 || v >= clusters + 2)))
             || (kind != FatKind::Fat32 && (bpb.root_entry_count == 0 || bpb.root_cluster.is_some()))
-            || (bpb.fat_mirroring_enabled && bpb.active_fat != 0) {
+            || (bpb.fat_mirroring_enabled && bpb.active_fat != 0)
+            || bpb.fs_info_sector.map_or(false, |v| v >= bpb.reserved_sectors)
+            || bpb.backup_boot_sector.map_or(false, |v| v >= bpb.reserved_sectors) {
             return Err(FatError::InvalidClusterCount);
         }
         let bits = match kind { FatKind::Fat12 => 12u64, FatKind::Fat16 => 16, FatKind::Fat32 => 32 };
