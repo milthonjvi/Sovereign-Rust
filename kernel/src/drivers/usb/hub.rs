@@ -26,7 +26,7 @@ impl SuperSpeedHubDescriptor{
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(u16)]
-pub enum HubPortFeature{Connection=0,Enable=1,Suspend=2,OverCurrent=3,Reset=4,Power=8,LowSpeed=9,ConnectionChange=16,EnableChange=17,SuspendChange=18,OverCurrentChange=19,ResetChange=20}
+pub enum HubPortFeature{Connection=0,Enable=1,Suspend=2,OverCurrent=3,Reset=4,BHPortReset=28,Power=8,LowSpeed=9,ConnectionChange=16,EnableChange=17,SuspendChange=18,OverCurrentChange=19,ResetChange=20}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct HubPort{pub number:u8,pub connected:bool,pub enabled:bool,pub powered:bool,pub speed_bits:u8}
 
@@ -75,18 +75,18 @@ impl HubPortStatus{
  pub const fn has_change(self)->bool{self.change!=0}
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum HubPortAction{PowerOn,PowerOff,Reset,Enable,Suspend,Resume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange}
+pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange}
 impl HubPortAction{
  pub const fn feature(self)->u16{
   match self{
-   Self::PowerOn|Self::PowerOff=>8,Self::Reset=>4,Self::Enable=>1,Self::Suspend|Self::Resume=>2,
+   Self::PowerOn|Self::PowerOff=>8,Self::Reset=>4,Self::WarmReset=>28,Self::Enable=>1,Self::Suspend|Self::Resume=>2,
    Self::ClearConnectionChange=>16,Self::ClearEnableChange=>17,Self::ClearSuspendChange=>18,
    Self::ClearOverCurrentChange=>19,Self::ClearResetChange=>20,
   }
  }
  pub const fn request(self)->u8{
   match self{
-   Self::PowerOn|Self::Reset|Self::Enable|Self::Suspend=>HUB_SET_FEATURE,
+   Self::PowerOn|Self::Reset|Self::WarmReset|Self::Enable|Self::Suspend=>HUB_SET_FEATURE,
    Self::PowerOff|Self::Resume|Self::ClearConnectionChange|Self::ClearEnableChange|
    Self::ClearSuspendChange|Self::ClearOverCurrentChange|Self::ClearResetChange=>HUB_CLEAR_FEATURE,
   }
@@ -176,10 +176,10 @@ mod change_bitmap_tests{
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent,OverCurrentLatched}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32}
+pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool}
 impl HubPortMachine{
- pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2}}
- pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
+ pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:false}}
+ pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true}}\n pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
  pub fn elapse_ms(&mut self,ms:u32){self.elapsed_ms=self.elapsed_ms.saturating_add(ms);if self.state==HubPortState::PowerGoodWait&&self.elapsed_ms>=self.power_good_ms{self.state=HubPortState::AwaitConnection;self.elapsed_ms=0}else if self.state==HubPortState::Debouncing&&self.elapsed_ms>=100{self.state=HubPortState::ResetRequired;self.elapsed_ms=0}}
  pub fn observe(&mut self,status:HubPortStatus){
   if status.status&HubPortStatus::OVER_CURRENT!=0{self.state=HubPortState::OverCurrent;return}
@@ -194,7 +194,7 @@ impl HubPortMachine{
   }
  }
  pub fn take_action(&mut self)->Option<HubPortAction>{match self.state{
-  HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;Some(HubPortAction::Reset)},
+  HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;Some(if self.superspeed{HubPortAction::WarmReset}else{HubPortAction::Reset})},
   HubPortState::ClearResetChange=>{self.state=HubPortState::Ready;Some(HubPortAction::ClearResetChange)},
   HubPortState::OverCurrent=>{self.state=HubPortState::OverCurrentLatched;Some(HubPortAction::PowerOff)},_=>None}}
  pub const fn ready(&self)->bool{matches!(self.state,HubPortState::Ready)}
