@@ -103,10 +103,11 @@ impl<'map, 'buffer> FrameAllocator<'map, 'buffer> {
             };
 
             if candidate_end <= region_end {
+                let allocated_pages = self.allocated_pages.checked_add(page_count)
+                    .ok_or(FrameAllocatorError::AddressOverflow)?;
                 let allocation = FrameAllocation { start: candidate, page_count };
                 self.cursor = candidate_end;
-                self.allocated_pages = self.allocated_pages.checked_add(page_count)
-                    .ok_or(FrameAllocatorError::AddressOverflow)?;
+                self.allocated_pages = allocated_pages;
                 return Ok(Some(allocation));
             }
 
