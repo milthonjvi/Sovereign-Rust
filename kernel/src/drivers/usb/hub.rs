@@ -242,14 +242,29 @@ mod change_bitmap_tests{
 /// Non-blocking downstream-port lifecycle policy. Timing and status polling are
 /// supplied by the caller; no polling loop or MMIO is performed here.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent,OverCurrentLatched}
+pub const HUB_PORT_RESET_TIMEOUT_MS:u32=500;\n#[derive(Clone,Copy,Debug,Eq,PartialEq)]\npub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent,OverCurrentLatched}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool,clear_connection_change:bool}
+pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool,clear_connection_change:bool,reset_elapsed_ms:u32}
 impl HubPortMachine{
- pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:false,clear_connection_change:false}}
- pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true,clear_connection_change:false}}
+ pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:false,clear_connection_change:false,reset_elapsed_ms:0}}
+ pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true,clear_connection_change:false,reset_elapsed_ms:0}}
  pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
- pub fn elapse_ms(&mut self,ms:u32){self.elapsed_ms=self.elapsed_ms.saturating_add(ms);if self.state==HubPortState::PowerGoodWait&&self.elapsed_ms>=self.power_good_ms{self.state=HubPortState::AwaitConnection;self.elapsed_ms=0}else if self.state==HubPortState::Debouncing&&self.elapsed_ms>=100{self.state=HubPortState::ResetRequired;self.elapsed_ms=0}}
+ pub fn elapse_ms(&mut self,ms:u32){
+  self.elapsed_ms=self.elapsed_ms.saturating_add(ms);
+  match self.state{
+   HubPortState::PowerGoodWait if self.elapsed_ms>=self.power_good_ms=>{self.state=HubPortState::AwaitConnection;self.elapsed_ms=0;}
+   HubPortState::Debouncing if self.elapsed_ms>=100=>{self.state=HubPortState::ResetRequired;self.elapsed_ms=0;}
+   HubPortState::Resetting=>{
+    self.reset_elapsed_ms=self.reset_elapsed_ms.saturating_add(ms);
+    if self.reset_elapsed_ms>=HUB_PORT_RESET_TIMEOUT_MS{
+     // A reset that never completes must not wedge the port state machine.
+     // Return to ResetRequired so the caller can issue a fresh reset request.
+     self.state=HubPortState::ResetRequired;self.reset_elapsed_ms=0;
+    }
+   }
+   _=>{}
+  }
+ }
  pub fn observe(&mut self,status:HubPortStatus){
   // C_CONNECTION must be acknowledged by the hub driver. A change event
   // invalidates any in-progress debounce interval, even if the port currently
@@ -262,7 +277,7 @@ impl HubPortMachine{
   match self.state{
    HubPortState::AwaitConnection=>if status.connected(){self.state=HubPortState::Debouncing;self.elapsed_ms=0},
    HubPortState::Debouncing=>if !status.connected(){self.state=HubPortState::AwaitConnection;self.elapsed_ms=0},
-   HubPortState::Resetting=>if !status.connected(){self.state=HubPortState::Disconnected}else if status.status&HubPortStatus::RESET==0&&status.enabled(){self.state=HubPortState::ClearResetChange},
+   HubPortState::Resetting=>if !status.connected(){self.state=HubPortState::Disconnected;self.reset_elapsed_ms=0}else if status.status&HubPortStatus::RESET==0&&status.enabled(){self.state=HubPortState::ClearResetChange;self.reset_elapsed_ms=0},
    HubPortState::Disconnected=>if status.connected(){self.state=HubPortState::Debouncing;self.elapsed_ms=0},
    HubPortState::ClearResetChange=>if !status.connected(){self.state=HubPortState::Disconnected},
    HubPortState::Ready=>if !status.connected(){self.state=HubPortState::Disconnected}else if !status.enabled(){self.state=HubPortState::ResetRequired},
@@ -286,14 +301,14 @@ impl HubPortMachine{
    return Some(HubPortAction::ClearConnectionChange)
   }
   match self.state{
-  HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;Some(if self.superspeed{HubPortAction::WarmReset}else{HubPortAction::Reset})},
+  HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;self.reset_elapsed_ms=0;Some(if self.superspeed{HubPortAction::WarmReset}else{HubPortAction::Reset})},
   HubPortState::ClearResetChange=>{self.state=HubPortState::Ready;Some(HubPortAction::ClearResetChange)},
   HubPortState::OverCurrent=>{self.state=HubPortState::OverCurrentLatched;Some(HubPortAction::PowerOff)},_=>None}}
  /// Call when the corresponding class request failed so the action can be retried.
  pub fn action_failed(&mut self,action:HubPortAction){
   match action{
    HubPortAction::PowerOn if self.state==HubPortState::PowerGoodWait=>self.state=HubPortState::Unpowered,
-   HubPortAction::Reset|HubPortAction::WarmReset if self.state==HubPortState::Resetting=>self.state=HubPortState::ResetRequired,
+   HubPortAction::Reset|HubPortAction::WarmReset if self.state==HubPortState::Resetting=>{self.state=HubPortState::ResetRequired;self.reset_elapsed_ms=0;},
    HubPortAction::ClearResetChange if self.state==HubPortState::Ready=>self.state=HubPortState::ClearResetChange,
    HubPortAction::ClearConnectionChange=>self.clear_connection_change=true,
    HubPortAction::PowerOff if self.state==HubPortState::OverCurrentLatched=>self.state=HubPortState::OverCurrent,
@@ -392,5 +407,29 @@ mod hub_connection_change_tests{
   p.observe(HubPortStatus{status:HubPortStatus::CONNECTION,change:HubPortStatus::C_CONNECTION});
   let action=p.take_action().unwrap();p.action_failed(action);
   assert_eq!(p.take_action(),Some(HubPortAction::ClearConnectionChange));
+ }
+}
+
+#[cfg(test)]
+mod reset_timeout_tests{
+ use super::*;
+ #[test]fn reset_timeout_releases_state_machine_for_retry(){
+  let mut p=HubPortMachine::new(1,0);p.start().unwrap();p.elapse_ms(0);
+  p.observe(HubPortStatus{status:HubPortStatus::CONNECTION,change:0});p.elapse_ms(100);
+  assert_eq!(p.take_action(),Some(HubPortAction::Reset));
+  p.elapse_ms(HUB_PORT_RESET_TIMEOUT_MS-1);
+  assert_eq!(p.state,HubPortState::Resetting);
+  p.elapse_ms(1);
+  assert_eq!(p.state,HubPortState::ResetRequired);
+  assert_eq!(p.take_action(),Some(HubPortAction::Reset));
+ }
+ #[test]fn reset_completion_cancels_timeout(){
+  let mut p=HubPortMachine::new(1,0);p.start().unwrap();p.elapse_ms(0);
+  p.observe(HubPortStatus{status:HubPortStatus::CONNECTION,change:0});p.elapse_ms(100);
+  p.take_action();
+  p.observe(HubPortStatus{status:HubPortStatus::CONNECTION|HubPortStatus::ENABLE,change:HubPortStatus::C_RESET});
+  assert_eq!(p.state,HubPortState::ClearResetChange);
+  p.elapse_ms(HUB_PORT_RESET_TIMEOUT_MS);
+  assert_eq!(p.state,HubPortState::ClearResetChange);
  }
 }
