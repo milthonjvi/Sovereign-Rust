@@ -157,10 +157,16 @@ impl Uart16550 {
         if self.config.baud_rate == 0 || 115_200 % self.config.baud_rate != 0 {
             return Err(UartError::InvalidBaudRate);
         }
+        let divisor = 115_200 / self.config.baud_rate;
+        // The 16550 baud divisor is a 16-bit register pair. Reject rates that
+        // would silently truncate when the divisor is programmed.
+        if divisor == 0 || divisor > u16::MAX as u32 {
+            return Err(UartError::InvalidBaudRate);
+        }
         if !(5..=8).contains(&self.config.data_bits) || !(1..=2).contains(&self.config.stop_bits) {
             return Err(UartError::InvalidFrameFormat);
         }
-        Ok((115_200 / self.config.baud_rate) as u16)
+        Ok(divisor as u16)
     }
 
     /// Programs baud divisor, FIFO, line format and modem control.
@@ -573,6 +579,13 @@ mod tests {
             baud_rate: 10_000, ..UartConfig::default()
         }) };
         assert_eq!(bad_baud.validate(), Err(UartError::InvalidBaudRate));
+        // A one-baud request would require a divisor larger than the 16-bit
+        // 16550 divisor latch and must not be truncated.
+        // SAFETY: Validation does not access hardware.
+        let oversized_divisor = unsafe { Uart16550::new(0x3F8, UartConfig {
+            baud_rate: 1, ..UartConfig::default()
+        }) };
+        assert_eq!(oversized_divisor.validate(), Err(UartError::InvalidBaudRate));
         // SAFETY: Validation does not access hardware.
         let bad_frame = unsafe { Uart16550::new(0x3F8, UartConfig {
             data_bits: 9, ..UartConfig::default()
