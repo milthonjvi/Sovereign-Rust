@@ -191,7 +191,7 @@ mod alternate_setting_tests{
  use super::*;
  #[test]fn alternate_settings_do_not_inflate_interface_count(){
   let bytes:[u8;43]=[
-   9,2,43,0,1,1,0,0x80,50,
+   9,2,43,0,2,1,0,0x80,50,
    9,4,0,0,0,0xff,0,0,0,
    9,4,0,1,1,0xff,0,0,0,
    7,5,0x81,2,0,2,0,
