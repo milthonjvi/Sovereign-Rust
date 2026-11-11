@@ -14,6 +14,7 @@ pub const BOOT_INFO_FLAG_FRAMEBUFFER_VALID: u64 = 1 << 0;
 pub const BOOT_INFO_FLAG_ACPI_VALID: u64 = 1 << 1;
 const MAX_MEMORY_DESCRIPTORS: u64 = 1_000_000;
 const MAX_PHYSICAL_ADDRESS: u64 = 1 << 52;
+const MAX_MEMORY_MAP_BYTES: u64 = 1024 * 1024;
 
 static BOOT_INFO_READY: AtomicBool = AtomicBool::new(false);
 static mut BOOT_INFO: Option<SovereignBootInfo> = None;
@@ -180,6 +181,7 @@ impl SovereignBootInfo {
             || self.memory_descriptor_size < core::mem::size_of::<EfiMemoryDescriptor>() as u64
             || self.memory_descriptor_size & 7 != 0
             || self.memory_map_size == 0
+            || self.memory_map_size > MAX_MEMORY_MAP_BYTES
             || self.memory_map_size % self.memory_descriptor_size != 0
             || self.memory_map_size / self.memory_descriptor_size > MAX_MEMORY_DESCRIPTORS
             || self.memory_map_physical == 0
