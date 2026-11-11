@@ -50,35 +50,37 @@ pub struct PageTableBuilder<M: PageTableMemory> {
     memory: M,
     root_physical: u64,
     root_virtual: *mut u64,
+    paging_levels: u8,
 }
 
 impl<M: PageTableMemory> PageTableBuilder<M> {
     pub fn new(mut memory: M, _nxe: NxeEnabled) -> Result<Self, PageTableError> {
         let (physical, virtual_ptr) = memory.allocate_zeroed_table()?;
         validate_table_page(physical, virtual_ptr)?;
-        Ok(Self { memory, root_physical: physical, root_virtual: virtual_ptr })
+        let paging_levels = _nxe.paging_levels();
+        Ok(Self { memory, root_physical: physical, root_virtual: virtual_ptr, paging_levels })
     }
 
     pub const fn root_physical(&self) -> u64 { self.root_physical }
+    pub const fn paging_levels(&self) -> u8 { self.paging_levels }
 
     /// Map one 4 KiB page. Existing leaf mappings are never overwritten.
     pub fn map_4k(&mut self, virtual_address: u64, physical_address: u64, permissions: PagePermissions) -> Result<(), PageTableError> {
         if virtual_address & (PAGE_SIZE - 1) != 0 || physical_address & (PAGE_SIZE - 1) != 0 {
             return Err(PageTableError::MisalignedAddress);
         }
-        if !is_canonical(virtual_address) { return Err(PageTableError::NonCanonicalAddress); }
+        if !is_canonical_for_levels(virtual_address, self.paging_levels) { return Err(PageTableError::NonCanonicalAddress); }
         if permissions.writable && permissions.executable {
             return Err(PageTableError::WritableExecutableMapping);
         }
         if physical_address & !ADDRESS_MASK != 0 { return Err(PageTableError::PhysicalAddressOutOfRange); }
-        let indices = [
-            ((virtual_address >> 39) & 0x1ff) as usize,
-            ((virtual_address >> 30) & 0x1ff) as usize,
-            ((virtual_address >> 21) & 0x1ff) as usize,
-            ((virtual_address >> 12) & 0x1ff) as usize,
-        ];
+        let mut indices = [0usize; 5];
+        for depth in 0..self.paging_levels as usize {
+            let shift = 12 + 9 * (self.paging_levels as usize - depth - 1);
+            indices[depth] = ((virtual_address >> shift) & 0x1ff) as usize;
+        }
         let mut table_virtual = self.root_virtual;
-        for &index in &indices[..3] {
+        for &index in &indices[..self.paging_levels as usize - 1] {
             // SAFETY: table_virtual always points to a provider-owned table page.
             let entry = unsafe { table_virtual.add(index).read_volatile() };
             if entry & PRESENT == 0 {
@@ -104,7 +106,7 @@ impl<M: PageTableMemory> PageTableBuilder<M> {
                 table_virtual = next_virtual;
             }
         }
-        let leaf_index = indices[3];
+        let leaf_index = indices[self.paging_levels as usize - 1];
         // SAFETY: table_virtual is a validated page-table page.
         let leaf = unsafe { table_virtual.add(leaf_index).read_volatile() };
         if leaf & PRESENT != 0 { return Err(PageTableError::AlreadyMapped); }
@@ -140,4 +142,13 @@ pub const fn is_canonical(address: u64) -> bool {
 pub const fn pages_for_range(size: u64) -> Option<u64> {
     if size == 0 { return Some(0); }
     match size.checked_add(PAGE_SIZE - 1) { Some(rounded) => Some(rounded / PAGE_SIZE), None => None }
+}
+
+const fn is_canonical_for_levels(address: u64, levels: u8) -> bool {
+    let sign_bit = if levels == 5 { 56 } else { 47 };
+    let upper_shift = sign_bit + 1;
+    let upper = address >> upper_shift;
+    let sign = (address >> sign_bit) & 1;
+    let upper_mask = u64::MAX >> upper_shift;
+    (sign == 0 && upper == 0) || (sign == 1 && upper == upper_mask)
 }
