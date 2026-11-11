@@ -66,6 +66,44 @@ pub struct Ps2DataByte {
     pub value: u8,
 }
 
+#[inline]
+fn validate_response_source(status: u8, expected_auxiliary: bool) -> Result<(), Ps2Error> {
+    let actual_auxiliary = status & (1 << 5) != 0;
+    if actual_auxiliary == expected_auxiliary {
+        Ok(())
+    } else {
+        Err(Ps2Error::UnexpectedResponseSource {
+            expected_auxiliary,
+            actual_auxiliary,
+        })
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_the_expected_i8042_response_source() {
+        assert_eq!(validate_response_source(0, false), Ok(()));
+        assert_eq!(validate_response_source(1 << 5, true), Ok(()));
+        assert_eq!(
+            validate_response_source(1 << 5, false),
+            Err(Ps2Error::UnexpectedResponseSource {
+                expected_auxiliary: false,
+                actual_auxiliary: true,
+            })
+        );
+        assert_eq!(
+            validate_response_source(0, true),
+            Err(Ps2Error::UnexpectedResponseSource {
+                expected_auxiliary: true,
+                actual_auxiliary: false,
+            })
+        );
+    }
+}
+
 /// Exclusive owner of the legacy i8042 controller.
 pub struct Ps2Controller {
     poll_limit: usize,
@@ -149,13 +187,7 @@ impl Ps2Controller {
             }
             // SAFETY: OUTPUT_FULL guarantees a byte is available.
             let value = unsafe { io::in8(DATA) };
-            let actual_auxiliary = status & (1 << 5) != 0;
-            if actual_auxiliary != auxiliary {
-                return Err(Ps2Error::UnexpectedResponseSource {
-                    expected_auxiliary: auxiliary,
-                    actual_auxiliary,
-                });
-            }
+            validate_response_source(status, auxiliary)?;
             return Ok(value);
         }
         Err(Ps2Error::Timeout)
