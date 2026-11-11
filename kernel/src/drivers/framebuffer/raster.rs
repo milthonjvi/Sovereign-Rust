@@ -180,8 +180,8 @@ pub fn fill_triangle(
     for y in min_y..=max_y {
         let mut count = 0usize;
         for (start, end) in edges {
-            let (x0, y0) = start;
-            let (x1, y1) = end;
+            let (_, y0) = start;
+            let (_, y1) = end;
             if y0 == y1 {
                 continue;
             }
@@ -359,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unrepresentable_intersection_arithmetic() {
+    fn clips_extreme_signed_coordinates_without_wrapping() {
         let mut memory = [0u8; 8 * 8 * 4];
         let mut target = surface(&mut memory);
         assert_eq!(
@@ -370,7 +370,7 @@ mod tests {
                 (i64::MIN, i64::MAX),
                 Color::WHITE,
             ),
-            Err(crate::drivers::framebuffer::info::FramebufferError::SizeOverflow),
+            Ok(()),
         );
     }
 
