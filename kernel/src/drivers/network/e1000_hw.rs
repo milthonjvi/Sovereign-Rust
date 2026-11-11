@@ -542,6 +542,19 @@ mod tests {
     }
 
     #[test]
+    fn tx_batch_publishes_multiple_descriptors_with_one_tail_update() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut queue = E1000TxQueue::new(8).unwrap();
+        assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0x8000, 128), (0x9000, 256)]), Ok(2));
+        assert_eq!(regs.writes.iter().filter(|(register, _)| *register == REG_TDT).count(), 1);
+        assert!(regs.writes.contains(&(REG_TDT, 2)));
+        descriptors[0].status = TXD_STATUS_DD;
+        descriptors[1].status = TXD_STATUS_DD;
+        assert_eq!(queue.reap(&mut regs, &descriptors), Ok(2));
+    }
+
+    #[test]
     fn rx_queue_rearms_only_a_completed_descriptor() {
         let mut regs = MockRegisters::default();
         let mut descriptors = [RxDescriptor::for_buffer(0xa000); 8];
