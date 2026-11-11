@@ -323,10 +323,12 @@ mod tests {
     }
 
     #[test]
-    fn double_buffer_keeps_dimensions() {
-        let mut first = [Color::BLACK; 16];
-        let mut second = [Color::BLACK; 16];
+    fn double_buffer_keeps_dimensions_and_initializes_back_baseline() {
+        let mut first = [Color::RED; 16];
+        let mut second = [Color::BLUE; 16];
         let buffers = DoubleBuffer::new(&mut first, &mut second, 4, 4, 4).unwrap();
         assert_eq!(buffers.dimensions(), (4, 4));
+        assert_eq!(buffers.front.pixels, buffers.back.pixels);
+        assert_eq!(buffers.back.pixels[0], Color::RED);
     }
 }
