@@ -3,11 +3,16 @@
 //! This module discovers capability state and resource locations only. It does
 //! not enable MSI/MSI-X, program message addresses, or touch device BAR memory.
 use super::capabilities::Capability;
-use super::config::{ConfigAccess, ConfigError, PciAddress, PciIdentity};
+use super::config::{ConfigAccess, ConfigError, PciAddress, PciIdentity, PCI_CONFIG_SIZE};
 
 pub const MSI_CAPABILITY_ID: u8 = 0x05;
 pub const MSIX_CAPABILITY_ID: u8 = 0x11;
 const MAX_STANDARD_CAPABILITY_OFFSET: u16 = 0xfc;
+
+fn read_standard<A: ConfigAccess>(io: &A, address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+    if register >= PCI_CONFIG_SIZE { return Err(ConfigError::OutOfRange); }
+    io.read_u32(address, register)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MsiCapability {
@@ -38,24 +43,24 @@ impl MsiCapability {
             return Err(ConfigError::OutOfRange);
         }
 
-        let header = io.read_u32(address, offset)?;
+        let header = read_standard(io, address, offset)?;
         let control = (header >> 16) as u16;
         let is_64 = control & (1 << 7) != 0;
         let masking = control & (1 << 8) != 0;
         let mmc = ((control >> 1) & 0x7) as u8;
         let mme = ((control >> 4) & 0x7) as u8;
-        let address_low = io.read_u32(address, offset + 4)?;
+        let address_low = read_standard(io, address, offset + 4)?;
         let (message_address, data_register) = if is_64 {
-            let address_high = io.read_u32(address, offset + 8)?;
+            let address_high = read_standard(io, address, offset + 8)?;
             (((address_high as u64) << 32) | address_low as u64, offset + 12)
         } else {
             (address_low as u64, offset + 8)
         };
-        let message_data = io.read_u32(address, data_register)? as u16;
+        let message_data = read_standard(io, address, data_register)? as u16;
 
         let (mask_bits, pending_bits) = if masking {
-            let mask = io.read_u32(address, data_register + 4)?;
-            let pending = io.read_u32(address, data_register + 8)?;
+            let mask = read_standard(io, address, data_register + 4)?;
+            let pending = read_standard(io, address, data_register + 8)?;
             (Some(mask), Some(pending))
         } else {
             (None, None)
@@ -140,7 +145,7 @@ impl MsixCapability {
     }
 
     /// Required byte length of the MSI-X table (16 bytes per vector).
-    pub const fn table_bytes(self) -> Option<u32> {
+    pub fn table_bytes(self) -> Option<u32> {
         (self.table_size as u32).checked_mul(16)
     }
 
