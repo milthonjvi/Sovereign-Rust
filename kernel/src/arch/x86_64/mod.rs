@@ -5,6 +5,7 @@
 //! contract.
 
 pub mod control;
+pub mod apic;
 pub mod cpuid;
 pub mod io;
 pub mod msr;
