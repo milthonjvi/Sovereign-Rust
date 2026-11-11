@@ -120,6 +120,11 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         Ok(count)
     }
 
+    /// Next monotonic deadline for the current CPU's hardware timer.
+    pub fn next_deadline(&self) -> Option<Deadline> {
+        self.timers.next_deadline()
+    }
+
     /// Number of pending task sleeps.
     pub fn pending(&self) -> usize {
         self.timers.pending()
