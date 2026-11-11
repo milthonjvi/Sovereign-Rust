@@ -20,6 +20,9 @@ pub const REG_SVR: u32 = 0x80F;
 pub const REG_ESR: u32 = 0x828;
 pub const REG_LVT_CMCI: u32 = 0x82F;
 pub const REG_LVT_TIMER: u32 = 0x832;
+pub const REG_TIMER_INITIAL_COUNT: u32 = 0x838;
+pub const REG_TIMER_CURRENT_COUNT: u32 = 0x839;
+pub const REG_TIMER_DIVIDE_CONFIGURATION: u32 = 0x83E;
 pub const REG_LVT_THERMAL: u32 = 0x833;
 pub const REG_LVT_PERFORMANCE: u32 = 0x834;
 pub const REG_LVT_LINT0: u32 = 0x835;
@@ -32,6 +35,7 @@ const APIC_BASE_X2APIC: u64 = 1 << 10;
 const APIC_BASE_GLOBAL_ENABLE: u64 = 1 << 11;
 const APIC_BASE_ADDRESS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const LVT_MASKED: u32 = 1 << 16;
+const LVT_TIMER_PERIODIC: u32 = 1 << 17;
 const LVT_TIMER_TSC_DEADLINE: u32 = 1 << 18;
 const LVT_TIMER_VECTOR_MASK: u32 = 0xFF;
 const SVR_SOFTWARE_ENABLE: u32 = 1 << 8;
@@ -42,6 +46,11 @@ const ICR_WAIT_LIMIT: usize = 1_000_000;
 #[inline]
 const fn valid_tsc_deadline_vector(vector: u8) -> bool {
     vector >= 0x30 && vector <= 0xFE && vector != 0x80
+}
+
+#[inline]
+const fn valid_timer_divide_encoding(encoding: u8) -> bool {
+    matches!(encoding, 0b0000 | 0b0001 | 0b0010 | 0b0011 | 0b1000 | 0b1001 | 0b1010 | 0b1011)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,6 +172,72 @@ impl X2Apic {
             (svr & !0x1FF) | spurious_vector as u64 | SVR_SOFTWARE_ENABLE as u64,
         );
         Ok(())
+    }
+
+    /// Configure the local timer LVT for one-shot countdown mode, initially masked.
+    ///
+    /// The countdown uses the local APIC timer input clock and selected divider.
+    /// Register the interrupt handler before unmasking, then arm a non-zero
+    /// initial count.
+    pub fn configure_one_shot_timer(
+        &mut self,
+        vector: u8,
+        divide_encoding: u8,
+    ) -> Result<(), X2ApicError> {
+        if !valid_tsc_deadline_vector(vector) || !valid_timer_divide_encoding(divide_encoding) {
+            return Err(X2ApicError::InvalidTimerConfiguration);
+        }
+        self.write_register(REG_LVT_TIMER, (vector as u32 | LVT_MASKED) as u64);
+        self.write_register(REG_TIMER_INITIAL_COUNT, 0);
+        self.write_register(REG_TIMER_DIVIDE_CONFIGURATION, divide_encoding as u64);
+        Ok(())
+    }
+
+    /// Unmask a configured one-shot countdown timer.
+    ///
+    /// The initial count should be zero until the caller is ready to arm it.
+    pub fn unmask_one_shot_timer(&mut self) -> Result<(), X2ApicError> {
+        let value = self.read_register(REG_LVT_TIMER) as u32;
+        let vector = (value & LVT_TIMER_VECTOR_MASK) as u8;
+        if value & (LVT_TIMER_PERIODIC | LVT_TIMER_TSC_DEADLINE) != 0
+            || value & LVT_MASKED == 0
+            || !valid_tsc_deadline_vector(vector)
+        {
+            return Err(X2ApicError::InvalidTimerConfiguration);
+        }
+        self.write_register(REG_LVT_TIMER, (value & !LVT_MASKED) as u64);
+        Ok(())
+    }
+
+    /// Arm or restart the configured one-shot countdown.
+    ///
+    /// # Safety
+    /// Must execute on the owning CPU at CPL 0 after the one-shot LVT has been
+    /// unmasked and the corresponding handler is registered.
+    pub unsafe fn arm_one_shot_timer(&mut self, initial_count: u32) -> Result<(), X2ApicError> {
+        if initial_count == 0 {
+            return Err(X2ApicError::InvalidTimerConfiguration);
+        }
+        let lvt = self.read_register(REG_LVT_TIMER) as u32;
+        if lvt & (LVT_MASKED | LVT_TIMER_PERIODIC | LVT_TIMER_TSC_DEADLINE) != 0
+            || !valid_tsc_deadline_vector((lvt & LVT_TIMER_VECTOR_MASK) as u8)
+        {
+            return Err(X2ApicError::InvalidTimerConfiguration);
+        }
+        self.write_register(REG_TIMER_INITIAL_COUNT, initial_count as u64);
+        Ok(())
+    }
+
+    /// Read the current one-shot countdown value.
+    #[inline]
+    pub fn timer_current_count(&self) -> u32 {
+        self.read_register(REG_TIMER_CURRENT_COUNT) as u32
+    }
+
+    /// Stop the one-shot countdown and mask local timer delivery.
+    pub fn stop_one_shot_timer(&mut self) {
+        self.mask_timer();
+        self.write_register(REG_TIMER_INITIAL_COUNT, 0);
     }
 
     /// Configure the local timer LVT for TSC-deadline mode, initially masked.
@@ -308,5 +383,20 @@ mod tsc_deadline_vector_tests {
         assert!(valid_tsc_deadline_vector(0x81));
         assert!(valid_tsc_deadline_vector(0xFE));
         assert!(!valid_tsc_deadline_vector(0xFF));
+    }
+}
+
+#[cfg(test)]
+mod timer_encoding_tests {
+    use super::valid_timer_divide_encoding;
+
+    #[test]
+    fn accepts_only_architectural_apic_timer_divisors() {
+        for encoding in [0, 1, 2, 3, 8, 9, 10, 11] {
+            assert!(valid_timer_divide_encoding(encoding));
+        }
+        for encoding in [4, 5, 6, 7, 12, 13, 14, 15, 16, 0xFF] {
+            assert!(!valid_timer_divide_encoding(encoding));
+        }
     }
 }
