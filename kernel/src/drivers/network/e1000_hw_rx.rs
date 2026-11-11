@@ -78,8 +78,11 @@ impl E1000RxQueue {
             let completion = descriptor.completion().ok_or(E1000QueueError::InvalidRing)?;
             item.1 = completion;
         }
+        let completed_count = u16::try_from(count).map_err(|_| E1000QueueError::InvalidRing)?;
+        let outstanding = self.outstanding.checked_add(completed_count)
+            .ok_or(E1000QueueError::InvalidRing)?;
         self.cursor = scan_cursor;
-        self.outstanding += count as u16;
+        self.outstanding = outstanding;
         Ok(count)
     }
 
