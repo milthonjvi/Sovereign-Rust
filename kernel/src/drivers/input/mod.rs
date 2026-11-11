@@ -5,6 +5,7 @@
 
 pub mod event;
 pub mod irq;
+pub mod hid_report;
 pub mod keyboard;
 pub mod mouse;
 pub mod mux;
@@ -21,3 +22,5 @@ pub use queue::{EventQueue, SpscConsumer, SpscProducer, SpscQueue};
 pub use mux::{InputEventMux, InputSourceId, SourcedInputEvent};
 
 pub use usb_hid_adapter::{HidInputError, HidPublishStats, InputDeviceIdAllocator, UsbBootKeyboardAdapter, UsbBootMouseAdapter};
+
+pub use hid_report::{HidInputField, HidReportDecoder, HidReportError, HidReportMap, MAX_HID_INPUT_FIELDS, MAX_HID_VALUES};
