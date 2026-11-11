@@ -556,7 +556,7 @@ mod tests {
             if offset == REG_STATUS {
                 return Ok((1 << 1) | (2 << 6) | 1);
             }
-            if offset == REG_RAL0 { return Ok(0x4433_2211); }
+            if offset == REG_RAL0 { return Ok(0x4433_2202); }
             if offset == REG_RAH0 { return Ok(0x8000_6655); }
             Ok(0)
         }
