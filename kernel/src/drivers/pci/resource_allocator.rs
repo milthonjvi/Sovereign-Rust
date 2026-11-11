@@ -3,7 +3,7 @@
 //! The platform supplies already-decoded host-bridge/bridge windows. This
 //! allocator does not parse ACPI, map MMIO, or program BAR configuration space.
 
-use super::config::BarKind;
+use super::config::{BarKind, PciAddress};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResourceSpace {
@@ -54,6 +54,7 @@ impl ResourceWindow {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourceRequest {
+    pub address: PciAddress,
     pub bar_index: u8,
     pub kind: BarKind,
     pub prefetchable: bool,
@@ -62,6 +63,7 @@ pub struct ResourceRequest {
 
 impl ResourceRequest {
     pub const fn new(
+        address: PciAddress,
         bar_index: u8,
         kind: BarKind,
         prefetchable: bool,
@@ -70,12 +72,13 @@ impl ResourceRequest {
         if size == 0 || !size.is_power_of_two() || (matches!(kind, BarKind::Io) && prefetchable) {
             return Err(AllocationError::InvalidRequest);
         }
-        Ok(Self { bar_index, kind, prefetchable, size })
+        Ok(Self { address, bar_index, kind, prefetchable, size })
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourceAllocation {
+    pub address: PciAddress,
     pub bar_index: u8,
     pub kind: BarKind,
     pub prefetchable: bool,
@@ -151,6 +154,7 @@ impl<'a> ResourcePool<'a> {
         let (index, base, end, _) = best.ok_or(AllocationError::OutOfSpace)?;
         self.windows[index].cursor = end;
         Ok(ResourceAllocation {
+            address: request.address,
             bar_index: request.bar_index,
             kind: request.kind,
             prefetchable: request.prefetchable,
@@ -172,7 +176,8 @@ mod tests {
             ResourceWindow::new(ResourceSpace::Memory, false, 0x9000_0000, 0x4000).unwrap(),
         ];
         let mut pool = ResourcePool::new(&mut windows).unwrap();
-        let request = ResourceRequest::new(0, BarKind::Memory32, false, 0x2000).unwrap();
+        let address = PciAddress { segment: 0, bus: 0, device: 1, function: 0 };
+        let request = ResourceRequest::new(address, 0, BarKind::Memory32, false, 0x2000).unwrap();
         let allocation = pool.allocate(request).unwrap();
         assert_eq!(allocation.base, 0x9000_0000);
         assert_eq!(allocation.end, 0x9000_2000);
@@ -185,8 +190,9 @@ mod tests {
             ResourceWindow::new(ResourceSpace::Memory, false, 0x1000, 0x1000).unwrap(),
         ];
         let mut pool = ResourcePool::new(&mut windows).unwrap();
-        let io = pool.allocate(ResourceRequest::new(0, BarKind::Io, false, 0x100).unwrap()).unwrap();
-        let memory = pool.allocate(ResourceRequest::new(1, BarKind::Memory32, false, 0x100).unwrap()).unwrap();
+        let address = PciAddress { segment: 0, bus: 0, device: 1, function: 0 };
+        let io = pool.allocate(ResourceRequest::new(address, 0, BarKind::Io, false, 0x100).unwrap()).unwrap();
+        let memory = pool.allocate(ResourceRequest::new(address, 1, BarKind::Memory32, false, 0x100).unwrap()).unwrap();
         assert_eq!(io.base, 0x1000);
         assert_eq!(memory.base, 0x1000);
     }
@@ -198,9 +204,10 @@ mod tests {
             ResourceWindow::new(ResourceSpace::Memory, false, 0x1_0000_0000, 0x1_0000).unwrap(),
         ];
         let mut pool = ResourcePool::new(&mut windows).unwrap();
-        let below_1m = ResourceRequest::new(0, BarKind::MemoryBelow1M, true, 0x1000).unwrap();
+        let address = PciAddress { segment: 0, bus: 0, device: 1, function: 0 };
+        let below_1m = ResourceRequest::new(address, 0, BarKind::MemoryBelow1M, true, 0x1000).unwrap();
         assert_eq!(pool.allocate(below_1m).unwrap().base, 0x80000);
-        let memory32 = ResourceRequest::new(1, BarKind::Memory32, false, 0x1000).unwrap();
+        let memory32 = ResourceRequest::new(address, 1, BarKind::Memory32, false, 0x1000).unwrap();
         assert_eq!(pool.allocate(memory32), Err(AllocationError::OutOfSpace));
     }
 
