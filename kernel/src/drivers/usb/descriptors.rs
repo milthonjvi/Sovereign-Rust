@@ -87,7 +87,7 @@ impl ParsedEndpoint{
   let raw=u16::from_le_bytes([b[4],b[5]]);
   let packet=raw&0x07ff;
   let mult=((raw>>11)&3) as u8;
-  if packet==0||mult==3||b[2]&0x0f==0||b[2]&0x70!=0{return Err(UsbError::MalformedDescriptor)}
+  if packet==0||mult==3||b[2]&0x0f==0||b[2]&0x70!=0||((b[3]&3!=1)&&(b[3]&3!=3)&&mult!=0){return Err(UsbError::MalformedDescriptor)}
   Ok(Self{address:b[2],attributes:b[3],max_packet_size:packet,interval:b[6],
    transactions_per_microframe:mult+1,max_burst:0,companion_attributes:0,
    bytes_per_interval:0,has_ss_companion:false})
@@ -151,5 +151,32 @@ impl ParsedConfiguration{
    if iface.endpoint_count!=iface.descriptor.endpoint_count{return Err(UsbError::MalformedDescriptor)}
   }
   Ok(out)
+ }
+}
+
+
+#[cfg(test)]
+mod configuration_tests{
+ use super::*;
+ #[test]fn parses_interface_endpoint_and_superspeed_companion(){
+  let bytes:[u8;31]=[
+   9,2,31,0,1,1,0,0x80,50,
+   9,4,0,0,1,0xff,0,0,0,
+   7,5,0x81,2,0,2,0,
+   6,0x30,3,0,0,4,
+  ];
+  let c=ParsedConfiguration::parse(&bytes).unwrap();
+  assert_eq!(c.interface_len,1);assert_eq!(c.endpoint_len,1);
+  let e=c.endpoints[0].unwrap();
+  assert_eq!(e.max_packet_size,512);assert_eq!(e.max_burst,3);
+  assert!(e.has_ss_companion);assert_eq!(e.bytes_per_interval,1024);
+ }
+ #[test]fn rejects_configuration_with_truncated_descriptor(){
+  let bytes=[9,2,12,0,1,1,0,0x80,50,9,4,0];
+  assert_eq!(ParsedConfiguration::parse(&bytes),Err(UsbError::BufferTooShort));
+ }
+ #[test]fn rejects_endpoint_multiplier_on_bulk_endpoint(){
+  let bytes=[7,5,0x81,2,0,10,0];
+  assert_eq!(ParsedEndpoint::parse(&bytes),Err(UsbError::MalformedDescriptor));
  }
 }
