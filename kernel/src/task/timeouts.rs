@@ -14,6 +14,17 @@ pub struct TaskId(pub u64);
 
 const TASK_SLEEP_EVENT: u32 = 0x5441_534B;
 
+/// Result of collecting task wakeups.
+///
+/// Wakeup IDs are valid even when `timer_reprogram_error` is present. In that
+/// case the timer layer has reasserted deferred work so the caller can retry
+/// comparator programming without losing this batch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskWakeupReport {
+    pub wakeups: usize,
+    pub timer_reprogram_error: Option<crate::drivers::api::DriverError>,
+}
+
 /// Per-CPU task timeout manager driven by the local APIC TSC-deadline timer.
 pub struct TaskTimeouts<S: ClockSource, const N: usize> {
     timers: TscDeadlineQueue<S, N>,
@@ -128,12 +139,16 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         &self,
         events: &mut [Option<TimerEvent>],
         wakeups: &mut [Option<TaskId>],
-    ) -> Result<usize, crate::drivers::api::DriverError> {
+    ) -> TaskWakeupReport {
         let capacity = core::cmp::min(events.len(), wakeups.len());
         // SAFETY: Same-CPU and deferred-context requirements are part of the
         // caller contract for this method.
-        let drained = unsafe { self.timers.process_expired(&mut events[..capacity])? };
-        Ok(extract_task_wakeups(&mut events[..drained], wakeups))
+        let processed = unsafe { self.timers.process_expired(&mut events[..capacity]) };
+        let count = extract_task_wakeups(&mut events[..processed.expired], wakeups);
+        TaskWakeupReport {
+            wakeups: count,
+            timer_reprogram_error: processed.reprogram_error,
+        }
     }
 
 
@@ -150,12 +165,12 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         &self,
         events: &mut [Option<TimerEvent>],
         wakeups: &mut [Option<TaskId>],
-    ) -> Result<usize, crate::drivers::api::DriverError> {
+    ) -> Option<TaskWakeupReport> {
         if !crate::time::take_timer_work_pending() {
-            return Ok(0);
+            return None;
         }
         // SAFETY: Same-CPU and deferred-context requirements are inherited.
-        unsafe { self.collect_wakeups(events, wakeups) }
+        Some(unsafe { self.collect_wakeups(events, wakeups) })
     }
 
     /// Next monotonic deadline for the current CPU's hardware timer.
