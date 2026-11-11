@@ -37,6 +37,7 @@ pub enum Rtl8139Error {
     InvalidRingSize,
     InvalidDmaBuffer,
     InvalidReadCursor,
+    IncompletePacket,
     InvalidPacketLength,
     ReceiveError(u16),
     OutputTooSmall { required: usize },
@@ -47,6 +48,7 @@ pub struct Rtl8139RxPacket {
     pub status: u16,
     pub frame_length: usize,
     pub next_cursor: usize,
+    start_cursor: usize,
 }
 
 /// CPU view of a pinned, device-visible RTL8139 receive ring.
@@ -91,7 +93,11 @@ impl<'a> Rtl8139RxRing<'a> {
         if device_cursor >= self.ring_size {
             return Err(Rtl8139Error::InvalidReadCursor);
         }
-        if self.cursor == device_cursor {
+        let available = device_cursor.wrapping_sub(self.cursor) & (self.ring_size - 1);
+        if available == 0 {
+            return Ok(None);
+        }
+        if available < 4 {
             return Ok(None);
         }
 
@@ -109,6 +115,7 @@ impl<'a> Rtl8139RxRing<'a> {
             status,
             frame_length: raw_length - RTL8139_FCS_SIZE,
             next_cursor,
+            start_cursor: self.cursor,
         }))
     }
 
@@ -119,6 +126,7 @@ impl<'a> Rtl8139RxRing<'a> {
         packet: Rtl8139RxPacket,
         output: &mut [u8],
     ) -> Result<usize, Rtl8139Error> {
+        self.validate_packet(packet)?;
         if packet.status & RX_STATUS_ROK == 0 || packet.status & RX_STATUS_ERROR_MASK != 0 {
             return Err(Rtl8139Error::ReceiveError(packet.status));
         }
@@ -139,10 +147,25 @@ impl<'a> Rtl8139RxRing<'a> {
 
     /// Commit only after the caller has successfully published the new CAPR.
     pub fn commit(&mut self, packet: Rtl8139RxPacket) -> Result<(), Rtl8139Error> {
-        if packet.next_cursor >= self.ring_size {
+        self.validate_packet(packet)?;
+        self.cursor = packet.next_cursor;
+        Ok(())
+    }
+
+    fn validate_packet(&self, packet: Rtl8139RxPacket) -> Result<(), Rtl8139Error> {
+        if packet.start_cursor != self.cursor || packet.next_cursor >= self.ring_size {
             return Err(Rtl8139Error::InvalidReadCursor);
         }
-        self.cursor = packet.next_cursor;
+        let raw_length = packet.frame_length.checked_add(RTL8139_FCS_SIZE)
+            .ok_or(Rtl8139Error::InvalidPacketLength)?;
+        if !(RTL8139_MIN_FRAME_WITH_FCS..=RTL8139_MAX_FRAME_WITH_FCS).contains(&raw_length) {
+            return Err(Rtl8139Error::InvalidPacketLength);
+        }
+        let aligned = (4 + raw_length + 3) & !3;
+        let expected = (self.cursor + aligned) & (self.ring_size - 1);
+        if packet.next_cursor != expected {
+            return Err(Rtl8139Error::InvalidReadCursor);
+        }
         Ok(())
     }
 
