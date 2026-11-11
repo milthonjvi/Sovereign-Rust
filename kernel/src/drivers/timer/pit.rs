@@ -22,6 +22,7 @@ extern "C" fn pit_irq_handler(_vector: u8) {
 pub enum PitIrqError {
     AlreadyActive,
     NotActive,
+    InterruptRoutingUnavailable,
     Interrupt(crate::interrupts::init::LegacyIrqError),
     Driver(DriverError),
 }
@@ -117,6 +118,14 @@ impl Pit {
     ) -> Result<PitConfig, PitIrqError> {
         let config = PitConfig::from_frequency(requested_hz)
             .map_err(PitIrqError::Driver)?;
+        // The bootstrap x2APIC setup masks LINT0 and does not route legacy
+        // PIC ExtINT. Do not claim an IRQ0 fallback while that backend owns
+        // local interrupt delivery.
+        if crate::interrupts::init::local_apic_mode()
+            == crate::interrupts::init::LocalApicMode::X2Apic
+        {
+            return Err(PitIrqError::InterruptRoutingUnavailable);
+        }
         PIT_IRQ_ACTIVE.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| PitIrqError::AlreadyActive)?;
 
