@@ -28,7 +28,8 @@ pub const RX_STATUS_ERROR_MASK: u16 = 0x003e;
 pub const RTL8139_MIN_RING_SIZE: usize = 8192;
 pub const RTL8139_MAX_RING_SIZE: usize = 65536;
 pub const RTL8139_RING_ALIGNMENT: usize = 256;
-pub const RTL8139_MAX_FRAME_WITH_FCS: usize = 1518;
+pub const RTL8139_MIN_FRAME_WITH_FCS: usize = 64;
+pub const RTL8139_MAX_FRAME_WITH_FCS: usize = 1522;
 pub const RTL8139_FCS_SIZE: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,7 +97,7 @@ impl<'a> Rtl8139RxRing<'a> {
 
         let status = self.read_u16(self.cursor);
         let raw_length = self.read_u16(self.cursor + 2) as usize;
-        if raw_length < RTL8139_FCS_SIZE || raw_length > RTL8139_MAX_FRAME_WITH_FCS {
+        if raw_length < RTL8139_MIN_FRAME_WITH_FCS || raw_length > RTL8139_MAX_FRAME_WITH_FCS {
             return Err(Rtl8139Error::InvalidPacketLength);
         }
         if status & RX_STATUS_ROK == 0 || status & RX_STATUS_ERROR_MASK != 0 {
@@ -122,7 +123,7 @@ impl<'a> Rtl8139RxRing<'a> {
         packet: Rtl8139RxPacket,
         output: &mut [u8],
     ) -> Result<usize, Rtl8139Error> {
-        if output.len() < packet.frame_length {
+        if packet.status & RX_STATUS_ROK == 0 || packet.status & RX_STATUS_ERROR_MASK != 0 {\n            return Err(Rtl8139Error::ReceiveError(packet.status));\n        }\n        if output.len() < packet.frame_length {
             return Err(Rtl8139Error::OutputTooSmall { required: packet.frame_length });
         }
         let mut offset = (self.cursor + 4) & (self.ring_size - 1);
