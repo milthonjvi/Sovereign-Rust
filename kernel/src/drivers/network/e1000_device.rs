@@ -338,8 +338,7 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
             }
 
             output[..length].copy_from_slice(&self.rx_buffers[slot].as_slice()[..length]);
-            self.rx_queue.recycle(self.registers, self.rx_descriptors, index)
-                .map_err(map_queue_error)?;
+            self.recycle_rx(index)?;
             return Ok(Some(length));
         }
         Ok(None)
@@ -511,10 +510,12 @@ mod tests {
             descriptor.length = if index == 0 { 64 } else { 96 };
             descriptor.status = RXD_STATUS_DD | RXD_STATUS_EOP;
         }
-        let mut rx_buffers = core::array::from_fn(|i|
-            DmaBuffer::new(0x10000 + i as u64 * 2048, &mut rx_storage[i]).unwrap());
-        let mut tx_buffers = core::array::from_fn(|i|
-            DmaBuffer::new(0x20000 + i as u64 * 2048, &mut tx_storage[i]).unwrap());
+        let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| DmaBuffer::new(0x10000 + i as u64 * 2048, bytes).unwrap())
+            .collect::<Vec<_>>().try_into().ok().unwrap();
+        let mut tx_buffers: [DmaBuffer<'_>; 8] = tx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| DmaBuffer::new(0x20000 + i as u64 * 2048, bytes).unwrap())
+            .collect::<Vec<_>>().try_into().ok().unwrap();
         let mut device = E1000Device::new(
             &mut registers, &mut rx_descriptors, &mut tx_descriptors,
             &mut rx_buffers, &mut tx_buffers, MacAddress([2, 0, 0, 0, 0, 1]),
