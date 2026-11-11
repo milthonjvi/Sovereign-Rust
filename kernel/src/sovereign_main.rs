@@ -34,6 +34,32 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         fatal_halt();
     }
 
+    // The loader allocates all three objects as EFI_LOADER_DATA. Confirm that
+    // their complete physical ranges are still described as such before
+    // accepting any boot-provided pointer or adopting the kernel image.
+    const EFI_LOADER_DATA: u32 = 2;
+    let boot_info_physical = boot_info_pointer as u64;
+    let ownership_valid = unsafe {
+        memory_map.contains_range_with_type(
+            boot_info_physical,
+            4096,
+            EFI_LOADER_DATA,
+        ).unwrap_or(false)
+        && memory_map.contains_range_with_type(
+            boot_info.memory_map_physical,
+            boot_info.memory_map_size,
+            EFI_LOADER_DATA,
+        ).unwrap_or(false)
+        && memory_map.contains_range_with_type(
+            boot_info.kernel_physical_base,
+            boot_info.kernel_image_size,
+            EFI_LOADER_DATA,
+        ).unwrap_or(false)
+    };
+    if !ownership_valid {
+        fatal_halt();
+    }
+
     // Verify the recursive page-table window and the critical mappings before
     // installing interrupt state or allowing any subsystem to use memory.
     if !validate_boot_mappings(boot_info_pointer as u64, &boot_info) {
