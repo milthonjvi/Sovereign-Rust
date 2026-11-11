@@ -27,6 +27,8 @@ pub struct Fadt {
     pub x_firmware_ctrl: Option<u64>,
     pub x_dsdt: Option<u64>,
     pub extended_pm_registers: Option<ExtendedPmRegisters>,
+    pub sleep_control_register: Option<GenericAddress>,
+    pub sleep_status_register: Option<GenericAddress>,
 }
 
 /// Platform power-management model advertised by FADT flags.
@@ -68,6 +70,7 @@ impl Fadt {
             || (b.len() > 132 && b.len() < 140)
             || (b.len() > 140 && b.len() < 148)
             || (b.len() > 148 && b.len() < 244)
+            || (b.len() > 244 && b.len() < 268)
         {
             return Err(AcpiError::InvalidLength);
         }
@@ -96,6 +99,12 @@ impl Fadt {
         } else {
             None
         };
+
+        // ACPI 5.0+ optional Sleep Control/Status GAS fields.
+        let (sleep_control_register, sleep_status_register) = if b.len() >= 268 {
+            (Some(GenericAddress::parse(&b[244..256])?),
+             Some(GenericAddress::parse(&b[256..268])?))
+        } else { (None, None) };
 
         Ok(Self {
             firmware_ctrl: read_u32(b, 36)?,
@@ -131,6 +140,8 @@ impl Fadt {
             x_firmware_ctrl,
             x_dsdt,
             extended_pm_registers,
+            sleep_control_register,
+            sleep_status_register,
         })
     }
 
@@ -148,6 +159,29 @@ impl Fadt {
     /// This is metadata validation only; it does not probe or access hardware.
     pub fn validate_register_block_lengths(&self) -> Result<(), AcpiError> {
         self.register_block_lengths.validate()
+    }
+
+    /// Return validated sleep-control/status GAS descriptors for
+    /// hardware-reduced ACPI. No register access is performed.
+    pub fn validated_sleep_registers(
+        &self,
+    ) -> Result<Option<(GenericAddress, GenericAddress)>, AcpiError> {
+        if self.pm_hardware_mode() != PmHardwareMode::HardwareReduced {
+            return Ok(None);
+        }
+        let control = self.sleep_control_register.ok_or(AcpiError::InvalidGas)?;
+        let status = self.sleep_status_register.ok_or(AcpiError::InvalidGas)?;
+        for gas in [control, status] {
+            gas.validate()?;
+            if !gas.is_system_memory_or_io()
+                || gas.bit_width != 8
+                || gas.bit_offset != 0
+                || gas.access_size != GenericAddress::ACCESS_BYTE
+            {
+                return Err(AcpiError::InvalidGas);
+            }
+        }
+        Ok(Some((control, status)))
     }
 
     /// Select the PM model advertised by the FADT.
@@ -517,6 +551,35 @@ mod tests {
             pm1_event: 0, pm1_control: 0, pm2_control: 0,
             pm_timer: 0, gpe0: 0, gpe1: 0,
         }.validate(), Ok(()));
+    }
+
+    #[test]
+    fn parses_sleep_control_and_status_gas_fields() {
+        let mut b = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
+        for (offset, address) in [(244usize, 0x1000u64), (256, 0x1001)] {
+            b[offset] = GenericAddress::ADDRESS_SPACE_SYSTEM_MEMORY;
+            b[offset + 1] = 8;
+            b[offset + 3] = GenericAddress::ACCESS_BYTE;
+            b[offset + 4..offset + 12].copy_from_slice(&address.to_le_bytes());
+        }
+        b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
+        let fadt = Fadt::parse(&b).unwrap();
+        let (control, status) = fadt.validated_sleep_registers().unwrap().unwrap();
+        assert_eq!(control.address, 0x1000);
+        assert_eq!(status.address, 0x1001);
+    }
+
+    #[test]
+    fn rejects_truncated_sleep_register_fields() {
+        let b = make_fadt(260, FADT_HW_REDUCED_ACPI, None, None);
+        assert_eq!(Fadt::parse(&b), Err(AcpiError::InvalidLength));
+    }
+
+    #[test]
+    fn reduced_hardware_requires_valid_sleep_registers() {
+        let b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validated_sleep_registers(), Err(AcpiError::InvalidGas));
     }
 
     #[test]
