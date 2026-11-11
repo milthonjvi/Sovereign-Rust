@@ -38,9 +38,10 @@ map entries without assuming descriptors are tightly packed. The consumer is
 not yet wired into a separate kernel entry point or actual register handoff. The kernel must validate all ranges before
 dereferencing physical addresses.
 
-A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support
-and enables EFER.NXE only when the processor advertises NX. The UEFI entry
-point invokes it before installing page-table entries that use the NX bit.
+A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support,
+enables EFER.NXE only when the processor advertises NX, enables CR0.WP so
+supervisor writes respect read-only PTEs, and detects active CR4.LA57 mode.
+The UEFI entry point invokes it before constructing the new page tables.
 
 The loader also contains a four-/five-level x86_64 page-table builder in
 `loader/src/page_tables.rs`, plus a UEFI `AllocatePages` provider in
