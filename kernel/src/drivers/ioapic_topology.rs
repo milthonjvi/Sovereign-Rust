@@ -43,6 +43,7 @@ pub enum TopologyError {
     DuplicateControllerId,
     OverlappingGsiRanges,
     GsiNotCovered,
+    Controller(super::ioapic::IoApicError),
 }
 
 /// Errors while resolving a legacy ISA IRQ through ACPI and the I/O APIC map.
@@ -114,32 +115,28 @@ fn validate_controller_topology(
     Ok(())
 }
 
-/// Resolve and program an ISA IRQ on the correct controller in a multi-I/O-APIC
+/// Resolve and program any GSI on the correct controller in a multi-I/O-APIC
 /// system. The route is always left masked; the interrupt layer must register
 /// its handler before separately enabling delivery. No allocation is used.
-pub fn configure_isa_irq_masked(
+pub fn configure_gsi_masked(
     controllers: &mut [super::ioapic::IoApicController],
-    irq: u8,
-    overrides: &[crate::drivers::acpi::madt::InterruptSourceOverride],
+    gsi: u32,
     vector: u8,
     destination_apic_id: u8,
-) -> Result<IsaGsiRoute, IsaRouteError> {
-    validate_controller_topology(controllers).map_err(IsaRouteError::Topology)?;
-    let (gsi, mode) = super::ioapic::resolve_isa_irq(irq, overrides)
-        .map_err(IsaRouteError::Interrupt)?;
-
+    mode: super::ioapic::InterruptMode,
+) -> Result<GsiRoute, TopologyError> {
+    validate_controller_topology(controllers)?;
     let mut target = None;
     for (controller_index, controller) in controllers.iter().enumerate() {
         let range = controller.gsi_range();
         if range.contains(gsi) {
             if target.is_some() {
-                return Err(IsaRouteError::Topology(TopologyError::OverlappingGsiRanges));
+                return Err(TopologyError::OverlappingGsiRanges);
             }
             target = Some((controller_index, gsi - range.gsi_base));
         }
     }
-    let (controller_index, pin) =
-        target.ok_or(IsaRouteError::Topology(TopologyError::GsiNotCovered))?;
+    let (controller_index, pin) = target.ok_or(TopologyError::GsiNotCovered)?;
 
     controllers[controller_index]
         .configure_masked(
@@ -151,9 +148,40 @@ pub fn configure_isa_irq_masked(
                 mode,
             },
         )
-        .map_err(IsaRouteError::Interrupt)?;
+        .map_err(TopologyError::Controller)?;
 
-    Ok(IsaGsiRoute { gsi, controller_index, pin, mode })
+    Ok(GsiRoute { controller_index, pin })
+}
+
+/// Apply the MADT ISA source override, configure its GSI, and leave it masked.
+/// The caller must register a handler before separately enabling delivery.
+pub fn configure_isa_irq_masked(
+    controllers: &mut [super::ioapic::IoApicController],
+    irq: u8,
+    overrides: &[crate::drivers::acpi::madt::InterruptSourceOverride],
+    vector: u8,
+    destination_apic_id: u8,
+) -> Result<IsaGsiRoute, IsaRouteError> {
+    let (gsi, mode) = super::ioapic::resolve_isa_irq(irq, overrides)
+        .map_err(IsaRouteError::Interrupt)?;
+    let target = configure_gsi_masked(
+        controllers,
+        gsi,
+        vector,
+        destination_apic_id,
+        mode,
+    )
+    .map_err(|error| match error {
+        TopologyError::Controller(controller) => IsaRouteError::Interrupt(controller),
+        other => IsaRouteError::Topology(other),
+    })?;
+
+    Ok(IsaGsiRoute {
+        gsi,
+        controller_index: target.controller_index,
+        pin: target.pin,
+        mode,
+    })
 }
 
 /// Validate controller identity and GSI interval invariants.
