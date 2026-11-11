@@ -95,9 +95,13 @@ impl InterruptMode {
 }
 
 /// Validate vectors accepted by external I/O APIC routes.
+///
+/// Keep this range synchronized with the interrupt subsystem: 0x20..=0x2F
+/// belongs to the legacy PIC, 0x80 is reserved for the syscall ABI, and 0xFF
+/// is the local-APIC spurious vector.
 #[inline]
 pub const fn valid_redirection_vector(vector: u8) -> bool {
-    vector >= 32 && vector != 0xFF
+    vector >= 0x30 && vector <= 0xFE && vector != 0x80
 }
 
 /// Compare only architecturally writable redirection bits. Delivery status
@@ -552,10 +556,12 @@ mod tests {
     }
 
     #[test]
-    fn external_routes_cannot_use_the_apic_spurious_vector() {
-        assert!(!valid_redirection_vector(0));
-        assert!(!valid_redirection_vector(31));
-        assert!(valid_redirection_vector(32));
+    fn external_routes_match_the_interrupt_subsystem_vector_policy() {
+        assert!(!valid_redirection_vector(0x2F));
+        assert!(valid_redirection_vector(0x30));
+        assert!(valid_redirection_vector(0x7F));
+        assert!(!valid_redirection_vector(0x80));
+        assert!(valid_redirection_vector(0x81));
         assert!(valid_redirection_vector(0xFE));
         assert!(!valid_redirection_vector(0xFF));
     }
