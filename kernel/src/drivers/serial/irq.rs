@@ -74,6 +74,40 @@ static COM1_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
 static COM2_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
 static COM3_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
 static COM4_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
+static COM1_RTS_WATERMARKS: AtomicUsize = AtomicUsize::new(0);
+static COM2_RTS_WATERMARKS: AtomicUsize = AtomicUsize::new(0);
+static COM3_RTS_WATERMARKS: AtomicUsize = AtomicUsize::new(0);
+static COM4_RTS_WATERMARKS: AtomicUsize = AtomicUsize::new(0);
+
+const MCR: u16 = 4;
+const MCR_RTS: u8 = 1 << 1;
+const WATERMARK_SHIFT: usize = 16;
+const WATERMARK_MASK: usize = 0xFFFF;
+
+#[inline]
+const fn encode_rts_watermarks(high: usize, low: usize) -> usize {
+    (high << WATERMARK_SHIFT) | low
+}
+#[inline]
+const fn decode_rts_watermarks(encoded: usize) -> (usize, usize) {
+    (encoded >> WATERMARK_SHIFT, encoded & WATERMARK_MASK)
+}
+#[inline]
+const fn rts_should_deassert(occupancy: usize, high: usize) -> bool {
+    high != 0 && occupancy >= high
+}
+#[inline]
+const fn rts_should_assert(occupancy: usize, low: usize) -> bool {
+    occupancy <= low
+}
+#[inline]
+fn drive_rts(base: u16, asserted: bool) {
+    // SAFETY: Caller serializes MCR access; preserve all non-RTS output bits.
+    let current = unsafe { io::in8(base + MCR) };
+    let next = if asserted { current | MCR_RTS } else { current & !MCR_RTS };
+    // SAFETY: MCR is the UART modem-control output register.
+    unsafe { io::out8(base + MCR, next); }
+}
 
 /// Interrupt-cause counters for one UART port.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -230,22 +264,22 @@ fn binding(base: u16) -> Option<PortBinding> {
         0x3F8 => Some(PortBinding {
             irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM1_RX,
-            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH, tx_stats: &COM1_TX_STATS, irq_stats: &COM1_IRQ_STATS, cts_flow: &COM1_CTS_FLOW,
+            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH, tx_stats: &COM1_TX_STATS, irq_stats: &COM1_IRQ_STATS, cts_flow: &COM1_CTS_FLOW, rts_watermarks: &COM1_RTS_WATERMARKS,
         }),
         0x2F8 => Some(PortBinding {
             irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM2_RX,
-            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH, tx_stats: &COM2_TX_STATS, irq_stats: &COM2_IRQ_STATS, cts_flow: &COM2_CTS_FLOW,
+            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH, tx_stats: &COM2_TX_STATS, irq_stats: &COM2_IRQ_STATS, cts_flow: &COM2_CTS_FLOW, rts_watermarks: &COM2_RTS_WATERMARKS,
         }),
         0x3E8 => Some(PortBinding {
             irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM3_RX,
-            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH, tx_stats: &COM3_TX_STATS, irq_stats: &COM3_IRQ_STATS, cts_flow: &COM3_CTS_FLOW,
+            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH, tx_stats: &COM3_TX_STATS, irq_stats: &COM3_IRQ_STATS, cts_flow: &COM3_CTS_FLOW, rts_watermarks: &COM3_RTS_WATERMARKS,
         }),
         0x2E8 => Some(PortBinding {
             irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM4_RX,
-            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH, tx_stats: &COM4_TX_STATS, irq_stats: &COM4_IRQ_STATS, cts_flow: &COM4_CTS_FLOW,
+            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH, tx_stats: &COM4_TX_STATS, irq_stats: &COM4_IRQ_STATS, cts_flow: &COM4_CTS_FLOW, rts_watermarks: &COM4_RTS_WATERMARKS,
         }),
         _ => None,
     }
@@ -415,6 +449,64 @@ pub unsafe fn set_cts_flow_control(
     Ok(())
 }
 
+
+/// Configures automatic receive backpressure using the UART RTS output.
+///
+/// The IRQ producer deasserts RTS at/above high_watermark. The sole consumer
+/// must use receive_byte, which reasserts RTS at/below low_watermark.
+/// Set both thresholds to zero to disable automatic RTS and assert RTS.
+/// Otherwise: 1 <= high_watermark <= queue capacity and low_watermark < high.
+///
+/// # Safety
+/// Call with IF clear on the CPU servicing this UART IRQ. Serialize MCR access;
+/// ensure the sole RX consumer uses receive_byte, not direct queue.pop. Do not
+/// concurrently call set_rts while automatic RTS is enabled.
+pub unsafe fn set_auto_rts_flow_control(
+    uart: &Uart16550,
+    high_watermark: usize,
+    low_watermark: usize,
+) -> Result<(), UartIrqError> {
+    uart.ensure_initialized().map_err(UartIrqError::Uart)?;
+    let port = binding(uart.base_port()).ok_or(UartIrqError::UnsupportedPort)?;
+    if ATTACHED.load(Ordering::Acquire) & port.bit == 0 {
+        return Err(UartIrqError::NotAttached);
+    }
+    let capacity = port.queue.capacity();
+    let disabled = high_watermark == 0 && low_watermark == 0;
+    if !disabled && (high_watermark == 0 || high_watermark > capacity || low_watermark >= high_watermark) {
+        return Err(UartIrqError::InvalidWatermarks);
+    }
+    if disabled {
+        port.rts_watermarks.store(0, Ordering::Release);
+        drive_rts(uart.base_port(), true);
+    } else {
+        port.rts_watermarks.store(encode_rts_watermarks(high_watermark, low_watermark), Ordering::Release);
+        drive_rts(uart.base_port(), !rts_should_deassert(port.queue.len(), high_watermark));
+    }
+    Ok(())
+}
+
+/// Removes one byte and services the low-watermark RTS transition.
+///
+/// # Safety
+/// Exactly one consumer may call this function. Call with IF clear on the CPU
+/// servicing this UART IRQ so the MCR update cannot race the IRQ producer.
+pub unsafe fn receive_byte(base: u16) -> Option<u8> {
+    let port = binding(base)?;
+    // SAFETY: The caller upholds the SPSC single-consumer contract.
+    let byte = unsafe { port.queue.pop() };
+    if byte.is_some() {
+        let encoded = port.rts_watermarks.load(Ordering::Acquire);
+        if encoded != 0 {
+            let (_, low) = decode_rts_watermarks(encoded);
+            if rts_should_assert(port.queue.len(), low) {
+                drive_rts(base, true);
+            }
+        }
+    }
+    byte
+}
+
 /// Returns the number of RX bytes dropped because the software queue was full.
 pub fn receive_dropped_bytes(base: u16) -> Option<usize> {
     binding(base).map(|port| port.queue.dropped_bytes())
@@ -462,7 +554,16 @@ fn drain_port(
         // SAFETY: LSR reports that the receive data register contains a byte.
         let byte = unsafe { io::in8(base + DATA) };
         // SAFETY: This shared-line handler is the only producer for this queue.
-        let _ = unsafe { queue.push(byte) };
+        let accepted = unsafe { queue.push(byte) };
+        if accepted {
+            let encoded = binding(base).map(|port| port.rts_watermarks.load(Ordering::Acquire)).unwrap_or(0);
+            if encoded != 0 {
+                let (high, _) = decode_rts_watermarks(encoded);
+                if rts_should_deassert(queue.len(), high) {
+                    drive_rts(base, false);
+                }
+            }
+        }
     }
 }
 
