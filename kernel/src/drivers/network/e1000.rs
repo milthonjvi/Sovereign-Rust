@@ -132,7 +132,7 @@ pub struct RingCursor { index: u16, mask: u16 }
 
 impl RingCursor {
     pub fn new(descriptor_count: usize) -> Result<Self, E1000Error> {
-        if descriptor_count < 8 || descriptor_count > (u16::MAX as usize + 1) || !descriptor_count.is_power_of_two() {
+        if descriptor_count < 8 || descriptor_count > E1000_MAX_RING_DESCRIPTORS || !descriptor_count.is_power_of_two() {
             return Err(E1000Error::InvalidRingSize);
         }
         Ok(Self { index: 0, mask: (descriptor_count - 1) as u16 })
