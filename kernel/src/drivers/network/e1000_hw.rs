@@ -752,6 +752,28 @@ mod tests {
     }
 
     #[test]
+    fn rx_batch_recycles_contiguous_descriptors_with_one_tail_update() {
+        let mut regs = MockRegisters::default();
+        let mut descriptors = [RxDescriptor::for_buffer(0xa000); 8];
+        let mut queue = E1000RxQueue::new(8).unwrap();
+        let mut completions = [(0u16, super::super::e1000_descriptor::RxCompletion {
+            length: 0, end_of_packet: false, errors: 0,
+        }); 2];
+        descriptors[0].length = 64;
+        descriptors[0].status = super::super::e1000::RXD_STATUS_DD | super::super::e1000::RXD_STATUS_EOP;
+        descriptors[1].length = 96;
+        descriptors[1].status = super::super::e1000::RXD_STATUS_DD | super::super::e1000::RXD_STATUS_EOP;
+        assert_eq!(queue.poll_batch(&mut regs, &descriptors, &mut completions), Ok(2));
+        let mut backup = [RxDescriptor::default(); 2];
+        assert_eq!(queue.recycle_batch(&mut regs, &mut descriptors, &completions, &mut backup), Ok(2));
+        assert_eq!(descriptors[0].status, 0);
+        assert_eq!(descriptors[1].status, 0);
+        assert_eq!(regs.writes.iter().filter(|(register, _)| *register == REG_RDT).count(), 1);
+        assert!(regs.writes.contains(&(REG_RDT, 1)));
+        assert_eq!(queue.poll(&mut regs, &descriptors), Ok(None));
+    }
+
+    #[test]
     fn refuses_to_initialize_without_bus_mastering() {
         let mut regs = MockRegisters::default();
         let queues = E1000QueueConfig::defaults(0x1000, 0x2000).unwrap();
