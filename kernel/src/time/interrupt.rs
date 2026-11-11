@@ -24,6 +24,7 @@ extern "C" fn timer_interrupt_handler(_vector: u8) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TimerInterruptError {
     InvalidVector,
+    LocalApicUnavailable,
     AlreadyRegistered,
 }
 
@@ -35,6 +36,11 @@ pub enum TimerInterruptError {
 pub fn register_timer_interrupt(vector: u8) -> Result<(), TimerInterruptError> {
     if !crate::interrupts::apic::is_apic_vector(vector) {
         return Err(TimerInterruptError::InvalidVector);
+    }
+    if crate::interrupts::init::local_apic_mode()
+        != crate::interrupts::init::LocalApicMode::X2Apic
+    {
+        return Err(TimerInterruptError::LocalApicUnavailable);
     }
     dispatch::register(vector, timer_interrupt_handler)
         .map_err(|_| TimerInterruptError::AlreadyRegistered)
