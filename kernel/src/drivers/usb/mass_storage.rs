@@ -128,3 +128,39 @@ mod tests{
   assert_eq!(ScsiCommand::read_capacity_10().bytes[0],0x25);
  }
 }
+
+pub const MSC_GET_MAX_LUN:u8=0xfe;
+pub const MSC_BULK_ONLY_RESET:u8=0xff;
+pub const USB_CLEAR_FEATURE:u8=1;
+pub const USB_FEATURE_ENDPOINT_HALT:u16=0;
+pub const fn get_max_lun_request(interface:u8)->SetupPacket{SetupPacket::new(0xa1,MSC_GET_MAX_LUN,0,interface as u16,1)}
+pub const fn bulk_only_reset_request(interface:u8)->SetupPacket{SetupPacket::new(0x21,MSC_BULK_ONLY_RESET,0,interface as u16,0)}
+pub const fn clear_endpoint_halt_request(endpoint:u8)->SetupPacket{SetupPacket::new(0x02,USB_CLEAR_FEATURE,USB_FEATURE_ENDPOINT_HALT,endpoint as u16,0)}
+pub fn parse_max_lun(bytes:&[u8])->Result<u8,UsbError>{if bytes.is_empty(){return Err(UsbError::BufferTooShort)}if bytes[0]>15{return Err(UsbError::MalformedDescriptor)}Ok(bytes[0])}
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ScsiCapacity10{pub last_lba:u32,pub block_size:u32}
+impl ScsiCapacity10{
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<8{return Err(UsbError::BufferTooShort)}
+  let last_lba=u32::from_be_bytes([bytes[0],bytes[1],bytes[2],bytes[3]]);
+  let block_size=u32::from_be_bytes([bytes[4],bytes[5],bytes[6],bytes[7]]);
+  if block_size==0{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{last_lba,block_size})
+ }
+ pub const fn block_count(self)->u64{self.last_lba as u64+1}
+}
+
+#[cfg(test)]mod recovery_and_capacity_tests{
+ use super::*;
+ #[test]fn builds_bot_recovery_and_lun_requests(){
+  let reset=bulk_only_reset_request(4);assert_eq!(reset.request_type,0x21);assert_eq!(reset.request,0xff);assert_eq!(reset.index,4);
+  let clear=clear_endpoint_halt_request(0x81);assert_eq!(clear.request_type,2);assert_eq!(clear.index,0x81);
+  assert_eq!(parse_max_lun(&[3]),Ok(3));assert_eq!(parse_max_lun(&[16]),Err(UsbError::MalformedDescriptor));
+ }
+ #[test]fn parses_scsi_capacity_without_overflow(){
+  let c=ScsiCapacity10::parse(&[0,0,0,99,0,0,2,0]).unwrap();
+  assert_eq!(c.block_count(),100);assert_eq!(c.block_size,512);
+  assert_eq!(ScsiCapacity10::parse(&[0;8]),Err(UsbError::MalformedDescriptor));
+ }
+}
