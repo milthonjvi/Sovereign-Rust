@@ -29,7 +29,7 @@ impl PagePermissions {
 pub enum PageTableError {
     MisalignedAddress, NonCanonicalAddress, PhysicalAddressOutOfRange,
     AllocationFailed, InvalidTablePointer, AlreadyMapped, CorruptIntermediateEntry,
-    NxeNotEnabled, WritableExecutableAlias,
+    NxeNotEnabled, WritableExecutableMapping,
 }
 
 /// Supplies unique, zeroed, page-aligned table pages and their writable mapping.
@@ -67,7 +67,7 @@ impl<M: PageTableMemory> PageTableBuilder<M> {
         }
         if !is_canonical(virtual_address) { return Err(PageTableError::NonCanonicalAddress); }
         if permissions.writable && permissions.executable {
-            return Err(PageTableError::WritableExecutableAlias);
+            return Err(PageTableError::WritableExecutableMapping);
         }
         if physical_address & !ADDRESS_MASK != 0 { return Err(PageTableError::PhysicalAddressOutOfRange); }
         let indices = [
