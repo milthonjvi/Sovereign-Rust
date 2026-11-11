@@ -159,6 +159,9 @@ impl Uart16550 {
     /// Non-blocking receive; None means no byte is available.
     pub fn try_read_byte(&self) -> Result<Option<u8>, UartError> {
         self.ensure_initialized()?;
+        if irq::is_attached(self.base) {
+            return Err(UartError::InterruptsActive);
+        }
         // SAFETY: This instance owns the UART.
         let status = unsafe { io::in8(self.port(LSR)) };
         if status & DATA_READY == 0 { return Ok(None); }
