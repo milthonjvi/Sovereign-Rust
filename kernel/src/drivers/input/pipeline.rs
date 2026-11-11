@@ -31,7 +31,7 @@ pub struct Ps2InputPipeline<'a, const N: usize> {
 
 impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
     /// Creates the IRQ-side pipeline and paired task-side consumer.
-    pub fn new(queue: &'a SpscQueue<InputEvent, N>, wheel_enabled: bool)
+    pub fn new(queue: &'a mut SpscQueue<InputEvent, N>, wheel_enabled: bool)
         -> (Self, SpscConsumer<'a, InputEvent, N>)
     {
         let (producer, consumer) = queue.split();
