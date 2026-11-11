@@ -158,15 +158,16 @@ impl<const N: usize>
         sample_ms: u32,
         max_spin_iterations: usize,
     ) -> Result<Self, ApicCountdownInitError> {
+        let usable_hpet = hpet.filter(|device| device.is_enabled());
         let source = crate::time::TscClockSource::detect_or_calibrate(
-            hpet, sample_ms, max_spin_iterations,
+            usable_hpet, sample_ms, max_spin_iterations,
         ).ok_or(ApicCountdownInitError::Queue(
             crate::time::ApicCountdownQueueError::Service(
                 crate::time::TimerServiceError::InvalidClockSource,
             ),
         ))?;
         let frequency_hz = source.frequency_hz();
-        if let Some(hpet) = hpet {
+        if let Some(hpet) = usable_hpet {
             // SAFETY: Forwarded from the x2APIC bootstrap contract.
             unsafe {
                 Self::initialize_bootstrap(
