@@ -1,8 +1,8 @@
 //! Legacy PIT-driven timer service fallback.
 //!
 //! This backend is deliberately coarse: the periodic IRQ0 tick advances the
-//! monotonic clock and requests deferred expiration processing. It is used
-//! when a local-APIC TSC-deadline queue is unavailable; it never executes
+//! monotonic clock and requests deferred expiration processing. It is usable only when the legacy PIC IRQ0 route remains active (the
+//! bootstrap x2APIC configuration masks legacy ExtINT); it never executes
 //! callbacks or drains events from the hard IRQ handler.
 
 use crate::{
