@@ -487,3 +487,18 @@ fn integer_sqrt(value: u128) -> u128 {
     }
     result
 }
+
+#[cfg(test)]
+mod raster_tests {
+    use super::integer_sqrt;
+
+    #[test]
+    fn integer_square_root_handles_boundaries() {
+        assert_eq!(integer_sqrt(0), 0);
+        assert_eq!(integer_sqrt(1), 1);
+        assert_eq!(integer_sqrt(2), 1);
+        assert_eq!(integer_sqrt(15), 3);
+        assert_eq!(integer_sqrt(16), 4);
+        assert_eq!(integer_sqrt(u128::MAX), u64::MAX as u128);
+    }
+}
