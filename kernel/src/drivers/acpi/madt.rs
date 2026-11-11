@@ -307,6 +307,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_truncated_and_reserved_processor_records() {
+        let truncated_xapic = [0, 7, 3, 7, 1, 0, 0];
+        let mut processors = MadtProcessors {
+            records: MadtRecords { bytes: &truncated_xapic, offset: 0 },
+        };
+        assert_eq!(processors.next(), Some(Err(AcpiError::MalformedTable)));
+
+        let reserved_xapic_flags = [0, 8, 3, 7, 4, 0, 0, 0];
+        let mut processors = MadtProcessors {
+            records: MadtRecords { bytes: &reserved_xapic_flags, offset: 0 },
+        };
+        assert_eq!(processors.next(), Some(Err(AcpiError::MalformedTable)));
+
+        let reserved_x2apic_field = [
+            9, 16, 1, 0, 0x34, 0x12, 0, 0, 2, 0, 0, 0, 9, 0, 0, 0,
+        ];
+        let mut processors = MadtProcessors {
+            records: MadtRecords { bytes: &reserved_x2apic_field, offset: 0 },
+        };
+        assert_eq!(processors.next(), Some(Err(AcpiError::MalformedTable)));
+    }
+
+    #[test]
+    fn typed_io_apic_and_override_iterators_report_truncated_records() {
+        let truncated_io_apic = [1, 11, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut io_apics = MadtIoApics {
+            records: MadtRecords { bytes: &truncated_io_apic, offset: 0 },
+        };
+        assert_eq!(io_apics.next(), Some(Err(AcpiError::MalformedTable)));
+
+        let truncated_override = [2, 9, 0, 1, 0x25, 0, 0, 0, 0];
+        let mut overrides = MadtInterruptOverrides {
+            records: MadtRecords { bytes: &truncated_override, offset: 0 },
+        };
+        assert_eq!(overrides.next(), Some(Err(AcpiError::MalformedTable)));
+    }
+
+    #[test]
     fn malformed_record_is_reported_once() {
         let records = [0, 0];
         let mut processors = MadtProcessors {
