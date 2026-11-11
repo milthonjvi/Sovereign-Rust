@@ -24,7 +24,9 @@ pub const TD_TOGGLE_FROM_ED:u32=2<<24;
 pub const TD_CC_NOT_ACCESSED:u32=0xf<<28;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum OhciDirection{FromTd,Out,In,Setup}\n#[derive(Clone,Copy,Debug,Eq,PartialEq)]\npub enum OhciDataToggle{Data0,Data1,FromEndpoint}
+pub enum OhciDirection{FromTd,Out,In,Setup}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum OhciDataToggle{Data0,Data1,FromEndpoint}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(C,align(16))]
 pub struct OhciEndpointDescriptor{pub control:u32,pub tail_pointer:u32,pub head_pointer:u32,pub next_ed:u32}
