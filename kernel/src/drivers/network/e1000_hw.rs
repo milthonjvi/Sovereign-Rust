@@ -110,14 +110,6 @@ pub fn initialize<R: E1000Registers>(
         return Err(E1000InitError::InvalidDescriptorBuffers);
     }
 
-    for (descriptor, &buffer_dma) in rx_descriptors.iter_mut().zip(rx_buffer_dma.iter()) {
-        *descriptor = RxDescriptor::for_buffer(buffer_dma);
-    }
-    for descriptor in tx_descriptors.iter_mut() {
-        *descriptor = TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() };
-    }
-
-    registers.dma_write_barrier();
     registers.write32(REG_IMC, u32::MAX).map_err(E1000InitError::Register)?;
     registers.write32(REG_RCTL, 0).map_err(E1000InitError::Register)?;
     registers.write32(REG_TCTL, 0).map_err(E1000InitError::Register)?;
@@ -137,6 +129,15 @@ pub fn initialize<R: E1000Registers>(
     if !reset_complete {
         return Err(E1000InitError::ResetTimeout);
     }
+
+    // Hardware queues are stopped and reset; now initialize the DMA-visible rings.
+    for (descriptor, &buffer_dma) in rx_descriptors.iter_mut().zip(rx_buffer_dma.iter()) {
+        *descriptor = RxDescriptor::for_buffer(buffer_dma);
+    }
+    for descriptor in tx_descriptors.iter_mut() {
+        *descriptor = TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() };
+    }
+    registers.dma_write_barrier();
 
     // Reset may restore interrupt masks and queue state; mask again before
     // reading the read-to-clear cause register or programming the queues.
