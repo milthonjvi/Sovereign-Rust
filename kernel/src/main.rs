@@ -71,8 +71,8 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    // The next stage will initialize diagnostics, memory, and the IDT.
-    // Until then, do not enable interrupts or touch uninitialized devices.
+    // The descriptor tables are installed, but diagnostics, memory, APIC
+    // routing, and device IRQ registration are still pending. Keep IF clear.
     loop {
         // SAFETY: IF remains clear; HLT is valid at CPL 0.
         unsafe { halt() };
