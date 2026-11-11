@@ -4,4 +4,4 @@
 //! context-save/restore. Do not assume SMP before per-CPU state exists.
 
 pub mod timeouts;
-pub use timeouts::{TaskId, TaskTimeouts};
+pub use timeouts::{TaskId, TaskTimeouts, TaskWakeupReport};
