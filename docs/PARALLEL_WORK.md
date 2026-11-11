@@ -29,11 +29,14 @@ paths or redefine shared interfaces independently.
 2. `kernel/src/lib.rs` and all Cargo manifests are coordinator-owned.
 3. Drivers consume kernel services through narrow interfaces; they must not
    implement their own memory allocator, interrupt controller, scheduler, or VFS.
-4. The Sovereign UEFI path publishes validated ACPI table addresses through
-   `kernel::boot::sovereign::acpi_tables()` and parsed MADT routing metadata
-   through `kernel::boot::sovereign::madt_topology()`. It identity-maps UEFI
-   ACPI reclaimable (type 9) and NVS (type 10) ranges; ACPI consumers must
-   validate each physical range and must not assume a higher-half direct map exists.
+4. The Sovereign UEFI path publishes the validated handoff through
+   `kernel::boot::sovereign::boot_info()` and the strided UEFI memory map
+   through `kernel::boot::sovereign::memory_map()`. It also publishes ACPI
+   table addresses through `acpi_tables()` and parsed MADT routing metadata
+   through `madt_topology()`. It identity-maps UEFI ACPI reclaimable (type 9)
+   and NVS (type 10) ranges; consumers must validate each physical range and
+   must not assume a higher-half direct map exists. The memory manager must
+   copy required descriptors before reclaiming the loader-owned map buffer.
 5. Hardware-specific unsafe code stays inside the relevant architecture or
    driver module and must document its safety invariants.
 6. No driver may touch MMIO, port I/O, DMA, or interrupt registers until the
