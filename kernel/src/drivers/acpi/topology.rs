@@ -15,11 +15,10 @@ pub const MAX_MADT_OVERRIDES: usize = 256;
 pub enum MadtTopologyError {
     MalformedRecord,
     CapacityExceeded,
-    InvalidIoApicAddress,
+    InvalidControllerAddress,
     DuplicateIoApicId,
     DuplicateIoApicAddress,
     DuplicateOverrideSource,
-    DuplicateOverrideGsi,
 }
 
 /// Validated, allocation-free interrupt-controller metadata from one MADT.
@@ -55,7 +54,7 @@ impl MadtInterruptTopology {
                     let descriptor = record.io_apic()
                         .ok_or(MadtTopologyError::MalformedRecord)?;
                     if descriptor.address == 0 || descriptor.address & 0xFFF != 0 {
-                        return Err(MadtTopologyError::InvalidIoApicAddress);
+                        return Err(MadtTopologyError::InvalidControllerAddress);
                     }
                     if topology.io_apics[..topology.io_apic_count]
                         .iter().flatten().any(|existing| existing.id == descriptor.id)
@@ -82,13 +81,6 @@ impl MadtInterruptTopology {
                             existing.bus == entry.bus && existing.source == entry.source)
                     {
                         return Err(MadtTopologyError::DuplicateOverrideSource);
-                    }
-                    if topology.overrides[..topology.override_count]
-                        .iter().flatten().any(|existing|
-                            existing.bus == entry.bus
-                                && existing.global_system_interrupt == entry.global_system_interrupt)
-                    {
-                        return Err(MadtTopologyError::DuplicateOverrideGsi);
                     }
                     if topology.override_count == MAX_MADT_OVERRIDES {
                         return Err(MadtTopologyError::CapacityExceeded);
@@ -210,6 +202,6 @@ mod tests {
         let bytes = madt_with_records(&records);
         let madt = Madt::parse(&bytes).unwrap();
         assert_eq!(MadtInterruptTopology::parse(&madt).err(),
-            Some(MadtTopologyError::InvalidIoApicAddress));
+            Some(MadtTopologyError::InvalidControllerAddress));
     }
 }
