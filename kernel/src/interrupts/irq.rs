@@ -61,6 +61,22 @@ pub extern "C" fn sovereign_irq_dispatch(frame: *const ExceptionFrame) {
         fatal_unhandled_irq();
     };
 
+    if !(0x20..=0x2F).contains(&vector) {
+        fatal_unhandled_irq();
+    }
+
+    let irq = vector - 0x20;
+    if irq == 7 || irq == 15 {
+        // SAFETY: The IRQ path is entered only after the legacy PIC is
+        // initialized and remapped to 0x20..=0x2F. PIC port ownership belongs
+        // to the interrupt-controller initialization layer.
+        match unsafe { super::pic::acknowledge_spurious_irq(irq) } {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(_) => fatal_unhandled_irq(),
+        }
+    }
+
     if !dispatch_vector(vector) {
         fatal_unhandled_irq();
     }
