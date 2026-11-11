@@ -204,6 +204,21 @@ mod tests {
     }
 
     #[test]
+    fn validates_buffer_pools_against_descriptor_ring_ranges() {
+        let mut bytes = [0u8; 2048];
+        let pool = [mock_dma_buffer(0x4000, &mut bytes)];
+        assert_eq!(DmaBuffer::validate_disjoint_from_range(&pool, 0x5000, 128), Ok(()));
+        assert_eq!(
+            DmaBuffer::validate_disjoint_from_range(&pool, 0x4400, 128),
+            Err(DmaBufferError::OverlappingBuffers),
+        );
+        assert_eq!(
+            DmaBuffer::validate_disjoint_from_range(&pool, u64::MAX - 15, 32),
+            Err(DmaBufferError::AddressRangeOverflow),
+        );
+    }
+
+    #[test]
     fn rejects_overlapping_dma_ranges() {
         let mut a = [0u8; E1000_RX_BUFFER_MIN_SIZE];
         let mut b = [0u8; E1000_RX_BUFFER_MIN_SIZE];
