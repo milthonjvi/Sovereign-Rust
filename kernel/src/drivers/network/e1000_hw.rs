@@ -509,12 +509,20 @@ impl E1000RxQueue {
             }
         }
 
+        // Preflight every descriptor before changing any of them. This prevents
+        // callers from recycling a slot that hardware has not completed yet.
         for (offset, (index, _)) in completed.iter().enumerate() {
             let slot = *index as usize;
-            // SAFETY: the completed descriptor remains CPU-owned until RDT advances.
+            // SAFETY: read-only inspection of a pinned DMA descriptor owned by CPU.
             let original = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(slot)) };
+            if original.status & super::e1000::RXD_STATUS_DD == 0 {
+                return Err(E1000QueueError::InvalidRing);
+            }
             backup[offset] = original;
-            let rearmed = RxDescriptor::for_buffer(original.buffer_address);
+        }
+        for (offset, (index, _)) in completed.iter().enumerate() {
+            let slot = *index as usize;
+            let rearmed = RxDescriptor::for_buffer(backup[offset].buffer_address);
             // SAFETY: rearm only descriptors whose packets have already been consumed.
             unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(slot), rearmed); }
         }
