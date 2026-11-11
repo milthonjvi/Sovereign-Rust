@@ -55,7 +55,7 @@ pub const DEFAULT_RX_RING_SIZE: usize = 32;
 pub const DEFAULT_TX_RING_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum E1000Error { UnsupportedDevice, InvalidRingSize, NullDmaAddress, MisalignedDmaAddress, DmaAddressTooWide, InvalidDescriptorLength }
+pub enum E1000Error { UnsupportedDevice, InvalidRingSize, NullDmaAddress, MisalignedDmaAddress, DmaAddressTooWide, OverlappingDmaRanges, InvalidDescriptorLength }
 
 pub const fn supports_device(vendor_id: u16, device_id: u16) -> bool {
     vendor_id == PCI_VENDOR_INTEL
