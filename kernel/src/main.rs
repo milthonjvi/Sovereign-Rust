@@ -39,6 +39,14 @@ pub extern "C" fn _start() -> ! {
             .and_then(|rsdp| _boot_info.discover_acpi(&rsdp).ok())
     };
 
+    // Install the kernel's GDT/TSS, complete IDT, and masked legacy PIC.
+    // IF remains clear and every PIC input remains masked until a device
+    // driver has registered its interrupt handler and explicitly unmasks it.
+    // SAFETY: _start is executing on the BSP at CPL 0 with interrupts disabled.
+    if unsafe { sovereign_kernel::interrupts::init::initialize_bootstrap() }.is_err() {
+        fatal_halt();
+    }
+
     // Initialize the boot-provided display when Limine exposes a supported
     // 32-bit RGB/BGR framebuffer. Unsupported formats remain non-fatal.
     // SAFETY: LimineBootInfo was collected after handoff and its response
