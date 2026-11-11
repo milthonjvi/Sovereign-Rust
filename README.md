@@ -29,8 +29,8 @@ to privileged CPU operations and transitions that require it.
 
 The loader now allocates and populates the ELF image, zeroes BSS, constructs
 per-segment high-half mappings with NX/W^X protections, and identity-maps its
-loaded image, a bounded current-stack window, the boot-info page, and a reserved
-UEFI memory-map buffer. It captures a memory-map snapshot and populates the
+loaded image using PE section-level RX/RO/RW permissions, a bounded current-stack
+window, the boot-info page, and a reserved UEFI memory-map buffer. It captures a memory-map snapshot and populates the
 versioned Sovereign boot-info ABI. It does not yet switch CR3, perform the final
 GetMemoryMap/ExitBootServices sequence, or transfer control to the kernel. The
 kernel still consumes its existing Limine handoff; Limine has not been removed.
