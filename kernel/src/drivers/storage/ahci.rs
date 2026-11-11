@@ -289,7 +289,8 @@ pub fn start_port_with_spinup<R:AhciRegisterIo>(io:&mut R,base:u32,staggered_spi
     let reg=port_register(base,CMD)?;
     wait_register(io,reg,CR|FR,true,polls)?;
     let command=io.read32(reg)?;
-    io.write32(reg,command|FRE|if staggered_spinup{SUD}else{0})?;
+    let command=(command|FRE)&!SUD;
+    io.write32(reg,command|if staggered_spinup{SUD}else{0})?;
     wait_register(io,reg,FR,false,polls)?;
     let command=io.read32(reg)?;
     io.write32(reg,command|ST)?;
@@ -384,6 +385,15 @@ mod port_tests {
         regs.0[0x10/4]=1<<27;
         assert_eq!(command_complete(&mut regs,0,3,true),Err(AhciError::DeviceFault));
     }
+    #[test]
+    fn non_staggered_start_clears_stale_spinup_request() {
+        let mut regs=Registers([0;64]);
+        regs.0[0x18/4]=1<<1; // A stale SUD bit must not survive explicit non-staggered start.
+        start_port_with_spinup(&mut regs,0,false,4).unwrap();
+        assert_eq!(regs.0[0x18/4]&(1<<1),0);
+        assert_ne!(regs.0[0x18/4]&1,0);
+    }
+
     #[test]
     fn refuses_submission_until_command_engine_is_running() {
         let mut regs=Registers([0;64]);
