@@ -169,3 +169,43 @@ mod change_bitmap_tests{
   assert_eq!(HubChangeBitmap::parse(&[0],8),Err(UsbError::BufferTooShort));
  }
 }
+
+
+/// Non-blocking downstream-port lifecycle policy. Timing and status polling are
+/// supplied by the caller; no polling loop or MMIO is performed here.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32}
+impl HubPortMachine{
+ pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2}}
+ pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
+ pub fn elapse_ms(&mut self,ms:u32){self.elapsed_ms=self.elapsed_ms.saturating_add(ms);if self.state==HubPortState::PowerGoodWait&&self.elapsed_ms>=self.power_good_ms{self.state=HubPortState::AwaitConnection;self.elapsed_ms=0}else if self.state==HubPortState::Debouncing&&self.elapsed_ms>=100{self.state=HubPortState::ResetRequired;self.elapsed_ms=0}}
+ pub fn observe(&mut self,status:HubPortStatus){
+  if status.status&HubPortStatus::OVER_CURRENT!=0{self.state=HubPortState::OverCurrent;return}
+  match self.state{
+   HubPortState::AwaitConnection=>if status.connected(){self.state=HubPortState::Debouncing;self.elapsed_ms=0},
+   HubPortState::Debouncing=>if !status.connected(){self.state=HubPortState::AwaitConnection;self.elapsed_ms=0},
+   HubPortState::Resetting=>if !status.connected(){self.state=HubPortState::Disconnected}else if status.status&HubPortStatus::RESET==0&&status.enabled(){self.state=HubPortState::ClearResetChange},
+   HubPortState::Ready=>if !status.connected(){self.state=HubPortState::Disconnected}else if !status.enabled(){self.state=HubPortState::ResetRequired},
+   _=>{}
+  }
+ }
+ pub fn take_action(&mut self)->Option<HubPortAction>{match self.state{
+  HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;Some(HubPortAction::Reset)},
+  HubPortState::ClearResetChange=>{self.state=HubPortState::Ready;Some(HubPortAction::ClearResetChange)},
+  HubPortState::OverCurrent=>Some(HubPortAction::PowerOff),_=>None}}
+ pub const fn ready(&self)->bool{matches!(self.state,HubPortState::Ready)}
+}
+#[cfg(test)]mod port_machine_tests{
+ use super::*;
+ #[test]fn port_lifecycle_is_nonblocking(){
+  let mut p=HubPortMachine::new(2,10);assert_eq!(p.start(),Ok(HubPortAction::PowerOn));
+  p.elapse_ms(20);assert_eq!(p.state,HubPortState::AwaitConnection);
+  p.observe(HubPortStatus{status:HubPortStatus::CONNECTION,change:0});p.elapse_ms(100);
+  assert_eq!(p.take_action(),Some(HubPortAction::Reset));
+  p.observe(HubPortStatus{status:HubPortStatus::CONNECTION|HubPortStatus::ENABLE,change:HubPortStatus::C_RESET});
+  assert_eq!(p.take_action(),Some(HubPortAction::ClearResetChange));assert!(p.ready());
+ }
+ #[test]fn overcurrent_requests_power_off(){let mut p=HubPortMachine::new(1,0);p.start().unwrap();p.observe(HubPortStatus{status:HubPortStatus::OVER_CURRENT,change:0});assert_eq!(p.take_action(),Some(HubPortAction::PowerOff));}
+}
