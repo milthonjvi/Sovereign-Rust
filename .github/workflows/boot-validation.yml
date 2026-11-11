@@ -1,0 +1,45 @@
+name: Sovereign Boot validation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel-and-loader:
+    name: Kernel and UEFI loader builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust targets
+        run: rustup target add x86_64-unknown-none x86_64-unknown-uefi
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets --target x86_64-unknown-none
+
+      - name: Build Limine-compatible kernel
+        run: cargo build --release -p sovereign-kernel --bin sovereign-kernel --target x86_64-unknown-none
+
+      - name: Build Sovereign Boot kernel
+        run: cargo build --release -p sovereign-kernel --bin sovereign-kernel-uefi --target x86_64-unknown-none
+
+      - name: Build UEFI loader
+        run: cargo build --release -p sovereign-boot-uefi --bin sovereign-boot-uefi --target x86_64-unknown-uefi
+
+  kernel-unit-tests:
+    name: Kernel host-side unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host target
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: Run kernel library tests
+        run: cargo test -p sovereign-kernel --lib --target x86_64-unknown-linux-gnu
