@@ -12,7 +12,7 @@ pub enum FatError {
     InvalidTotalSectors, InvalidFatSize, InvalidClusterCount, FatTooSmall,
     InvalidFat32Metadata, UnsupportedFilesystem, InvalidCluster, FatEntryIo,
     FatSectorBufferTooSmall, ClusterBufferTooSmall, ChainCorrupt, ChainTooLong,
-    FileSizeMismatch, InvalidDirectoryEntry, DirectoryFull, FatMirrorMismatch,
+    FileSizeMismatch, InvalidDirectoryEntry, DirectoryFull, FatMirrorMismatch, InvalidFsInfo, FsInfoBufferTooSmall,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FatBpb {
