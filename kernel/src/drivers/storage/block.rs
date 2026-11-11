@@ -100,4 +100,49 @@ mod tests {
     #[test] fn rejects_empty_range() { assert_eq!(GEO.validate_range(BlockRange::new(0, 0)), Err(BlockError::EmptyRequest)); }
     #[test] fn validates_exact_buffer() { assert_eq!(validate_buffer(GEO, BlockRange::new(2, 2), 1024), Ok(())); assert_eq!(validate_buffer(GEO, BlockRange::new(2, 2), 512), Err(BlockError::BufferSizeMismatch)); }
     #[test] fn rejects_invalid_geometry() { assert_eq!(BlockGeometry { block_count: 10, block_size: 1000 }.validate(), Err(BlockError::InvalidGeometry)); }
+
+    struct LimitedDisk { bytes: [u8; 4096], calls: usize, limit: u64 }
+    impl BlockDevice for LimitedDisk {
+        fn geometry(&self) -> BlockGeometry { BlockGeometry { block_count: 8, block_size: 512 } }
+        fn read_blocks(&mut self, r: BlockRange, out: &mut [u8]) -> Result<(), BlockError> {
+            validate_buffer(self.geometry(), r, out.len())?;
+            if r.block_count > self.limit { return Err(BlockError::UnsupportedOperation); }
+            self.calls += 1;
+            let start = r.start_block as usize * 512;
+            out.copy_from_slice(&self.bytes[start..start + out.len()]);
+            Ok(())
+        }
+        fn write_blocks(&mut self, r: BlockRange, input: &[u8]) -> Result<(), BlockError> {
+            validate_buffer(self.geometry(), r, input.len())?;
+            if r.block_count > self.limit { return Err(BlockError::UnsupportedOperation); }
+            self.calls += 1;
+            let start = r.start_block as usize * 512;
+            self.bytes[start..start + input.len()].copy_from_slice(input);
+            Ok(())
+        }
+        fn flush(&mut self) -> Result<(), BlockError> { Ok(()) }
+        fn max_transfer_blocks(&self) -> u64 { self.limit }
+    }
+
+    #[test] fn chunks_reads_at_transport_limit() {
+        let mut disk = LimitedDisk { bytes: [0x5A; 4096], calls: 0, limit: 2 };
+        let mut output = [0; 4 * 512];
+        read_blocks_chunked(&mut disk, BlockRange::new(1, 4), &mut output).unwrap();
+        assert_eq!(disk.calls, 2);
+        assert!(output.iter().all(|byte| *byte == 0x5A));
+    }
+
+    #[test] fn chunks_writes_at_transport_limit() {
+        let mut disk = LimitedDisk { bytes: [0; 4096], calls: 0, limit: 2 };
+        let input = [0xA5; 4 * 512];
+        write_blocks_chunked(&mut disk, BlockRange::new(2, 4), &input).unwrap();
+        assert_eq!(disk.calls, 2);
+        assert_eq!(&disk.bytes[1024..3072], &input);
+    }
+
+    #[test] fn rejects_zero_transport_limit_without_io() {
+        let mut disk = LimitedDisk { bytes: [0; 4096], calls: 0, limit: 0 };
+        assert_eq!(read_blocks_chunked(&mut disk, BlockRange::new(0, 1), &mut [0; 512]), Err(BlockError::InvalidTransferLimit));
+        assert_eq!(disk.calls, 0);
+    }
 }
