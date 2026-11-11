@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// Consumer cursor for the device's legacy RX descriptor ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct E1000RxQueue {
+    cursor: RingCursor,
+    recycle: RingCursor,
+    outstanding: u16,
+}
+
 impl E1000RxQueue {
     pub(crate) fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
         Ok(Self { cursor: RingCursor::new(descriptor_count)?, recycle: RingCursor::new(descriptor_count)?, outstanding: 0 })
