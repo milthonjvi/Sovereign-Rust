@@ -49,6 +49,8 @@ pub struct LoadedKernel {
     pub image_size: u64,
     pub entry: u64,
     pub pages: usize,
+    pub loader_image_base: u64,
+    pub loader_image_size: u64,
     pub segments: [LoadedSegment; MAX_PROGRAM_HEADERS],
     pub segment_count: usize,
 }
@@ -83,7 +85,9 @@ pub fn load_kernel_file(
     if loaded_ptr.is_null() { return Err(EFI_COMPROMISED_DATA); }
     // SAFETY: HandleProtocol returned the loaded-image interface.
     let loaded = unsafe { &*(loaded_ptr as *const EfiLoadedImageProtocol) };
-    if loaded.device_handle.is_null() { return Err(EFI_COMPROMISED_DATA); }
+    if loaded.device_handle.is_null() || loaded.image_base.is_null() || loaded.image_size == 0 { return Err(EFI_COMPROMISED_DATA); }
+    let loader_image_base = loaded.image_base as usize as u64;
+    let loader_image_size = u64::try_from(loaded.image_size).map_err(|_| EFI_COMPROMISED_DATA)?;
 
     let mut fs_ptr: *mut c_void = ptr::null_mut();
     // SAFETY: Device handle is supplied by the loaded-image protocol.
@@ -278,6 +282,7 @@ fn load_open_file(file: *mut EfiFileProtocol, boot: &mut EfiBootServices) -> Res
     }
     Ok(LoadedKernel {
         physical_base, virtual_base, image_size, entry, pages,
+        loader_image_base, loader_image_size,
         segments: loaded_segments, segment_count: count,
     })
 }
