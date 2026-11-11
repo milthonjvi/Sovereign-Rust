@@ -3,72 +3,88 @@
 //! The producer is normally the UART interrupt handler and the consumer is
 //! normal kernel code. The producer must be serialized: nested/concurrent IRQ
 //! producers are not supported. The queue never allocates or blocks.
+//!
+//! Payload bytes use UnsafeCell rather than per-byte atomics. Release/acquire
+//! publication on the indices provides the synchronization needed for SPSC.
 
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+#[repr(align(64))]
+struct CachePadded<T>(T);
 
 /// Fixed-capacity byte queue for one serialized producer and one consumer.
 ///
 /// One slot is deliberately left unused to distinguish full from empty, so
 /// usable capacity is `N - 1`. `N` must be a power of two and at least 2.
 pub struct UartRxBuffer<const N: usize> {
-    bytes: [AtomicU8; N],
-    head: AtomicUsize,
-    tail: AtomicUsize,
-    dropped: AtomicUsize,
+    bytes: UnsafeCell<[u8; N]>,
+    head: CachePadded<AtomicUsize>,
+    tail: CachePadded<AtomicUsize>,
+    dropped: CachePadded<AtomicUsize>,
 }
 
+// SAFETY: The API is strictly SPSC. The producer exclusively writes the slot
+// at head and publishes it with Release; the consumer acquires head before
+// reading and releases tail before the producer may reuse that slot.
+unsafe impl<const N: usize> Sync for UartRxBuffer<N> {}
+
 impl<const N: usize> UartRxBuffer<N> {
-    /// Creates an empty queue.
+    /// Creates an empty queue. Const construction allows static kernel queues.
     ///
     /// # Panics
     /// Panics if N is not a power of two or is smaller than 2.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         assert!(N >= 2 && N.is_power_of_two());
         Self {
-            bytes: core::array::from_fn(|_| AtomicU8::new(0)),
-            head: AtomicUsize::new(0),
-            tail: AtomicUsize::new(0),
-            dropped: AtomicUsize::new(0),
+            bytes: UnsafeCell::new([0; N]),
+            head: CachePadded(AtomicUsize::new(0)),
+            tail: CachePadded(AtomicUsize::new(0)),
+            dropped: CachePadded(AtomicUsize::new(0)),
         }
     }
 
-    /// Adds one byte from the producer context.
+    /// Adds one byte from the serialized producer context.
     ///
     /// Returns false when full; the dropped-byte counter is incremented.
     #[inline]
     pub fn push(&self, byte: u8) -> bool {
-        let head = self.head.load(Ordering::Relaxed);
+        let head = self.head.0.load(Ordering::Relaxed);
         let next = (head + 1) & (N - 1);
-        let tail = self.tail.load(Ordering::Acquire);
+        let tail = self.tail.0.load(Ordering::Acquire);
         if next == tail {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+            self.dropped.0.fetch_add(1, Ordering::Relaxed);
             return false;
         }
 
-        self.bytes[head].store(byte, Ordering::Relaxed);
-        self.head.store(next, Ordering::Release);
+        // SAFETY: SPSC ownership gives the producer exclusive access to the
+        // unpublished head slot. The Release store publishes the initialized byte.
+        unsafe { (*self.bytes.get())[head] = byte; }
+        self.head.0.store(next, Ordering::Release);
         true
     }
 
-    /// Removes one byte from the consumer context.
+    /// Removes one byte from the single consumer context.
     #[inline]
     pub fn pop(&self) -> Option<u8> {
-        let tail = self.tail.load(Ordering::Relaxed);
-        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.0.load(Ordering::Relaxed);
+        let head = self.head.0.load(Ordering::Acquire);
         if tail == head {
             return None;
         }
 
-        let byte = self.bytes[tail].load(Ordering::Relaxed);
-        self.tail.store((tail + 1) & (N - 1), Ordering::Release);
+        // SAFETY: Acquire observed the producer's published head. The producer
+        // cannot reuse this slot until the consumer releases the updated tail.
+        let byte = unsafe { (*self.bytes.get())[tail] };
+        self.tail.0.store((tail + 1) & (N - 1), Ordering::Release);
         Some(byte)
     }
 
     /// Number of bytes currently queued (an instantaneous snapshot).
     #[inline]
     pub fn len(&self) -> usize {
-        let head = self.head.load(Ordering::Acquire);
-        let tail = self.tail.load(Ordering::Acquire);
+        let head = self.head.0.load(Ordering::Acquire);
+        let tail = self.tail.0.load(Ordering::Acquire);
         head.wrapping_sub(tail) & (N - 1)
     }
 
@@ -90,7 +106,7 @@ impl<const N: usize> UartRxBuffer<N> {
     /// Total number of bytes rejected because the queue was full.
     #[inline]
     pub fn dropped_bytes(&self) -> usize {
-        self.dropped.load(Ordering::Relaxed)
+        self.dropped.0.load(Ordering::Relaxed)
     }
 }
 
@@ -151,5 +167,13 @@ mod tests {
         assert_eq!(queue.pop(), Some(3));
         assert_eq!(queue.pop(), Some(4));
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn can_be_const_initialized_for_static_kernel_storage() {
+        static QUEUE: UartRxBuffer<16> = UartRxBuffer::new();
+        assert!(QUEUE.is_empty());
+        assert!(QUEUE.push(0x5A));
+        assert_eq!(QUEUE.pop(), Some(0x5A));
     }
 }
