@@ -10,7 +10,11 @@ const CPUID_NX: u32 = 1 << 20;
 
 /// Proof token produced only after EFER.NXE is confirmed active.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NxeEnabled(());
+pub struct NxeEnabled { paging_levels: u8 }
+
+impl NxeEnabled {
+    pub const fn paging_levels(self) -> u8 { self.paging_levels }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CpuFeatureError {
@@ -62,5 +66,15 @@ pub unsafe fn enable_nxe() -> Result<NxeEnabled, CpuFeatureError> {
             );
         }
     }
-    Ok(NxeEnabled(()))
+    let cr4: u64;
+    // SAFETY: Reading CR4 is valid at CPL 0 and does not mutate processor state.
+    unsafe {
+        asm!(
+            "mov {}, cr4",
+            out(reg) cr4,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    let paging_levels = if cr4 & (1 << 12) != 0 { 5 } else { 4 };
+    Ok(NxeEnabled { paging_levels })
 }
