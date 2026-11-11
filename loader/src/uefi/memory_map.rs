@@ -89,23 +89,6 @@ impl EfiMemoryMapBuffer {
         })
     }
 
-    /// Refresh the map and call ExitBootServices, retrying stale map keys.
-    ///
-    /// No allocation or other firmware service is called between each map
-    /// capture and its corresponding ExitBootServices attempt.
-    ///
-    /// # Safety
-    /// The image handle and Boot Services table must be valid. On success,
-    /// Boot Services are no longer available and this object must not be used
-    /// again except as inert metadata.
-    pub unsafe fn exit_boot_services(
-        &mut self,
-        image_handle: EfiHandle,
-    ) -> Result<CapturedMemoryMap, EfiStatus> {
-        // SAFETY: The empty callback performs no allocation or firmware call.
-        unsafe { self.exit_boot_services_with(image_handle, |_| {}) }
-    }
-
     /// Variant that refreshes handoff metadata between GetMemoryMap and
     /// ExitBootServices. The callback must only update already allocated
     /// memory; it must not allocate or call any firmware service.
@@ -141,8 +124,5 @@ impl EfiMemoryMapBuffer {
         Err(EFI_INVALID_PARAMETER)
     }
 
-    /// Return the buffer as an untyped pointer for byte-wise ABI consumers.
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.physical_base as usize as *mut u8
-    }
+
 }
