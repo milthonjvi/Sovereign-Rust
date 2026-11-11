@@ -516,6 +516,12 @@ mod tests {
         }
     }
 
+    fn mock_dma_buffer<'a>(address: u64, bytes: &'a mut [u8]) -> DmaBuffer<'a> {
+        // SAFETY: these tests use a mock register backend that never performs DMA;
+        // the synthetic addresses model unique, pinned mappings for ownership tests.
+        unsafe { DmaBuffer::new(address, bytes) }.unwrap()
+    }
+
     fn supported_device() -> DeviceInfo {
         DeviceInfo {
             class: DeviceClass::Network,
@@ -533,10 +539,10 @@ mod tests {
         let mut rx_storage = [[0u8; 2048]; 8];
         let mut tx_storage = [[0u8; 2048]; 8];
         let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
-            .map(|(i, bytes)| DmaBuffer::new(0x10000 + i as u64 * 2048, bytes).unwrap())
+            .map(|(i, bytes)| mock_dma_buffer(0x10000 + i as u64 * 2048, bytes))
             .collect::<Vec<_>>().try_into().ok().unwrap();
         let mut tx_buffers: [DmaBuffer<'_>; 8] = tx_storage.iter_mut().enumerate()
-            .map(|(i, bytes)| DmaBuffer::new(0x20000 + i as u64 * 2048, bytes).unwrap())
+            .map(|(i, bytes)| mock_dma_buffer(0x20000 + i as u64 * 2048, bytes))
             .collect::<Vec<_>>().try_into().ok().unwrap();
         for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
             descriptor.buffer_address = buffer.dma_address();
