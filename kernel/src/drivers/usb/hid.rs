@@ -32,6 +32,37 @@ impl HidDescriptor{
   if report_length==0{return Err(UsbError::MalformedDescriptor)}
   Ok(Self{hid_release:u16::from_le_bytes([bytes[2],bytes[3]]),country_code:bytes[4],subordinate_count:count as u8,report_length})
  }
+ /// Locates this interface's HID class descriptor in the raw configuration blob.
+ /// ParsedConfiguration intentionally stores the standard interface/endpoint
+ /// tree; callers that need class-specific descriptors can retain this raw blob.
+ pub fn find_in_configuration(
+  configuration:&[u8],interface_number:u8,alternate_setting:u8,
+ )->Result<Self,UsbError>{
+  if configuration.len()<9||configuration[0]!=9||configuration[1]!=2{
+   return Err(UsbError::MalformedDescriptor)
+  }
+  let total=u16::from_le_bytes([configuration[2],configuration[3]]) as usize;
+  if total<9{return Err(UsbError::MalformedDescriptor)}
+  if configuration.len()<total{return Err(UsbError::BufferTooShort)}
+  let mut offset=9usize;
+  let mut target=false;
+  while offset<total{
+   if total-offset<2{return Err(UsbError::MalformedDescriptor)}
+   let length=configuration[offset] as usize;
+   if length<2||length>total-offset{return Err(UsbError::MalformedDescriptor)}
+   let descriptor_type=configuration[offset+1];
+   if descriptor_type==4{
+    if length<9{return Err(UsbError::MalformedDescriptor)}
+    target=configuration[offset+2]==interface_number
+     &&configuration[offset+3]==alternate_setting
+     &&configuration[offset+5]==HID_CLASS;
+   }else if target&&descriptor_type==HID_DESCRIPTOR_TYPE{
+    return Self::parse(&configuration[offset..offset+length]);
+   }
+   offset+=length;
+  }
+  Err(UsbError::Unsupported)
+ }
 }
 pub const fn set_protocol(interface:u8,protocol:u16)->SetupPacket{
  SetupPacket::new(0x21,HID_SET_PROTOCOL,protocol,interface as u16,0)
