@@ -11,7 +11,7 @@ use super::e1000::{
     REG_TCTL, REG_TDBAH, REG_TDBAL, REG_TDH, REG_TDLEN, REG_TDT,
     RCTL_BAM, RCTL_EN, RCTL_SECRC, TCTL_COLD_SHIFT, TCTL_CT_SHIFT, TCTL_EN, TCTL_PSP,
 };
-use super::e1000_descriptor::mac_address_from_registers;
+use super::e1000_descriptor::{mac_address_from_registers, RAH0_AV};
 use super::ethernet::MacAddress;
 use super::dma::DmaBuffer;
 
@@ -199,10 +199,19 @@ pub unsafe fn initialize<R: E1000Registers>(
     let _ = registers.read32(REG_ICR).map_err(E1000InitError::Register)?;
     registers.dma_write_barrier();
 
-    let ral = registers.read32(REG_RAL0).map_err(E1000InitError::Register)?;
-    let rah = registers.read32(REG_RAH0).map_err(E1000InitError::Register)?;
-    let mac = mac_address_from_registers(ral, rah)
-        .ok_or(E1000InitError::MissingMacAddress)?;
+    // EEPROM auto-load may finish shortly after CTRL.RST clears. Wait for
+    // RAH0.AV rather than assuming the receive address is immediately valid.
+    let mut mac = None;
+    for _ in 0..RESET_POLL_LIMIT {
+        let rah = registers.read32(REG_RAH0).map_err(E1000InitError::Register)?;
+        if rah & RAH0_AV != 0 {
+            let ral = registers.read32(REG_RAL0).map_err(E1000InitError::Register)?;
+            mac = mac_address_from_registers(ral, rah);
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let mac = mac.ok_or(E1000InitError::MissingMacAddress)?;
     if !mac.is_unicast() {
         return Err(E1000InitError::InvalidMacAddress);
     }
