@@ -8,6 +8,7 @@ use super::event::InputEvent;
 use super::keyboard::set1::Set1Decoder;
 use super::mouse::packet::Ps2MouseDecoder;
 use super::queue::{SpscConsumer, SpscProducer, SpscQueue};
+use super::ps2::{Ps2Controller, Ps2DataByte, Ps2Error};
 
 pub const STATUS_AUXILIARY: u8 = 1 << 5;
 pub const STATUS_TIMEOUT: u8 = 1 << 6;
@@ -44,6 +45,35 @@ impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
             },
             consumer,
         )
+    }
+
+    /// Processes a status-preserving byte returned by the i8042 controller.
+    #[inline]
+    pub fn feed_data_byte(&mut self, byte: Ps2DataByte) {
+        self.feed(byte.status, byte.value);
+    }
+
+    /// Drains at most `budget` pending bytes from the controller.
+    ///
+    /// This is deliberately bounded for interrupt-context callers. Use a
+    /// conservative budget in an IRQ handler and let subsequent IRQs continue
+    /// draining; polling-mode callers may choose a larger finite budget.
+    /// This method does not acknowledge the PIC: EOI belongs to the interrupt
+    /// controller/dispatcher layer, outside this input driver.
+    pub fn drain_controller(
+        &mut self,
+        controller: &Ps2Controller,
+        budget: usize,
+    ) -> Result<usize, Ps2Error> {
+        let mut processed = 0;
+        while processed < budget {
+            let Some(byte) = controller.try_read_with_status()? else {
+                break;
+            };
+            self.feed_data_byte(byte);
+            processed += 1;
+        }
+        Ok(processed)
     }
 
     /// Process one byte read from i8042 data port 0x60. Error bytes are dropped.
