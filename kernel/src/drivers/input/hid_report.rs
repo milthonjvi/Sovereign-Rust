@@ -574,6 +574,14 @@ impl HidReportDecoder {
                     } else if field.application_page == 0x01
                         && (field.application_usage == 0x01 || field.application_usage == 0x02) {
                         pointer_button_seen = true;
+                    } else if !had_old || old != value {
+                        self.emit(InputEvent::HidUsage {
+                            device: self.device, usage_page: field.usage_page, usage,
+                            value, logical_min: field.logical_min, logical_max: field.logical_max,
+                            application_page: field.application_page,
+                            application_usage: field.application_usage,
+                            relative: field.is_relative(),
+                        }, producer, &mut stats);
                     }
                 } else if field.usage_page == 0x0C {
                     if usage == 0x0238 {
@@ -878,6 +886,23 @@ mod tests {
         decoder.publish_report(&map, &[0,0,4,0,0,0,0,0], &mut producer).unwrap();
         assert!(matches!(consumer.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(40) })));
         assert!(matches!(consumer.pop(), Some(InputEvent::HidKey { usage: 4, pressed: true, .. })));
+    }
+
+    #[test]
+    fn preserves_vendor_defined_hid_values() {
+        const VENDOR: &[u8] = &[
+            0x06,0x00,0xFF, 0x09,0x01, 0xA1,0x01,
+            0x15,0x00, 0x26,0xFF,0x00, 0x75,0x08, 0x95,0x01,
+            0x81,0x02, 0xC0,
+        ];
+        let map = HidReportMap::parse(VENDOR).unwrap();
+        let mut q = SpscQueue::<InputEvent, 4>::new();
+        let (mut producer, mut consumer) = q.split();
+        let mut decoder = HidReportDecoder::new(InputDeviceId(55));
+        decoder.publish_report(&map, &[0x7A], &mut producer).unwrap();
+        assert!(matches!(consumer.pop(), Some(InputEvent::HidUsage {
+            usage_page: 0xFF00, usage: 1, value: 0x7A, ..
+        })));
     }
 
     #[test]
