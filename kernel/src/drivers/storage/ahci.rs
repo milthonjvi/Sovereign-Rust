@@ -55,16 +55,34 @@ pub struct RegisterFisH2d {
 }
 const _:[();20]=[();core::mem::size_of::<RegisterFisH2d>()];
 impl RegisterFisH2d {
-    pub fn read_dma_ext(lba:u64,sectors:u16)->Result<Self,AhciError>{Self::lba48(0x25,lba,sectors)}
-    pub fn write_dma_ext(lba:u64,sectors:u16)->Result<Self,AhciError>{Self::lba48(0x35,lba,sectors)}
-    fn lba48(command:u8,lba:u64,sectors:u16)->Result<Self,AhciError>{
-        if sectors==0 || lba >= (1u64<<48) || lba.checked_add(sectors as u64).filter(|end|*end <= (1u64<<48)).is_none(){
+    pub fn read_dma_ext(lba:u64,sectors:u32)->Result<Self,AhciError>{Self::lba48(0x25,lba,sectors)}
+    pub fn write_dma_ext(lba:u64,sectors:u32)->Result<Self,AhciError>{Self::lba48(0x35,lba,sectors)}
+    fn lba48(command:u8,lba:u64,sectors:u32)->Result<Self,AhciError>{
+        if sectors==0 || sectors>65_536 || lba >= (1u64<<48) || lba.checked_add(sectors as u64).filter(|end|*end <= (1u64<<48)).is_none(){
             return Err(AhciError::InvalidTransfer);
         }
         Ok(Self{fis_type:0x27,flags:0x80,command,feature_low:0,
             lba0:lba as u8,lba1:(lba>>8) as u8,lba2:(lba>>16) as u8,device:1<<6,
             lba3:(lba>>24) as u8,lba4:(lba>>32) as u8,lba5:(lba>>40) as u8,
             feature_high:0,count_low:sectors as u8,count_high:(sectors>>8) as u8,
+            icc:0,control:0,reserved:[0;4]})
+    }
+    }
+    pub fn read_fpdma_queued(lba:u64,sectors:u32,tag:u8)->Result<Self,AhciError>{
+        Self::ncq(0x60,lba,sectors,tag)
+    }
+    pub fn write_fpdma_queued(lba:u64,sectors:u32,tag:u8)->Result<Self,AhciError>{
+        Self::ncq(0x61,lba,sectors,tag)
+    }
+    fn ncq(command:u8,lba:u64,sectors:u32,tag:u8)->Result<Self,AhciError>{
+        if sectors==0 || sectors>65_536 || tag>31 || lba >= (1u64<<48)
+            || lba.checked_add(sectors as u64).filter(|end|*end <= (1u64<<48)).is_none(){
+            return Err(AhciError::InvalidTransfer);
+        }
+        Ok(Self{fis_type:0x27,flags:0x80,command,feature_low:sectors as u8,
+            lba0:lba as u8,lba1:(lba>>8) as u8,lba2:(lba>>16) as u8,device:1<<6,
+            lba3:(lba>>24) as u8,lba4:(lba>>32) as u8,lba5:(lba>>40) as u8,
+            feature_high:(sectors>>8) as u8,count_low:tag<<3,count_high:0,
             icc:0,control:0,reserved:[0;4]})
     }
 }
