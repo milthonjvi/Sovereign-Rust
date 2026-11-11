@@ -9,6 +9,7 @@ pub mod timer_queue;
 pub mod periodic;
 pub mod hpet_clock;
 pub mod pit_clock;
+pub mod pit_service;
 pub mod tsc_clock;
 pub mod service;
 pub mod interrupt;
@@ -20,6 +21,7 @@ pub use timer_queue::{TimerEvent, TimerId, TimerQueue, TimerQueueError};
 pub use periodic::{PeriodicExpiration, PeriodicMode, PeriodicTimer};
 pub use hpet_clock::{hpet_frequency_hz, HpetClockSource};
 pub use pit_clock::PitClockSource;
+pub use pit_service::{PitTimerService, PitTimerServiceError};
 pub use tsc_clock::{monotonic_deadline_to_tsc, TscClockSource};
 pub use service::{TimerService, TimerServiceError};
 
