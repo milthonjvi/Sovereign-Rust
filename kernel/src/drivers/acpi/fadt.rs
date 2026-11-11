@@ -12,6 +12,9 @@ const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
 pub struct Fadt {
     /// FADT revision from the common SDT header.
     pub revision: u8,
+    /// Legacy interrupt model byte at offset 44. ACPI 2.0 reserved this field,
+    /// while permitting zero and legacy value one for compatibility.
+    pub legacy_int_model: u8,
     pub firmware_ctrl: u32,
     pub dsdt: u32,
     pub preferred_power_management_profile: u8,
@@ -128,6 +131,7 @@ impl Fadt {
 
         Ok(Self {
             revision: table.header.revision,
+            legacy_int_model: b[44],
             firmware_ctrl: read_u32(b, 36)?,
             dsdt: read_u32(b, 40)?,
             preferred_power_management_profile: b[45],
@@ -180,6 +184,18 @@ impl Fadt {
     pub fn dsdt_address(&self) -> u64 {
         self.x_dsdt.filter(|address| *address != 0)
             .unwrap_or(self.dsdt as u64)
+    }
+
+    /// Validate legacy interrupt-model and preferred power-profile encodings.
+    ///
+    /// Offset 44 accepts zero (reserved) or one (the ACPI 1.0-compatible
+    /// legacy interrupt model). Preferred_PM_Profile values above 8 are
+    /// reserved by ACPI 6.5.
+    pub fn validate_firmware_metadata(&self) -> Result<(), AcpiError> {
+        if self.legacy_int_model > 1 || self.preferred_power_management_profile > 8 {
+            return Err(AcpiError::MalformedTable);
+        }
+        Ok(())
     }
 
     /// Validate the FADT fixed-register block lengths from ACPI 6.5 §5.2.9.
@@ -1185,6 +1201,33 @@ mod tests {
         assert_eq!(fadt.legacy_pm_registers.pm_timer, 0x114);
         assert_eq!(fadt.legacy_pm_registers.gpe0, 0x118);
         assert_eq!(fadt.legacy_pm_registers.gpe1, 0x11C);
+    }
+
+    #[test]
+    fn validates_legacy_interrupt_model_and_preferred_power_profile() {
+        let mut bytes = make_fadt(116, 0, None, None);
+        bytes[44] = 0;
+        bytes[45] = 8;
+        bytes[9] = 0;
+        bytes[9] = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert_eq!(fadt.validate_firmware_metadata(), Ok(()));
+
+        bytes[44] = 1;
+        bytes[45] = 0;
+        bytes[9] = 0;
+        bytes[9] = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&bytes).unwrap();
+        assert_eq!(fadt.validate_firmware_metadata(), Ok(()));
+
+        for (legacy_model, profile) in [(2u8, 0u8), (0, 9)] {
+            bytes[44] = legacy_model;
+            bytes[45] = profile;
+            bytes[9] = 0;
+            bytes[9] = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+            let fadt = Fadt::parse(&bytes).unwrap();
+            assert_eq!(fadt.validate_firmware_metadata(), Err(AcpiError::MalformedTable));
+        }
     }
 
     #[test]
