@@ -91,35 +91,35 @@ const _: [(); DESCRIPTOR_SIZE] = [(); size_of::<RxDescriptor>()];
 const _: [(); DESCRIPTOR_SIZE] = [(); size_of::<TxDescriptor>()];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RingConfig { pub physical_base: u64, pub byte_length: u32, pub descriptor_count: u16 }
+pub struct RingConfig { pub dma_base: u64, pub byte_length: u32, pub descriptor_count: u16 }
 
 impl RingConfig {
     /// Validate a legacy descriptor ring before programming RDBA/TDBA registers.
-    /// The DMA allocator must guarantee that the returned physical range remains
+    /// The DMA allocator must guarantee that the returned device-visible range remains
     /// pinned and device-accessible for the entire lifetime of the ring.
-    pub fn new(physical_base: u64, descriptor_count: usize) -> Result<Self, E1000Error> {
+    pub fn new(dma_base: u64, descriptor_count: usize) -> Result<Self, E1000Error> {
         if descriptor_count < 8 || descriptor_count > u16::MAX as usize || !descriptor_count.is_power_of_two() {
             return Err(E1000Error::InvalidRingSize);
         }
-        if physical_base == 0 {
+        if dma_base == 0 {
             return Err(E1000Error::NullDmaAddress);
         }
-        if physical_base % DESCRIPTOR_SIZE as u64 != 0 {
+        if dma_base % DESCRIPTOR_SIZE as u64 != 0 {
             return Err(E1000Error::MisalignedDmaAddress);
         }
         let byte_length = descriptor_count.checked_mul(DESCRIPTOR_SIZE)
             .and_then(|n| u32::try_from(n).ok()).ok_or(E1000Error::InvalidRingSize)?;
-        physical_base.checked_add(byte_length as u64)
+        dma_base.checked_add(byte_length as u64)
             .ok_or(E1000Error::DmaAddressTooWide)?;
         if byte_length % DESCRIPTOR_SIZE as u32 != 0 {
             return Err(E1000Error::InvalidRingSize);
         }
-        Ok(Self { physical_base, byte_length, descriptor_count: descriptor_count as u16 })
+        Ok(Self { dma_base, byte_length, descriptor_count: descriptor_count as u16 })
     }
 
     /// E1000 legacy ring registers accept a 64-bit base split across two registers.
     pub const fn base_registers(self) -> (u32, u32) {
-        (self.physical_base as u32, (self.physical_base >> 32) as u32)
+        (self.dma_base as u32, (self.dma_base >> 32) as u32)
     }
 }
 
