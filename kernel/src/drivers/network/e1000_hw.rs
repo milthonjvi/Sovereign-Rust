@@ -61,6 +61,29 @@ pub enum E1000InitError<E> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum E1000ResetError<E> {
+    Register(E),
+    Timeout,
+}
+
+/// Mask interrupts and reset the MAC/DMA engines, waiting for the self-clearing
+/// reset bit before the caller releases or reprograms DMA-visible memory.
+pub fn reset<R: E1000Registers>(registers: &mut R) -> Result<(), E1000ResetError<R::Error>> {
+    registers.write32(REG_IMC, u32::MAX).map_err(E1000ResetError::Register)?;
+    let control = registers.read32(REG_CTRL).map_err(E1000ResetError::Register)?;
+    registers.write32(REG_CTRL, control | CTRL_RST).map_err(E1000ResetError::Register)?;
+
+    for _ in 0..RESET_POLL_LIMIT {
+        let value = registers.read32(REG_CTRL).map_err(E1000ResetError::Register)?;
+        if value & CTRL_RST == 0 {
+            return Ok(());
+        }
+        core::hint::spin_loop();
+    }
+    Err(E1000ResetError::Timeout)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct E1000QueueConfig {
     pub rx: RingConfig,
     pub tx: RingConfig,
@@ -128,25 +151,13 @@ pub unsafe fn initialize<R: E1000Registers>(
         return Err(E1000InitError::InvalidDescriptorBuffers);
     }
 
-    registers.write32(REG_IMC, u32::MAX).map_err(E1000InitError::Register)?;
-    registers.write32(REG_RCTL, 0).map_err(E1000InitError::Register)?;
-    registers.write32(REG_TCTL, 0).map_err(E1000InitError::Register)?;
-
-    let ctrl = registers.read32(REG_CTRL).map_err(E1000InitError::Register)?;
-    registers.write32(REG_CTRL, ctrl | CTRL_RST).map_err(E1000InitError::Register)?;
-
-    let mut reset_complete = false;
-    for _ in 0..RESET_POLL_LIMIT {
-        let value = registers.read32(REG_CTRL).map_err(E1000InitError::Register)?;
-        if value & CTRL_RST == 0 {
-            reset_complete = true;
-            break;
-        }
-        core::hint::spin_loop();
-    }
-    if !reset_complete {
-        return Err(E1000InitError::ResetTimeout);
-    }
+    // Use the global MAC reset to stop DMA engines. In particular, avoid
+    // clearing RCTL.EN while a packet is being received on affected 82574L
+    // revisions; Intel's specification update prescribes CTRL.RST instead.
+    reset(registers).map_err(|error| match error {
+        E1000ResetError::Register(error) => E1000InitError::Register(error),
+        E1000ResetError::Timeout => E1000InitError::ResetTimeout,
+    })?;
 
     // Hardware queues are stopped and reset; now initialize the DMA-visible rings.
     for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
