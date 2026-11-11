@@ -125,6 +125,10 @@ use super::*;
             &mut rx_buffers, &mut tx_buffers,
         ) }.unwrap();
         device.initialize(&supported_device()).unwrap();
+        assert_eq!(device.set_interrupt_throttle(500), Ok(()));
+        assert!(device.registers.writes.contains(&(REG_ITR, 500)));
+        assert_eq!(device.set_interrupt_throttle(0), Ok(()));
+        assert!(device.registers.writes.contains(&(REG_ITR, 0)));
 
         let first = [0x11u8; 64];
         let second = [0x22u8; 96];
