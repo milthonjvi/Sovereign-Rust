@@ -355,12 +355,12 @@ impl XhciController{
   io.write32(offset,power|changes)
  }
 
- pub fn read_port_status<I:RegisterIo>(&self,io:&I,port:u8)->Result<super::super::controller::PortStatus,XhciError>{
+ pub fn read_port_status<I:RegisterIo>(&self,io:&I,port:u8)->Result<super::controller::PortStatus,XhciError>{
   if self.state!=ControllerState::Running{return Err(XhciError::NotReady)}
   if port==0||port>self.capabilities.max_ports{return Err(XhciError::InvalidCapability)}
   let value=io.read32(self.op(OP_PORT_BASE)+(port as usize-1)*OP_PORT_STRIDE)?;
-  let speed=match (value>>10)&0xf{1=>Some(super::super::transfer::UsbSpeed::Full),2=>Some(super::super::transfer::UsbSpeed::Low),3=>Some(super::super::transfer::UsbSpeed::High),4=>Some(super::super::transfer::UsbSpeed::Super),5=>Some(super::super::transfer::UsbSpeed::SuperPlus),_=>None};
-  Ok(super::super::controller::PortStatus{connected:value&1!=0,enabled:value&2!=0,suspended:((value>>5)&0xf)==3,over_current:value&(1<<3)!=0,speed})
+  let speed=match (value>>10)&0xf{1=>Some(super::transfer::UsbSpeed::Full),2=>Some(super::transfer::UsbSpeed::Low),3=>Some(super::transfer::UsbSpeed::High),4=>Some(super::transfer::UsbSpeed::Super),5=>Some(super::transfer::UsbSpeed::SuperPlus),_=>None};
+  Ok(super::controller::PortStatus{connected:value&1!=0,enabled:value&2!=0,suspended:((value>>5)&0xf)==3,over_current:value&(1<<3)!=0,speed})
  }
 }
 
