@@ -4,6 +4,9 @@
 //! lifecycle are supplied by the corresponding kernel subsystems.
 use super::block::{BlockError, BlockGeometry};
 
+/// PxIS bits that indicate a failed or unrecoverable command path.
+pub const AHCI_PORT_ERROR_INTERRUPT_MASK: u32 = (1 << 30) | (1 << 29) | (1 << 28) | (1 << 27) | (1 << 26) | (1 << 24);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciError { InvalidCapabilities, InvalidPort, InvalidTransfer, AddressOverflow, InvalidAlignment, PrdtCapacity, UnsupportedAddressing, QueueFull, Timeout, PortNotRunning, SlotBusy, DeviceFault, InvalidPortMemory, RegisterIo }
 
@@ -329,7 +332,7 @@ pub fn command_complete<R:AhciRegisterIo>(
     if slot>=32{return Err(AhciError::InvalidPort);}
     let status=io.read32(port_register(base,0x10)?)?;
     let task_file=io.read32(port_register(base,0x20)?)?;
-    if status&(1<<30)!=0 || task_file&(1|(1<<5))!=0{return Err(AhciError::DeviceFault);}
+    if status&AHCI_PORT_ERROR_INTERRUPT_MASK!=0 || task_file&(1|(1<<5))!=0{return Err(AhciError::DeviceFault);}
     let bit=1u32<<slot;
     if io.read32(port_register(base,0x38)?)?&bit!=0{return Ok(false);}
     if ncq && io.read32(port_register(base,0x34)?)?&bit!=0{return Ok(false);}
@@ -371,6 +374,9 @@ mod port_tests {
         regs.0[0x34/4]=0;regs.0[0x38/4]=0;
         assert_eq!(command_complete(&mut regs,0,3,true),Ok(true));
         regs.0[0x20/4]=1<<5;
+        assert_eq!(command_complete(&mut regs,0,3,true),Err(AhciError::DeviceFault));
+        regs.0[0x20/4]=0;
+        regs.0[0x10/4]=1<<27;
         assert_eq!(command_complete(&mut regs,0,3,true),Err(AhciError::DeviceFault));
     }
     #[test]
@@ -482,7 +488,7 @@ impl AhciPortSnapshot {
     }
     pub const fn interface_fatal(self) -> bool { self.interrupt_status & (1 << 27) != 0 }
     pub const fn has_command_error(self) -> bool {
-        self.interrupt_status & ((1 << 30) | (1 << 29) | (1 << 28) | (1 << 27) | (1 << 26)) != 0
+        self.interrupt_status & AHCI_PORT_ERROR_INTERRUPT_MASK != 0
             || self.task_file_error() || self.task_file_device_fault()
     }
 }
