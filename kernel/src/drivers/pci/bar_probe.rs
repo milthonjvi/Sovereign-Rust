@@ -236,6 +236,22 @@ mod tests {
     }
 
     #[test]
+    fn sizes_below_one_megabyte_bar() {
+        let mut registers = [0u32; 64];
+        registers[1] = 0x0003;
+        registers[4] = 0x0008_1002;
+        let mock = MockConfig {
+            registers: RefCell::new(registers),
+            masks: [0x000f_f002, 0, 0, 0, 0, 0],
+        };
+        let mut sizes = [None; MAX_BAR_REGISTERS];
+        let count = unsafe { probe_bar_sizes(&mock, function(), &mut sizes) }.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(sizes[0], Some(BarSize { index: 0, size: 0x1000 }));
+        assert_eq!(mock.registers.borrow()[4], 0x0008_1002);
+    }
+
+    #[test]
     fn sizes_64_bit_bar_as_one_resource_and_restores_both_halves() {
         let mut registers = [0u32; 64];
         registers[1] = 0x0003;
