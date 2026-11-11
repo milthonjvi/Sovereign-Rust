@@ -194,6 +194,8 @@ pub struct UartRxStatistics {
     pub framing_errors: usize,
     pub break_interrupts: usize,
     pub fifo_errors: usize,
+    /// Bytes discarded because the software SPSC queue had no free slot.
+    pub software_queue_drops: usize,
 }
 
 struct AtomicRxStatistics {
@@ -202,6 +204,7 @@ struct AtomicRxStatistics {
     framing: AtomicUsize,
     breaks: AtomicUsize,
     fifo: AtomicUsize,
+    software_drops: AtomicUsize,
 }
 
 impl AtomicRxStatistics {
@@ -212,6 +215,7 @@ impl AtomicRxStatistics {
             framing: AtomicUsize::new(0),
             breaks: AtomicUsize::new(0),
             fifo: AtomicUsize::new(0),
+            software_drops: AtomicUsize::new(0),
         }
     }
 
@@ -222,8 +226,11 @@ impl AtomicRxStatistics {
             framing_errors: self.framing.load(Ordering::Relaxed),
             break_interrupts: self.breaks.load(Ordering::Relaxed),
             fifo_errors: self.fifo.load(Ordering::Relaxed),
+            software_queue_drops: self.software_drops.load(Ordering::Relaxed),
         }
     }
+
+    fn record_software_drop(&self) { self.software_drops.fetch_add(1, Ordering::Relaxed); }
 
     fn record_lsr(&self, status: u8) {
         if status & OVERRUN_ERROR != 0 { self.overrun.fetch_add(1, Ordering::Relaxed); }
@@ -610,6 +617,10 @@ fn drain_port(
                     drive_rts(base, false);
                 }
             }
+        } else {
+            // The hardware byte has already been read; account for the loss
+            // explicitly instead of silently conflating it with line errors.
+            stats.record_software_drop();
         }
     }
 }
@@ -892,6 +903,17 @@ mod tests {
         assert!(transmit_statistics(0x1234).is_none());
         assert!(receive_dropped_bytes(0x1234).is_none());
         assert!(receive_high_watermark(0x1234).is_none());
+    }
+
+
+    #[test]
+    fn receive_statistics_include_software_queue_drops() {
+        let stats = AtomicRxStatistics::new();
+        stats.record_software_drop();
+        stats.record_software_drop();
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.software_queue_drops, 2);
+        assert_eq!(snapshot.overrun_errors, 0);
     }
 
     #[test]
