@@ -13,6 +13,7 @@ pub const MEMORY_DESCRIPTOR_VERSION: u32 = 1;
 pub const BOOT_INFO_FLAG_FRAMEBUFFER_VALID: u64 = 1 << 0;
 pub const BOOT_INFO_FLAG_ACPI_VALID: u64 = 1 << 1;
 const MAX_MEMORY_DESCRIPTORS: u64 = 1_000_000;
+const MAX_PHYSICAL_ADDRESS: u64 = 1 << 52;
 
 static BOOT_INFO_READY: AtomicBool = AtomicBool::new(false);
 static mut BOOT_INFO: Option<SovereignBootInfo> = None;
@@ -184,6 +185,8 @@ impl SovereignBootInfo {
             || self.memory_map_physical == 0
             || self.memory_map_physical & 0xfff != 0
             || self.memory_map_physical.checked_add(self.memory_map_size).is_none()
+            || self.memory_map_physical >= MAX_PHYSICAL_ADDRESS
+            || self.memory_map_size > MAX_PHYSICAL_ADDRESS - self.memory_map_physical
         {
             return Err(SovereignBootError::InvalidMemoryMap);
         }
@@ -193,6 +196,8 @@ impl SovereignBootInfo {
             || self.kernel_virtual_base & 0xfff != 0 || self.kernel_image_size == 0
             || self.kernel_image_size & 0xfff != 0
             || self.kernel_physical_base.checked_add(self.kernel_image_size).is_none()
+            || self.kernel_physical_base >= MAX_PHYSICAL_ADDRESS
+            || self.kernel_image_size > MAX_PHYSICAL_ADDRESS - self.kernel_physical_base
             || !is_canonical(self.kernel_virtual_base) || !is_canonical(kernel_end - 1)
             || self.kernel_entry < self.kernel_virtual_base || self.kernel_entry >= kernel_end
             || !is_canonical(self.kernel_entry)
@@ -210,6 +215,8 @@ impl SovereignBootInfo {
             || (self.flags & BOOT_INFO_FLAG_FRAMEBUFFER_VALID != 0
                 && (self.framebuffer_physical == 0 || self.framebuffer_size == 0
                     || self.framebuffer_physical.checked_add(self.framebuffer_size).is_none()
+                    || self.framebuffer_physical >= MAX_PHYSICAL_ADDRESS
+                    || self.framebuffer_size > MAX_PHYSICAL_ADDRESS - self.framebuffer_physical
                     || self.framebuffer_width == 0 || self.framebuffer_height == 0
                     || self.framebuffer_pixels_per_scanline < self.framebuffer_width))
         {
