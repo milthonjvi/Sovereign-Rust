@@ -61,7 +61,10 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// mutate these rings or buffers for the lifetime of this adapter. The
     /// caller must successfully shut down the adapter before releasing any DMA
     /// mapping or dropping it; if shutdown fails, mappings must remain pinned
-    /// until the platform independently proves that the NIC is quiescent.
+    /// until the platform independently proves that the NIC is quiescent. If
+    /// this constructor rejects a device that was already started by
+    /// e1000_hw::initialize(), the caller must invoke e1000_hw::reset() before
+    /// releasing those mappings.
     pub unsafe fn new(
         registers: &'a mut R,
         rx_descriptors: &'a mut [RxDescriptor],
