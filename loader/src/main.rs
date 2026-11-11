@@ -215,7 +215,7 @@ pub extern "efiapi" fn efi_main(
     if gdt_base == 0 || gdt_limit < 0x0f {
         return EFI_COMPROMISED_DATA;
     }
-    if let Err(error) = map_identity_range_allow_existing(
+    if let Err(error) = map_identity_range(
         &mut page_tables,
         gdt_base,
         (gdt_limit as u64) + 1,
@@ -486,28 +486,6 @@ fn map_identity_range<M: PageTableMemory>(
     let rounded_end = align_page_up(end).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
     while page < rounded_end {
         tables.map_4k(page, page, permissions)?;
-        page = page.checked_add(0x1000).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
-    }
-    Ok(())
-}
-
-fn map_identity_range_allow_existing<M: PageTableMemory>(
-    tables: &mut PageTableBuilder<M>,
-    base: u64,
-    size: u64,
-    permissions: PagePermissions,
-) -> Result<(), PageTableError> {
-    if size == 0 {
-        return Err(PageTableError::MisalignedAddress);
-    }
-    let end = base.checked_add(size).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
-    let mut page = base & !0xfff;
-    let rounded_end = align_page_up(end).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
-    while page < rounded_end {
-        match tables.map_4k(page, page, permissions) {
-            Ok(()) | Err(PageTableError::AlreadyMapped) => {}
-            Err(error) => return Err(error),
-        }
         page = page.checked_add(0x1000).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
     }
     Ok(())
