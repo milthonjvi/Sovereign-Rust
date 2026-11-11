@@ -273,9 +273,48 @@ impl Fadt {
         if self.pm_hardware_mode() == PmHardwareMode::HardwareReduced {
             return Ok(());
         }
-        self.register_block_lengths.validate()?;
-        if let Some(registers) = self.extended_pm_registers {
-            registers.validate_against_lengths(self.register_block_lengths)?;
+        let lengths = self.register_block_lengths;
+        let legacy = self.legacy_pm_registers;
+        let extended = self.extended_pm_registers;
+        lengths.validate()?;
+        if let Some(registers) = extended {
+            registers.validate_against_lengths(lengths)?;
+        }
+
+        let present = |gas: Option<GenericAddress>, address: u32| {
+            gas.map(|descriptor| descriptor.is_present()).unwrap_or(false) || address != 0
+        };
+        // PM1a event and control blocks are mandatory in the full fixed-
+        // hardware model. PM1b remains optional.
+        if lengths.pm1_event < 4
+            || lengths.pm1_control < 2
+            || !present(extended.map(|x| x.pm1a_event), legacy.pm1a_event)
+            || !present(extended.map(|x| x.pm1a_control), legacy.pm1a_control)
+        {
+            return Err(AcpiError::InvalidGas);
+        }
+        if (legacy.pm1b_event != 0 || present(extended.map(|x| x.pm1b_event), 0))
+            && lengths.pm1_event == 0
+        {
+            return Err(AcpiError::InvalidLength);
+        }
+        if (legacy.pm1b_control != 0 || present(extended.map(|x| x.pm1b_control), 0))
+            && lengths.pm1_control == 0
+        {
+            return Err(AcpiError::InvalidLength);
+        }
+
+        // Optional blocks must be described consistently: a nonzero length
+        // requires an address, and a legacy address cannot have zero length.
+        for (gas, address, length) in [
+            (extended.map(|x| x.pm2_control), legacy.pm2_control, lengths.pm2_control),
+            (extended.map(|x| x.pm_timer), legacy.pm_timer, lengths.pm_timer),
+            (extended.map(|x| x.gpe0), legacy.gpe0, lengths.gpe0),
+            (extended.map(|x| x.gpe1), legacy.gpe1, lengths.gpe1),
+        ] {
+            if present(gas, address) != (length != 0) {
+                return Err(AcpiError::InvalidLength);
+            }
         }
         Ok(())
     }
@@ -848,8 +887,42 @@ mod tests {
     }
 
     #[test]
+    fn requires_pm1a_event_and_control_in_full_hardware_mode() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x100u32.to_le_bytes());
+        b[88] = 4;
+        b[64..68].copy_from_slice(&0x104u32.to_le_bytes());
+        b[89] = 2;
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let valid = Fadt::parse(&b).unwrap();
+        assert_eq!(valid.validate_pm_registers(), Ok(()));
+
+        b[56..60].fill(0);
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let missing_event = Fadt::parse(&b).unwrap();
+        assert_eq!(missing_event.validate_pm_registers(), Err(AcpiError::InvalidGas));
+    }
+
+    #[test]
+    fn requires_optional_pm_block_addresses_to_match_lengths() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x100u32.to_le_bytes());
+        b[88] = 4;
+        b[64..68].copy_from_slice(&0x104u32.to_le_bytes());
+        b[89] = 2;
+        b[90] = 1; // PM2 length without PM2 address.
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validate_pm_registers(), Err(AcpiError::InvalidLength));
+    }
+
+    #[test]
     fn resolves_extended_pm_gas_before_legacy_address() {
         let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x400u32.to_le_bytes()); b[88] = 4;
         b[64..68].copy_from_slice(&0x404u32.to_le_bytes()); b[89] = 2;
         b[172] = 0; b[173] = 16; b[175] = GenericAddress::ACCESS_WORD;
         b[176..184].copy_from_slice(&0xFEE0_1000u64.to_le_bytes());
@@ -863,6 +936,7 @@ mod tests {
     #[test]
     fn resolves_legacy_pm_when_extended_gas_is_absent() {
         let mut b = make_fadt(244, 0, None, None);
+        b[56..60].copy_from_slice(&0x400u32.to_le_bytes()); b[88] = 4;
         b[64..68].copy_from_slice(&0x404u32.to_le_bytes()); b[89] = 2;
         b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
         let map = Fadt::parse(&b).unwrap().resolve_pm_register_map().unwrap();
