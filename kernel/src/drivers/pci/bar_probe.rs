@@ -177,7 +177,7 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
 mod tests {
     use super::*;
     use core::cell::RefCell;
-    use super::super::config::{PciAddress, PciIdentity};
+    use super::super::config::PciIdentity;
 
     struct MockConfig {
         registers: RefCell<[u32; 64]>,
