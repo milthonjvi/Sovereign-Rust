@@ -27,6 +27,8 @@ const RX_INTERRUPT_ENABLE: u8 = 1;
 const LINE_STATUS_INTERRUPT_ENABLE: u8 = 1 << 2;
 const RX_IRQ_ENABLES: u8 = RX_INTERRUPT_ENABLE | LINE_STATUS_INTERRUPT_ENABLE;
 const THRE_INTERRUPT_ENABLE: u8 = 1 << 1;
+const MODEM_STATUS_INTERRUPT_ENABLE: u8 = 1 << 3;
+const CTS_INPUT: u8 = 1 << 4;
 const MAX_TX_PER_IRQ: usize = 64;
 const MAX_IRQ_CAUSES: usize = 32;
 const OVERRUN_ERROR: u8 = 1 << 1;
@@ -61,6 +63,10 @@ static COM1_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
 static COM2_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
 static COM3_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
 static COM4_TX_STATS: AtomicTxStatistics = AtomicTxStatistics::new();
+static COM1_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
+static COM2_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
+static COM3_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
+static COM4_CTS_FLOW: AtomicU8 = AtomicU8::new(0);
 
 /// Interrupt-cause counters for one UART port.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -209,6 +215,7 @@ struct PortBinding {
     tx_depth: &'static AtomicUsize,
     tx_stats: &'static AtomicTxStatistics,
     irq_stats: &'static AtomicIrqStatistics,
+    cts_flow: &'static AtomicU8,
 }
 
 fn binding(base: u16) -> Option<PortBinding> {
@@ -216,22 +223,22 @@ fn binding(base: u16) -> Option<PortBinding> {
         0x3F8 => Some(PortBinding {
             irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM1_RX,
-            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH, tx_stats: &COM1_TX_STATS, irq_stats: &COM1_IRQ_STATS,
+            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH, tx_stats: &COM1_TX_STATS, irq_stats: &COM1_IRQ_STATS, cts_flow: &COM1_CTS_FLOW,
         }),
         0x2F8 => Some(PortBinding {
             irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM2_RX,
-            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH, tx_stats: &COM2_TX_STATS, irq_stats: &COM2_IRQ_STATS,
+            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH, tx_stats: &COM2_TX_STATS, irq_stats: &COM2_IRQ_STATS, cts_flow: &COM2_CTS_FLOW,
         }),
         0x3E8 => Some(PortBinding {
             irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM3_RX,
-            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH, tx_stats: &COM3_TX_STATS, irq_stats: &COM3_IRQ_STATS,
+            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH, tx_stats: &COM3_TX_STATS, irq_stats: &COM3_IRQ_STATS, cts_flow: &COM3_CTS_FLOW,
         }),
         0x2E8 => Some(PortBinding {
             irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM4_RX,
-            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH, tx_stats: &COM4_TX_STATS, irq_stats: &COM4_IRQ_STATS,
+            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH, tx_stats: &COM4_TX_STATS, irq_stats: &COM4_IRQ_STATS, cts_flow: &COM4_CTS_FLOW,
         }),
         _ => None,
     }
@@ -270,6 +277,7 @@ pub unsafe fn attach_interrupts(
             })?;
     }
 
+    port.cts_flow.store(0, Ordering::Release);
     ATTACHED.fetch_or(port.bit, Ordering::Release);
 
     if let Err(error) = uart.enable_receive_interrupt() {
@@ -323,6 +331,7 @@ pub unsafe fn detach_interrupts(uart: &mut Uart16550) -> Result<(), UartIrqError
 
     uart.disable_interrupts().map_err(UartIrqError::Uart)?;
     ATTACHED.fetch_and(!port.bit, Ordering::AcqRel);
+    port.cts_flow.store(0, Ordering::Release);
 
     if last_on_line {
         // SAFETY: Source is masked and IF is clear; no callback is in flight.
@@ -348,13 +357,58 @@ pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, Ua
     // SAFETY: Caller guarantees the SPSC producer contract.
     let accepted = unsafe { port.tx_queue.push_slice(bytes) };
     if accepted != 0 {
-        // Preserve RX-ready while arming THRE. IF is clear per API contract.
+        // CTS mode also keeps modem-status IRQ enabled so a later CTS assertion
+        // can resume the queued bytes without polling.
+        let cts_enabled = port.cts_flow.load(Ordering::Acquire) != 0;
+        // SAFETY: Caller owns the UART and IF is clear by this API contract.
+        let modem = unsafe { io::in8(uart.base_port() + MODEM_STATUS) };
+        let mut ier = RX_IRQ_ENABLES;
+        if cts_enabled { ier |= MODEM_STATUS_INTERRUPT_ENABLE; }
+        if !cts_enabled || modem & CTS_INPUT != 0 {
+            ier |= THRE_INTERRUPT_ENABLE;
+        }
         // SAFETY: Exclusive UART ownership is held by the caller.
-        unsafe { io::out8(uart.base_port() + IER, RX_IRQ_ENABLES | THRE_INTERRUPT_ENABLE); }
+        unsafe { io::out8(uart.base_port() + IER, ier); }
     }
     port.tx_stats.queued.fetch_add(accepted, Ordering::Relaxed);
     if accepted < bytes.len() { port.tx_stats.full.fetch_add(1, Ordering::Relaxed); }
     Ok(accepted)
+}
+
+/// Enables or disables hardware CTS-gated asynchronous transmission.
+///
+/// When enabled, THRE interrupts are suspended while CTS is deasserted and
+/// resumed by the modem-status interrupt when CTS becomes asserted. RX and
+/// line-status interrupts remain active.
+///
+/// # Safety
+/// Call with IF clear on the CPU servicing this UART's PIC IRQ. The caller must
+/// serialize this operation with the single TX producer and retain exclusive
+/// ownership of the UART registers.
+pub unsafe fn set_cts_flow_control(
+    uart: &Uart16550,
+    enabled: bool,
+) -> Result<(), UartIrqError> {
+    uart.ensure_initialized().map_err(UartIrqError::Uart)?;
+    let port = binding(uart.base_port()).ok_or(UartIrqError::UnsupportedPort)?;
+    if ATTACHED.load(Ordering::Acquire) & port.bit == 0 {
+        return Err(UartIrqError::NotAttached);
+    }
+
+    port.cts_flow.store(enabled as u8, Ordering::Release);
+    // Reading MSR acknowledges any stale modem delta before enabling its IRQ.
+    // SAFETY: Caller owns this UART and executes with IF clear.
+    let modem = unsafe { io::in8(uart.base_port() + MODEM_STATUS) };
+    let mut ier = RX_IRQ_ENABLES;
+    if enabled {
+        ier |= MODEM_STATUS_INTERRUPT_ENABLE;
+    }
+    if !port.tx_queue.is_empty() && (!enabled || modem & CTS_INPUT != 0) {
+        ier |= THRE_INTERRUPT_ENABLE;
+    }
+    // SAFETY: Caller owns the UART and serializes access to IER.
+    unsafe { io::out8(uart.base_port() + IER, ier); }
+    Ok(())
 }
 
 /// Returns the number of RX bytes dropped because the software queue was full.
@@ -413,9 +467,20 @@ fn service_transmit(
     queue: &'static UartTxBuffer,
     depth: &'static AtomicUsize,
     stats: &'static AtomicTxStatistics,
+    cts_flow: &'static AtomicU8,
 ) {
+    // A deasserted CTS must stop the TX engine and leave modem IRQ armed;
+    // otherwise a level-triggered THRE source would continuously retrigger.
+    if cts_flow.load(Ordering::Acquire) != 0 {
+        // SAFETY: This shared handler owns the attached UART's registers.
+        if unsafe { io::in8(base + MODEM_STATUS) } & CTS_INPUT == 0 {
+            // SAFETY: Preserve RX and modem-status interrupts, suppress THRE.
+            unsafe { io::out8(base + IER, RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE); }
+            return;
+        }
+    }
     // THRE means the transmit FIFO can accept one hardware-sized burst.
-    // SAFETY: This shared handler owns the attached UART's registers.
+    // SAFETY: This shared handler owns the UART's registers.
     if unsafe { io::in8(base + LSR) } & THR_EMPTY == 0 {
         return;
     }
@@ -432,7 +497,11 @@ fn service_transmit(
     if queue.is_empty() {
         // Disable THRE only; RX-ready and line-status IRQs remain enabled.
         // SAFETY: RX_IRQ_ENABLES preserves both receive interrupt sources.
-        unsafe { io::out8(base + IER, RX_IRQ_ENABLES); }
+        let modem_irq = if cts_flow.load(Ordering::Acquire) != 0 {
+            MODEM_STATUS_INTERRUPT_ENABLE
+        } else { 0 };
+        // SAFETY: Preserve RX and optional CTS-change interrupts.
+        unsafe { io::out8(base + IER, RX_IRQ_ENABLES | modem_irq); }
     }
 }
 
@@ -444,6 +513,7 @@ fn service_port(
     tx_depth: &'static AtomicUsize,
     tx_stats: &'static AtomicTxStatistics,
     irq_stats: &'static AtomicIrqStatistics,
+    cts_flow: &'static AtomicU8,
 ) {
     // A shared IRQ may represent several UART causes. IIR reports the highest
     // priority pending cause; acknowledge it and re-read until quiescent.
@@ -471,14 +541,23 @@ fn service_port(
             }
             IIR_TRANSMIT_EMPTY => {
                 irq_stats.transmit_empty.fetch_add(1, Ordering::Relaxed);
-                service_transmit(base, tx, tx_depth, tx_stats);
+                service_transmit(base, tx, tx_depth, tx_stats, cts_flow);
             }
             IIR_MODEM_STATUS => {
                 irq_stats.modem_status.fetch_add(1, Ordering::Relaxed);
-                // Reading MSR clears delta-CTS/DSR/RI/DCD and deasserts this
-                // source if a UART or firmware left modem IRQ enabled.
+                // Reading MSR clears delta-CTS/DSR/RI/DCD and deasserts this source.
+                // If CTS rose, resume queued transmission; if it fell, keep THRE
+                // disabled until the next modem-status transition.
                 // SAFETY: The handler exclusively owns the attached UART.
-                let _ = unsafe { io::in8(base + MODEM_STATUS) };
+                let modem = unsafe { io::in8(base + MODEM_STATUS) };
+                if cts_flow.load(Ordering::Acquire) != 0 {
+                    let mut ier = RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE;
+                    if modem & CTS_INPUT != 0 && !tx.is_empty() {
+                        ier |= THRE_INTERRUPT_ENABLE;
+                    }
+                    // SAFETY: Shared handler has exclusive register access.
+                    unsafe { io::out8(base + IER, ier); }
+                }
             }
             _ => {
                 irq_stats.unknown_causes.fetch_add(1, Ordering::Relaxed);
@@ -502,20 +581,20 @@ fn service_port(
 extern "C" fn irq3_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
     if attached & COM2_BIT != 0 {
-        service_port(0x2F8, &COM2_RX, &COM2_STATS, &COM2_TX, &COM2_TX_DEPTH, &COM2_TX_STATS, &COM2_IRQ_STATS);
+        service_port(0x2F8, &COM2_RX, &COM2_STATS, &COM2_TX, &COM2_TX_DEPTH, &COM2_TX_STATS, &COM2_IRQ_STATS, &COM2_CTS_FLOW);
     }
     if attached & COM4_BIT != 0 {
-        service_port(0x2E8, &COM4_RX, &COM4_STATS, &COM4_TX, &COM4_TX_DEPTH, &COM4_TX_STATS, &COM4_IRQ_STATS);
+        service_port(0x2E8, &COM4_RX, &COM4_STATS, &COM4_TX, &COM4_TX_DEPTH, &COM4_TX_STATS, &COM4_IRQ_STATS, &COM4_CTS_FLOW);
     }
 }
 
 extern "C" fn irq4_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
     if attached & COM1_BIT != 0 {
-        service_port(0x3F8, &COM1_RX, &COM1_STATS, &COM1_TX, &COM1_TX_DEPTH, &COM1_TX_STATS, &COM1_IRQ_STATS);
+        service_port(0x3F8, &COM1_RX, &COM1_STATS, &COM1_TX, &COM1_TX_DEPTH, &COM1_TX_STATS, &COM1_IRQ_STATS, &COM1_CTS_FLOW);
     }
     if attached & COM3_BIT != 0 {
-        service_port(0x3E8, &COM3_RX, &COM3_STATS, &COM3_TX, &COM3_TX_DEPTH, &COM3_TX_STATS, &COM3_IRQ_STATS);
+        service_port(0x3E8, &COM3_RX, &COM3_STATS, &COM3_TX, &COM3_TX_DEPTH, &COM3_TX_STATS, &COM3_IRQ_STATS, &COM3_CTS_FLOW);
     }
 }
 
@@ -581,6 +660,20 @@ mod tests {
         assert_eq!(IIR_RECEIVE_TIMEOUT & 0x0E, 0x0C);
         assert_eq!(IIR_TRANSMIT_EMPTY & 0x0E, 0x02);
         assert_eq!(IIR_MODEM_STATUS & 0x0E, 0x00);
+    }
+
+    #[test]
+    fn cts_flow_control_masks_preserve_receive_sources() {
+        assert_eq!(RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE, 0b0000_1101);
+        assert_eq!(RX_IRQ_ENABLES | MODEM_STATUS_INTERRUPT_ENABLE | THRE_INTERRUPT_ENABLE, 0b0000_1111);
+        assert_eq!(MODEM_STATUS_INTERRUPT_ENABLE & RX_IRQ_ENABLES, 0);
+    }
+
+    #[test]
+    fn cts_input_uses_modem_status_bit_four() {
+        assert_eq!(CTS_INPUT, 0x10);
+        assert_eq!(0x10 & CTS_INPUT, CTS_INPUT);
+        assert_eq!(0x00 & CTS_INPUT, 0);
     }
 
     #[test]
