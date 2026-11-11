@@ -90,10 +90,10 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             .map_err(|_| E1000DeviceError::InvalidBufferPool)?;
         for ring in [queues.rx, queues.tx] {
             DmaBuffer::validate_disjoint_from_range(
-                rx_buffers, ring.physical_base, ring.byte_length as usize,
+                rx_buffers, ring.dma_base, ring.byte_length as usize,
             ).map_err(|_| E1000DeviceError::OverlappingDmaPools)?;
             DmaBuffer::validate_disjoint_from_range(
-                tx_buffers, ring.physical_base, ring.byte_length as usize,
+                tx_buffers, ring.dma_base, ring.byte_length as usize,
             ).map_err(|_| E1000DeviceError::OverlappingDmaPools)?;
         }
         for (descriptor, buffer) in rx_descriptors.iter().zip(rx_buffers.iter()) {
