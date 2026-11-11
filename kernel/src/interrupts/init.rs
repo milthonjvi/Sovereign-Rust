@@ -90,3 +90,94 @@ pub fn is_initialized() -> bool {
 pub fn is_failed() -> bool {
     STATE.load(Ordering::Acquire) == STATE_FAILED
 }
+
+/// Register a legacy PIC IRQ callback while keeping its source masked.
+///
+/// The callback receives the remapped vector (0x20..=0x2F), must be bounded,
+/// nonblocking, must not unwind, and must call `end_legacy_irq` for genuine
+/// interrupts before returning.
+///
+/// # Safety
+/// Call with IF clear and while no other CPU or code path mutates the PIC or
+/// dispatch table. The callback must remain valid for the kernel lifetime.
+pub unsafe fn register_legacy_irq(
+    irq_line: u8,
+    handler: super::dispatch::InterruptHandler,
+) -> Result<(), LegacyIrqError> {
+    if !is_initialized() {
+        return Err(LegacyIrqError::NotInitialized);
+    }
+    if irq_line >= 16 {
+        return Err(LegacyIrqError::InvalidIrq);
+    }
+
+    // SAFETY: Caller serializes PIC state changes with IF clear.
+    let pic = unsafe { &mut *core::ptr::addr_of_mut!(LEGACY_PIC) };
+    pic.mask(irq_line).map_err(|_| LegacyIrqError::PicFailure)?;
+    let vector = 0x20 + irq_line;
+    super::dispatch::register(vector, handler)
+        .map_err(|_| LegacyIrqError::HandlerAlreadyRegistered)
+}
+
+/// Unmask a previously registered legacy PIC IRQ line.
+///
+/// # Safety
+/// Call with IF clear while the target device is fully initialized and its
+/// handler is registered. The PIC must not be accessed concurrently elsewhere.
+pub unsafe fn unmask_legacy_irq(irq_line: u8) -> Result<(), LegacyIrqError> {
+    if !is_initialized() {
+        return Err(LegacyIrqError::NotInitialized);
+    }
+    if irq_line >= 16 {
+        return Err(LegacyIrqError::InvalidIrq);
+    }
+    let vector = 0x20 + irq_line;
+    if !super::dispatch::is_registered(vector) {
+        return Err(LegacyIrqError::HandlerNotRegistered);
+    }
+
+    // SAFETY: Caller serializes PIC state changes with IF clear.
+    let pic = unsafe { &mut *core::ptr::addr_of_mut!(LEGACY_PIC) };
+    pic.unmask(irq_line).map_err(|_| LegacyIrqError::PicFailure)
+}
+
+/// Mask a legacy PIC IRQ line.
+///
+/// # Safety
+/// Call with IF clear and without concurrent PIC access.
+pub unsafe fn mask_legacy_irq(irq_line: u8) -> Result<(), LegacyIrqError> {
+    if !is_initialized() {
+        return Err(LegacyIrqError::NotInitialized);
+    }
+    if irq_line >= 16 {
+        return Err(LegacyIrqError::InvalidIrq);
+    }
+    // SAFETY: Caller serializes PIC state changes with IF clear.
+    let pic = unsafe { &mut *core::ptr::addr_of_mut!(LEGACY_PIC) };
+    pic.mask(irq_line).map_err(|_| LegacyIrqError::PicFailure)
+}
+
+/// Send the 8259 EOI from a registered IRQ callback.
+///
+/// # Safety
+/// Must be called exactly once for each genuine, acknowledged IRQ callback,
+/// from the callback running on the BSP. Spurious IRQ7/IRQ15 are filtered by
+/// the common dispatcher and must not call this function.
+pub unsafe fn end_legacy_irq(irq_line: u8) -> Result<(), LegacyIrqError> {
+    if !is_initialized() {
+        return Err(LegacyIrqError::NotInitialized);
+    }
+    // SAFETY: IRQ callbacks execute on the BSP and the PIC was initialized.
+    let pic = unsafe { &*core::ptr::addr_of!(LEGACY_PIC) };
+    pic.end_of_interrupt(irq_line).map_err(|_| LegacyIrqError::PicFailure)
+}
+
+/// Errors from the legacy PIC registration and control API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyIrqError {
+    NotInitialized,
+    InvalidIrq,
+    HandlerAlreadyRegistered,
+    HandlerNotRegistered,
+    PicFailure,
+}
