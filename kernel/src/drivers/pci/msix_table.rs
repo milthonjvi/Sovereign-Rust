@@ -245,6 +245,20 @@ mod tests {
     }
 
     #[test]
+    fn reads_pending_bit_array_across_multiple_words() {
+        #[repr(align(8))]
+        struct PendingMemory([u64; 2]);
+        let mut memory = PendingMemory([0, 1]);
+        let cap = MsixCapability { table_size: 65, ..capability() };
+        let pba = unsafe {
+            MsixPendingBitArray::new(cap, memory.0.as_mut_ptr().cast::<u8>(), 16).unwrap()
+        };
+        assert_eq!(pba.is_pending(63), Ok(false));
+        assert_eq!(pba.is_pending(64), Ok(true));
+        assert_eq!(pba.is_pending(65), Err(MsixTableError::OutOfRange));
+    }
+
+    #[test]
     fn rejects_out_of_range_table_entries() {
         let mut memory = TableMemory([0; 4]);
         let table = unsafe {
