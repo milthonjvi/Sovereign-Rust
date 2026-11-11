@@ -37,7 +37,6 @@ pub enum Rtl8139Error {
     InvalidRingSize,
     InvalidDmaBuffer,
     InvalidReadCursor,
-    IncompletePacket,
     InvalidPacketLength,
     ReceiveError(u16),
     OutputTooSmall { required: usize },
@@ -211,12 +210,12 @@ mod tests {
         rx.buffer[RTL8139_MIN_RING_SIZE - 1] = 0;
         rx.buffer[0..2].copy_from_slice(&64u16.to_le_bytes());
         for i in 0..60 { rx.buffer[(i + 2) & (rx.ring_size - 1)] = i as u8; }
-        let packet = rx.peek(62).unwrap().unwrap();
+        let packet = rx.peek(66).unwrap().unwrap();
         let mut output = [0u8; 60];
         rx.copy_packet(packet, &mut output).unwrap();
         assert_eq!(output[0], 0);
         assert_eq!(output[59], 59);
-        assert_eq!(packet.next_cursor, 62);
+        assert_eq!(packet.next_cursor, 66);
     }
 
     #[test]
@@ -236,6 +235,27 @@ mod tests {
         rx.buffer[0..2].copy_from_slice(&RX_STATUS_ROK.to_le_bytes());
         rx.buffer[2..4].copy_from_slice(&2048u16.to_le_bytes());
         assert_eq!(rx.peek(68), Err(Rtl8139Error::InvalidPacketLength));
+    }
+
+    #[test]
+    fn incomplete_packet_is_not_exposed_to_the_consumer() {
+        let mut bytes = [0u8; RTL8139_MIN_RING_SIZE];
+        let mut rx = ring(&mut bytes);
+        rx.buffer[0..2].copy_from_slice(&RX_STATUS_ROK.to_le_bytes());
+        rx.buffer[2..4].copy_from_slice(&64u16.to_le_bytes());
+        assert_eq!(rx.peek(20).unwrap(), None);
+        assert_eq!(rx.cursor(), 0);
+    }
+
+    #[test]
+    fn stale_packet_token_cannot_advance_the_ring_twice() {
+        let mut bytes = [0u8; RTL8139_MIN_RING_SIZE];
+        let mut rx = ring(&mut bytes);
+        rx.buffer[0..2].copy_from_slice(&RX_STATUS_ROK.to_le_bytes());
+        rx.buffer[2..4].copy_from_slice(&64u16.to_le_bytes());
+        let packet = rx.peek(68).unwrap().unwrap();
+        rx.commit(packet).unwrap();
+        assert_eq!(rx.commit(packet), Err(Rtl8139Error::InvalidReadCursor));
     }
 
     #[test]
