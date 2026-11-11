@@ -105,7 +105,7 @@ pub fn consume_lfn_record(state: &mut FatLongName, raw: &[u8]) -> Result<Option<
         state.push_record(raw).map_err(|_| FatError::InvalidDirectoryEntry)?;
         return Ok(None);
     }
-    let entry = match FatDirEntry::parse(raw)? { Some(entry) => entry, None => { state.reset(); return Ok(None); } };
+    let entry = match FatDirEntry::parse_for_kind(raw, volume.bpb.kind)? { Some(entry) => entry, None => { state.reset(); return Ok(None); } };
     match state.finish(&entry.short_name) {
         Ok(Some((name, len))) => Ok(Some((name, len, entry))),
         Ok(None) => Ok(None),
@@ -207,7 +207,7 @@ where
                 let _ = state.push_record(raw);
                 continue;
             }
-            if let Some(entry) = FatDirEntry::parse(raw)? {
+            if let Some(entry) = FatDirEntry::parse_for_kind(raw, volume.bpb.kind)? {
                 let named = state.finish(&entry.short_name).ok().flatten();
                 let keep_going = match named {
                     Some((name, len)) => visitor(&entry, &name[..len]),
