@@ -8,6 +8,7 @@
 
 use crate::drivers::timer::{TscDeadline, IA32_TSC_DEADLINE};
 use crate::drivers::api::DriverError;
+use core::marker::PhantomData;
 
 use super::{
     clock::ClockSource,
@@ -29,6 +30,8 @@ pub struct TscDeadlineQueue<S: ClockSource, const N: usize> {
     service: TimerService<S, N>,
     timer: TscDeadline,
     tsc_frequency_hz: u64,
+    // Prevent moving or sharing this local-APIC handle across CPU contexts.
+    _cpu_local: PhantomData<*mut ()>,
 }
 
 impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
@@ -56,7 +59,7 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         // SAFETY: Constructor is bound to this CPU and the timer handle was
         // created after validating TSC-deadline support.
         unsafe { timer.stop() };
-        Ok(Self { service, timer, tsc_frequency_hz })
+        Ok(Self { service, timer, tsc_frequency_hz, _cpu_local: PhantomData })
     }
 
     /// Current monotonic time in nanoseconds.
