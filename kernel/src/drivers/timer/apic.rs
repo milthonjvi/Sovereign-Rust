@@ -526,6 +526,12 @@ mod tests {
     }
 
     #[test]
+    fn hpet_midpoint_respects_32_bit_counter_wrap() {
+        assert_eq!(midpoint_masked(0xFFFF_FFFE, 2, u32::MAX as u64), 0);
+        assert_eq!(midpoint_masked(10, 20, u64::MAX), 15);
+    }
+
+    #[test]
     fn divide_encodings_match_architecture() {
         assert_eq!(ApicDivide::By1.encoding(), 0b1011);
         assert_eq!(ApicDivide::By128.encoding(), 0b1010);
