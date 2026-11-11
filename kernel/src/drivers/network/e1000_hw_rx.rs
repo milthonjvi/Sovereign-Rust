@@ -1,9 +1,7 @@
 //! E1000 receive descriptor-ring polling and recycling.
 
-use super::{
-    E1000Error, E1000QueueError, E1000Registers, RingCursor, RxDescriptor,
-    RXD_STATUS_DD, REG_RDT,
-};
+use super::{E1000Error, E1000QueueError, E1000Registers, RingCursor, RxDescriptor, REG_RDT};
+use super::e1000::RXD_STATUS_DD;
 
 /// Consumer cursor for the device's legacy RX descriptor ring.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
