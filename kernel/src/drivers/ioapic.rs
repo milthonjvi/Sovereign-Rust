@@ -27,7 +27,6 @@ pub enum IoApicError {
     InvalidPolarity,
     InvalidTriggerMode,
     InvalidFlags,
-    UnsupportedBus,
 }
 
 /// Decoded ACPI interrupt electrical configuration.
