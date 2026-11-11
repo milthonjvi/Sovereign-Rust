@@ -133,7 +133,7 @@ mod spsc_tests {
 
     #[test]
     fn spsc_fifo_full_and_wraparound() {
-        let queue = SpscQueue::<u8, 3>::new();
+        let mut queue = SpscQueue::<u8, 3>::new();
         let (mut producer, mut consumer) = queue.split();
         assert_eq!(producer.push(10), Ok(()));
         assert_eq!(producer.push(20), Ok(()));
@@ -147,12 +147,12 @@ mod spsc_tests {
 
     #[test]
     fn spsc_rejects_zero_and_one_slot_queues() {
-        let zero = SpscQueue::<u8, 0>::new();
+        let mut zero = SpscQueue::<u8, 0>::new();
         let (mut zp, mut zc) = zero.split();
         assert_eq!(zp.push(1), Err(1));
         assert_eq!(zc.pop(), None);
 
-        let one = SpscQueue::<u8, 1>::new();
+        let mut one = SpscQueue::<u8, 1>::new();
         let (mut op, mut oc) = one.split();
         assert_eq!(op.push(1), Err(1));
         assert_eq!(oc.pop(), None);
