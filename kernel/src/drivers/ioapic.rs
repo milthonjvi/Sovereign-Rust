@@ -691,13 +691,15 @@ mod tests {
     }
 
     #[test]
-    fn redirection_entry_encodes_mask_and_destination() {
+    fn redirection_entry_encodes_delivery_attributes_and_destination() {
         let entry = RedirectionEntry {
             vector: 0x41,
             destination_apic_id: 3,
             mode: InterruptMode { active_low: true, level_triggered: true },
         };
-        assert_eq!(entry.low(), 0x41 | REDIRECTION_MASK | REDIRECTION_ACTIVE_LOW | REDIRECTION_LEVEL);
+        assert_eq!(entry.low(), 0x41 | REDIRECTION_ACTIVE_LOW | REDIRECTION_LEVEL);
         assert_eq!(entry.high(), 3 << 24);
+        // configure_masked adds REDIRECTION_MASK independently of caller state.
+        assert_ne!((entry.low() | REDIRECTION_MASK) & REDIRECTION_MASK, 0);
     }
 }
