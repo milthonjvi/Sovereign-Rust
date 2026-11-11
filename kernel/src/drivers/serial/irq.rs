@@ -322,6 +322,7 @@ pub unsafe fn attach_interrupts(
 
     port.cts_flow.store(0, Ordering::Release);
     port.rts_watermarks.store(0, Ordering::Release);
+    drive_rts(uart.base_port(), true);
     ATTACHED.fetch_or(port.bit, Ordering::Release);
 
     if let Err(error) = uart.enable_receive_interrupt() {
@@ -377,6 +378,8 @@ pub unsafe fn detach_interrupts(uart: &mut Uart16550) -> Result<(), UartIrqError
     ATTACHED.fetch_and(!port.bit, Ordering::AcqRel);
     port.cts_flow.store(0, Ordering::Release);
     port.rts_watermarks.store(0, Ordering::Release);
+    // Restore the peer's transmit permission when software backpressure ends.
+    drive_rts(uart.base_port(), true);
 
     if last_on_line {
         // SAFETY: Source is masked and IF is clear; no callback is in flight.
