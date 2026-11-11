@@ -181,7 +181,7 @@ impl EhciController{
   if self.state!=EhciState::Running||port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
   let offset=self.op(PORTSC_BASE)+(port as usize-1)*4;let value=io.read32(offset)?;
   if value&1==0{return Err(UsbError::ControllerUnavailable)}
-  io.write32(offset,(value&(1<<12))|(1<<8))
+  const PRESERVE:u32=(1<<12)|(1<<13)|(3<<14)|(7<<16)|(7<<24);\n  io.write32(offset,(value&PRESERVE)|(1<<8))
  }
  pub fn port_reset_complete<I:EhciRegisterIo>(&self,io:&I,port:u8)->Result<bool,UsbError>{
   if port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
@@ -194,7 +194,7 @@ impl EhciController{
   if port==0||port>self.port_count||changes&!MASK!=0{return Err(UsbError::InvalidAddress)}
   let offset=self.op(PORTSC_BASE)+(port as usize-1)*4;
   let current=io.read32(offset)?;
-  const PRESERVE:u32=(1<<2)|(1<<6)|(1<<7)|(1<<8)|(1<<12)|(1<<13)|(3<<14)|(7<<16)|(7<<24);
+  const PRESERVE:u32=(1<<2)|(1<<7)|(1<<12)|(1<<13)|(3<<14)|(7<<16)|(7<<24);
   io.write32(offset,(current&PRESERVE)|changes)
  }
 }
