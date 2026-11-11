@@ -7,6 +7,7 @@ use super::{
  UsbError,
  descriptors::{ParsedConfiguration,MAX_ENDPOINTS},
  controller::{HostController,TransferStatus},
+ hid::{HidDescriptor,get_report_descriptor},
  transfer::{DeviceAddress,Endpoint,EndpointAddress,TransferType},
 };
 
@@ -97,6 +98,21 @@ impl HidInterfaceInfo{
    .filter(|e|e.address&0x80!=0&&(e.attributes&3)==TransferType::Interrupt as u8)
    .count()
  }
+}
+
+/// Fetches the complete HID Report descriptor using the length from the
+/// interface HID class descriptor. The destination buffer must be large enough.
+pub fn read_report_descriptor<C:HostController>(
+ controller:&mut C,address:DeviceAddress,interface_number:u8,
+ hid_descriptor:HidDescriptor,buffer:&mut[u8],
+)->Result<usize,UsbError>{
+ let length=hid_descriptor.report_length as usize;
+ if length==0{return Err(UsbError::MalformedDescriptor)}
+ if buffer.len()<length{return Err(UsbError::BufferTooShort)}
+ let setup=get_report_descriptor(interface_number,hid_descriptor.report_length);
+ let report=super::control::execute_control(controller,address,setup,&mut buffer[..length])?;
+ if report.bytes_transferred!=length{return Err(UsbError::TransferFailed)}
+ Ok(report.bytes_transferred)
 }
 
 /// Periodic endpoint timing expressed without losing the USB speed semantics.
