@@ -104,17 +104,17 @@ impl E1000QueueConfig {
 
     /// Revalidate public ring fields and ensure the RX/TX DMA ranges are disjoint.
     pub fn validate(self) -> Result<(), super::e1000::E1000Error> {
-        let rx = RingConfig::new(self.rx.physical_base, self.rx.descriptor_count as usize)?;
-        let tx = RingConfig::new(self.tx.physical_base, self.tx.descriptor_count as usize)?;
+        let rx = RingConfig::new(self.rx.dma_base, self.rx.descriptor_count as usize)?;
+        let tx = RingConfig::new(self.tx.dma_base, self.tx.descriptor_count as usize)?;
         if rx != self.rx || tx != self.tx
             || rx.byte_length % RING_LENGTH_ALIGNMENT != 0
             || tx.byte_length % RING_LENGTH_ALIGNMENT != 0
         {
             return Err(super::e1000::E1000Error::InvalidRingSize);
         }
-        let rx_end = rx.physical_base + rx.byte_length as u64;
-        let tx_end = tx.physical_base + tx.byte_length as u64;
-        if rx.physical_base < tx_end && tx.physical_base < rx_end {
+        let rx_end = rx.dma_base + rx.byte_length as u64;
+        let tx_end = tx.dma_base + tx.byte_length as u64;
+        if rx.dma_base < tx_end && tx.dma_base < rx_end {
             return Err(super::e1000::E1000Error::OverlappingDmaRanges);
         }
         Ok(())
@@ -147,7 +147,7 @@ pub struct E1000InitInfo {
 ///
 /// # Safety
 /// The MMIO accessor must target this NIC. Both descriptor slices must alias
-/// the pinned DMA ring mappings at the physical bases in `queues`; every RX
+/// the pinned DMA ring mappings at the device-visible DMA bases in `queues`; every RX
 /// DmaBuffer must refer to a pinned, writable device-visible mapping for its
 /// entire lifetime. No other CPU or device may mutate these rings during setup.
 pub unsafe fn initialize<R: E1000Registers>(
@@ -167,10 +167,10 @@ pub unsafe fn initialize<R: E1000Registers>(
         || tx_descriptors.len() != queues.tx.descriptor_count as usize
         || DmaBuffer::validate_rx_pool(rx_buffers).is_err()
         || DmaBuffer::validate_disjoint_from_range(
-            rx_buffers, queues.rx.physical_base, queues.rx.byte_length as usize,
+            rx_buffers, queues.rx.dma_base, queues.rx.byte_length as usize,
         ).is_err()
         || DmaBuffer::validate_disjoint_from_range(
-            rx_buffers, queues.tx.physical_base, queues.tx.byte_length as usize,
+            rx_buffers, queues.tx.dma_base, queues.tx.byte_length as usize,
         ).is_err()
     {
         return Err(E1000InitError::InvalidDescriptorBuffers);
