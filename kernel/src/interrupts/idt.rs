@@ -179,10 +179,10 @@ mod tests {
 
     #[test]
     fn rejects_invalid_gate_inputs() {
-        assert_eq!(IdtEntry::new(0, 8, 0, INTERRUPT_GATE, 0), Err(IdtError::NullHandler));
-        assert_eq!(IdtEntry::new(1, 0, 0, INTERRUPT_GATE, 0), Err(IdtError::NullCodeSelector));
-        assert_eq!(IdtEntry::new(1, 8, 0, INTERRUPT_GATE, 4), Err(IdtError::InvalidPrivilegeLevel));
-        assert_eq!(IdtEntry::new(1, 8, 8, INTERRUPT_GATE, 0), Err(IdtError::InvalidPrivilegeLevel));
+        assert!(matches!(IdtEntry::new(0, 8, 0, INTERRUPT_GATE, 0), Err(IdtError::NullHandler)));
+        assert!(matches!(IdtEntry::new(1, 0, 0, INTERRUPT_GATE, 0), Err(IdtError::NullCodeSelector)));
+        assert!(matches!(IdtEntry::new(1, 8, 0, INTERRUPT_GATE, 4), Err(IdtError::InvalidPrivilegeLevel)));
+        assert!(matches!(IdtEntry::new(1, 8, 8, INTERRUPT_GATE, 0), Err(IdtError::InvalidPrivilegeLevel)));
     }
 
     #[test]
