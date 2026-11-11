@@ -4,7 +4,7 @@
 //! maps physical pages, or assumes ownership of a memory allocator.
 
 use super::color::Color;
-use super::dirty::Rect;
+use super::dirty::{DirtyRegionSet, Rect};
 use super::info::FramebufferError;
 use super::surface::FramebufferSurface;
 
@@ -261,6 +261,22 @@ impl<'a> DoubleBuffer<'a> {
         let (front, back) = (&self.front, &mut self.back);
         back.copy_regions_from(front, regions);
         Ok(())
+    }
+
+    /// Present the pending dirty regions, swap roles, and synchronize them.
+    ///
+    /// If the tracker has overflowed its fixed capacity, a full frame is
+    /// presented. The tracker is deliberately borrowed immutably: the caller
+    /// must call `reset` only after this method succeeds.
+    pub fn present_dirty_and_swap<const DIRTY: usize>(
+        &mut self,
+        target: &mut FramebufferSurface<'_>,
+        dirty: &DirtyRegionSet<DIRTY>,
+    ) -> Result<(), BufferError> {
+        if dirty.is_full() {
+            return self.present_and_swap(target);
+        }
+        self.present_regions_and_swap(target, dirty.regions())
     }
 
     /// Present the complete frame, swap roles, and synchronize the next back buffer.
