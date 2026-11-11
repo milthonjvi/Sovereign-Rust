@@ -324,6 +324,122 @@ fn cubic_subdivide(target: &mut FramebufferSurface<'_>, start: (i64, i64), contr
     cubic_subdivide(target, start, a, d, center, depth - 1, color);
     cubic_subdivide(target, center, e, c, end, depth - 1, color);
 }
+/// Stroke a quadratic Bézier curve with adaptive flatness subdivision.
+///
+/// `flatness_tolerance` is measured in framebuffer pixels using a conservative
+/// L-infinity distance bound. Subdivision is allocation-free and bounded by
+/// `max_depth` (clamped to 10). Arithmetic overflow in the flatness estimate
+/// conservatively requests another subdivision rather than accepting a coarse
+/// segment.
+pub fn stroke_quadratic_bezier_adaptive(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control: (i64, i64),
+    end: (i64, i64),
+    flatness_tolerance: usize,
+    max_depth: u8,
+    color: Color,
+) {
+    let tolerance = flatness_tolerance.min(i64::MAX as usize) as u128;
+    quadratic_adaptive(target, start, control, end, tolerance, max_depth.min(10), color);
+}
+
+fn quadratic_adaptive(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control: (i64, i64),
+    end: (i64, i64),
+    tolerance: u128,
+    depth: u8,
+    color: Color,
+) {
+    if depth == 0 || point_within_chord_tolerance(start, control, end, tolerance) {
+        target.draw_line(start.0, start.1, end.0, end.1, color);
+        return;
+    }
+    let a = midpoint(start, control);
+    let b = midpoint(control, end);
+    let center = midpoint(a, b);
+    quadratic_adaptive(target, start, a, center, tolerance, depth - 1, color);
+    quadratic_adaptive(target, center, b, end, tolerance, depth - 1, color);
+}
+
+/// Stroke a cubic Bézier curve with adaptive flatness subdivision.
+///
+/// Both control points must satisfy the chord-distance tolerance before a
+/// segment is emitted. Work and recursion depth are bounded by `max_depth`,
+/// clamped to 10; no temporary heap storage is used.
+pub fn stroke_cubic_bezier_adaptive(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control1: (i64, i64),
+    control2: (i64, i64),
+    end: (i64, i64),
+    flatness_tolerance: usize,
+    max_depth: u8,
+    color: Color,
+) {
+    let tolerance = flatness_tolerance.min(i64::MAX as usize) as u128;
+    cubic_adaptive(
+        target, start, control1, control2, end, tolerance, max_depth.min(10), color,
+    );
+}
+
+fn cubic_adaptive(
+    target: &mut FramebufferSurface<'_>,
+    start: (i64, i64),
+    control1: (i64, i64),
+    control2: (i64, i64),
+    end: (i64, i64),
+    tolerance: u128,
+    depth: u8,
+    color: Color,
+) {
+    if depth == 0
+        || (point_within_chord_tolerance(start, control1, end, tolerance)
+            && point_within_chord_tolerance(start, control2, end, tolerance))
+    {
+        target.draw_line(start.0, start.1, end.0, end.1, color);
+        return;
+    }
+    let a = midpoint(start, control1);
+    let b = midpoint(control1, control2);
+    let c = midpoint(control2, end);
+    let d = midpoint(a, b);
+    let e = midpoint(b, c);
+    let center = midpoint(d, e);
+    cubic_adaptive(target, start, a, d, center, tolerance, depth - 1, color);
+    cubic_adaptive(target, center, e, c, end, tolerance, depth - 1, color);
+}
+
+/// Conservative distance test using the chord's cross product. Checked i128
+/// arithmetic avoids overflow for extreme signed coordinates; on overflow the
+/// caller subdivides further. The zero-length chord uses an L-infinity test.
+#[inline]
+fn point_within_chord_tolerance(
+    start: (i64, i64),
+    point: (i64, i64),
+    end: (i64, i64),
+    tolerance: u128,
+) -> bool {
+    let dx = end.0 as i128 - start.0 as i128;
+    let dy = end.1 as i128 - start.1 as i128;
+    let px = point.0 as i128 - start.0 as i128;
+    let py = point.1 as i128 - start.1 as i128;
+    if dx == 0 && dy == 0 {
+        return px.unsigned_abs().max(py.unsigned_abs()) <= tolerance;
+    }
+    let Some(cross) = dx.checked_mul(py)
+        .and_then(|left| dy.checked_mul(px).and_then(|right| left.checked_sub(right)))
+    else {
+        return false;
+    };
+    let scale = dx.unsigned_abs().max(dy.unsigned_abs());
+    // tolerance is capped at i64::MAX, so this product is strictly below
+    // 2^127 even for the largest possible difference of two i64 coordinates.
+    cross.unsigned_abs() <= tolerance * scale
+}
+
 /// Fill a triangle using integer scanline intersections.
 ///
 /// Horizontal edges are excluded from edge intersection generation, and each
@@ -480,6 +596,26 @@ mod tests {
         assert_eq!(memory[(1 * 8 + 1) * 4], 255);
         assert_eq!(memory[(6 * 8 + 6) * 4], 255);
     }
+    #[test]
+    fn adaptive_bezier_curves_preserve_endpoints() {
+        use super::{stroke_cubic_bezier_adaptive, stroke_quadratic_bezier_adaptive};
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        stroke_quadratic_bezier_adaptive(
+            &mut target, (1, 6), (4, 0), (6, 6), 1, 10, Color::RED,
+        );
+        stroke_cubic_bezier_adaptive(
+            &mut target, (0, 0), (0, 7), (7, 7), (7, 0), 1, 10, Color::GREEN,
+        );
+        drop(target);
+        let red = |x: usize, y: usize| memory[(y * 8 + x) * 4] == 255;
+        let green = |x: usize, y: usize| memory[(y * 8 + x) * 4 + 1] == 255;
+        assert!(red(1, 6));
+        assert!(red(6, 6));
+        assert!(green(0, 0));
+        assert!(green(7, 0));
+    }
+
     #[test]
     fn strokes_ellipse_without_filling_its_interior() {
         use super::stroke_ellipse;
