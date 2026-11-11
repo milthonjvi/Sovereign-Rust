@@ -19,7 +19,7 @@ impl HidDescriptor{
  pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
   if bytes.len()<9||bytes[0]<9||bytes[1]!=HID_DESCRIPTOR_TYPE{return Err(UsbError::MalformedDescriptor)}
   let count=bytes[5] as usize;
-  if count==0||bytes[0] as usize<6+3*count||bytes.len()<6+3*count{return Err(UsbError::MalformedDescriptor)}
+  if count==0||(bytes[0] as usize)<6+3*count||bytes.len()<6+3*count{return Err(UsbError::MalformedDescriptor)}
   let mut report_length=0;
   for i in 0..count{
    let off=6+i*3;
