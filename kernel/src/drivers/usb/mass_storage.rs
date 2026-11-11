@@ -39,6 +39,9 @@ impl ScsiCommand{
  pub const fn read_capacity_10()->Self{let mut b=[0;16];b[0]=0x25;Self{bytes:b,length:10}}
  pub fn read_10(lba:u32,blocks:u16)->Self{let mut b=[0;16];b[0]=0x28;b[2..6].copy_from_slice(&lba.to_be_bytes());b[7..9].copy_from_slice(&blocks.to_be_bytes());Self{bytes:b,length:10}}
  pub fn write_10(lba:u32,blocks:u16)->Self{let mut b=[0;16];b[0]=0x2a;b[2..6].copy_from_slice(&lba.to_be_bytes());b[7..9].copy_from_slice(&blocks.to_be_bytes());Self{bytes:b,length:10}}
+ pub fn read_16(lba:u64,blocks:u32)->Self{let mut b=[0;16];b[0]=0x88;b[2..10].copy_from_slice(&lba.to_be_bytes());b[10..14].copy_from_slice(&blocks.to_be_bytes());Self{bytes:b,length:16}}
+ pub fn write_16(lba:u64,blocks:u32)->Self{let mut b=[0;16];b[0]=0x8a;b[2..10].copy_from_slice(&lba.to_be_bytes());b[10..14].copy_from_slice(&blocks.to_be_bytes());Self{bytes:b,length:16}}
+ pub fn read_capacity_16(allocation_length:u32)->Self{let mut b=[0;16];b[0]=0x9e;b[1]=0x10;b[10..14].copy_from_slice(&allocation_length.to_be_bytes());Self{bytes:b,length:16}}
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct CommandStatusWrapper{pub tag:u32,pub residue:u32,pub status:u8}
@@ -79,6 +82,18 @@ impl BulkOnlyTransport{
   let expected=(blocks as usize).checked_mul(block_size as usize).ok_or(UsbError::NoResources)?;
   if expected!=data.len(){return Err(UsbError::BufferTooShort)}
   self.execute(controller,ScsiCommand::read_10(lba,blocks),DataDirection::In,data)
+ }
+ pub fn read_blocks_16<C:HostController>(&mut self,controller:&mut C,lba:u64,blocks:u32,block_size:u32,data:&mut[u8])->Result<BotResult,UsbError>{
+  if block_size==0||blocks==0{return Err(UsbError::MalformedDescriptor)}
+  let expected=(blocks as usize).checked_mul(block_size as usize).ok_or(UsbError::NoResources)?;
+  if expected!=data.len(){return Err(UsbError::BufferTooShort)}
+  self.execute(controller,ScsiCommand::read_16(lba,blocks),DataDirection::In,data)
+ }
+ pub fn write_blocks_16<C:HostController>(&mut self,controller:&mut C,lba:u64,blocks:u32,block_size:u32,data:&mut[u8])->Result<BotResult,UsbError>{
+  if block_size==0||blocks==0{return Err(UsbError::MalformedDescriptor)}
+  let expected=(blocks as usize).checked_mul(block_size as usize).ok_or(UsbError::NoResources)?;
+  if expected!=data.len(){return Err(UsbError::BufferTooShort)}
+  self.execute(controller,ScsiCommand::write_16(lba,blocks),DataDirection::Out,data)
  }
  pub fn write_blocks<C:HostController>(&mut self,controller:&mut C,lba:u32,blocks:u16,block_size:u32,data:&mut[u8])->Result<BotResult,UsbError>{
   if block_size==0||blocks==0{return Err(UsbError::MalformedDescriptor)}
@@ -237,5 +252,33 @@ impl ScsiSenseFixed{
  #[test]fn parses_fixed_sense_information(){
   let mut b=[0u8;18];b[0]=0x70;b[2]=0x06;b[12]=0x28;b[13]=0;
   let s=ScsiSenseFixed::parse(&b).unwrap();assert_eq!(s.sense_key,6);assert_eq!(s.additional_sense_code,0x28);
+ }
+}
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct ScsiCapacity16{pub last_lba:u64,pub block_size:u32}
+impl ScsiCapacity16{
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<32{return Err(UsbError::BufferTooShort)}
+  let last_lba=u64::from_be_bytes([bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7]]);
+  let block_size=u32::from_be_bytes([bytes[8],bytes[9],bytes[10],bytes[11]]);
+  if block_size==0{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{last_lba,block_size})
+ }
+ pub const fn block_count(self)->u128{self.last_lba as u128+1}
+}
+
+#[cfg(test)]mod scsi_16_byte_tests{
+ use super::*;
+ #[test]fn builds_large_lba_scsi_commands(){
+  let read=ScsiCommand::read_16(0x0102030405060708,0x10203040);
+  assert_eq!(read.bytes[0],0x88);assert_eq!(&read.bytes[2..10],&[1,2,3,4,5,6,7,8]);
+  assert_eq!(&read.bytes[10..14],&[0x10,0x20,0x30,0x40]);
+  let write=ScsiCommand::write_16(9,1);assert_eq!(write.bytes[0],0x8a);
+  let capacity=ScsiCommand::read_capacity_16(32);assert_eq!(capacity.bytes[0],0x9e);assert_eq!(capacity.bytes[1],0x10);
+ }
+ #[test]fn parses_capacity_beyond_32_bit_lba(){
+  let mut b=[0u8;32];b[0..8].copy_from_slice(&0x1_0000_0000u64.to_be_bytes());b[8..12].copy_from_slice(&4096u32.to_be_bytes());
+  let c=ScsiCapacity16::parse(&b).unwrap();assert_eq!(c.block_count(),0x1_0000_0001);assert_eq!(c.block_size,4096);
  }
 }
