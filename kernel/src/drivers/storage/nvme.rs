@@ -166,8 +166,34 @@ mod tests{
         assert_eq!(q.submit(NvmeCommand::default()),Ok(0));
     }
     #[test]fn namespace_reads_selected_lba_format(){
-        let mut data=[0u8;132]; data[..8].copy_from_slice(&1000u64.to_le_bytes()); data[8..16].copy_from_slice(&900u64.to_le_bytes());
-        data[25]=1;data[26]=1;data[129]=9;
+        let mut data=[0u8;136]; data[..8].copy_from_slice(&1000u64.to_le_bytes()); data[8..16].copy_from_slice(&900u64.to_le_bytes());
+        data[25]=1;data[26]=1;data[134]=9;
         let ns=NvmeNamespace::parse_identify(&data).unwrap();assert_eq!(ns.block_size,512);assert_eq!(ns.block_count,1000);
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    #[test]
+    fn capabilities_decode_queue_and_page_limits() {
+        let cap = 63u64 | (1u64 << 16) | (10u64 << 24) | (1u64 << 32) | (1u64 << 48) | (2u64 << 52);
+        let decoded = NvmeCapabilities::parse(cap).unwrap();
+        assert_eq!(decoded.max_queue_entries, 64);
+        assert!(decoded.contiguous_queues_required);
+        assert_eq!(decoded.doorbell_stride_bytes, 8);
+        assert_eq!(decoded.min_page_size, 8192);
+        assert_eq!(decoded.max_page_size, 32768);
+    }
+    #[test]
+    fn completion_queue_tracks_phase_and_wrap() {
+        let mut entries = [NvmeCompletion::default(); 2];
+        entries[0].status = 1;
+        entries[1].status = 1;
+        let mut queue = NvmeCompletionQueue::new(&entries, 2).unwrap();
+        assert!(queue.poll().is_some());
+        assert!(queue.poll().is_some());
+        assert_eq!(queue.head(), 0);
+        assert!(queue.poll().is_none());
     }
 }
