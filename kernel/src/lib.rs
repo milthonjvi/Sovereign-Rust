@@ -1,12 +1,12 @@
 #![no_std]
 
-#[cfg(test)]
-extern crate std;
-
 //! Sovereign Core kernel.
 //!
 //! The kernel is split into portable policy and architecture-specific mechanisms.
 //! Hardware access is isolated behind architecture and driver interfaces.
+
+#[cfg(test)]
+extern crate std;
 
 pub mod arch;
 pub mod boot;
