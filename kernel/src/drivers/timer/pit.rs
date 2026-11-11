@@ -5,6 +5,25 @@
 
 use crate::arch::x86_64::io;
 use crate::drivers::api::{DeviceInfo, Driver, DriverError};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+
+static PIT_IRQ_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PIT_TICKS: AtomicU64 = AtomicU64::new(0);
+static PIT_FREQUENCY_HZ: AtomicU32 = AtomicU32::new(0);
+
+extern "C" fn pit_irq_handler(_vector: u8) {
+    PIT_TICKS.fetch_add(1, Ordering::Relaxed);
+    crate::time::interrupt::signal_timer_work_pending();
+}
+
+/// Errors while connecting PIT channel 0 to the legacy PIC IRQ0 path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PitIrqError {
+    AlreadyActive,
+    NotActive,
+    Interrupt(crate::interrupts::init::LegacyIrqError),
+    Driver(DriverError),
+}
 
 pub const INPUT_HZ: u32 = 1_193_182;
 pub const CHANNEL0_DATA: u16 = 0x40;
@@ -82,6 +101,75 @@ impl Pit {
         }
     }
 
+    /// Configure a periodic PIT tick and connect it to legacy PIC IRQ0.
+    ///
+    /// The IRQ handler only increments an atomic tick counter and requests
+    /// deferred timer work. PIC EOI remains owned by the common IRQ dispatcher.
+    ///
+    /// # Safety
+    /// Must run on the BSP at CPL 0 with IF clear, after interrupt bootstrap
+    /// has initialized the legacy PIC. The caller must own PIT ports 0x40/0x43
+    /// and ensure IRQ0 is not being configured by another subsystem.
+    pub unsafe fn initialize_periodic_irq(
+        &mut self,
+        requested_hz: u32,
+    ) -> Result<PitConfig, PitIrqError> {
+        let config = PitConfig::from_frequency(requested_hz)
+            .map_err(PitIrqError::Driver)?;
+        PIT_IRQ_ACTIVE.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| PitIrqError::AlreadyActive)?;
+
+        // Register while IRQ0 is masked; the interrupt layer owns PIC state
+        // and will acknowledge every delivered IRQ after this callback.
+        if let Err(error) = unsafe {
+            crate::interrupts::init::register_legacy_irq(0, pit_irq_handler)
+        } {
+            PIT_IRQ_ACTIVE.store(false, Ordering::Release);
+            return Err(PitIrqError::Interrupt(error));
+        }
+
+        PIT_TICKS.store(0, Ordering::Relaxed);
+        PIT_FREQUENCY_HZ.store(config.actual_hz, Ordering::Release);
+        if let Err(error) = unsafe { self.configure(requested_hz) } {
+            let _ = unsafe {
+                crate::interrupts::init::unregister_legacy_irq(0, pit_irq_handler)
+            };
+            PIT_FREQUENCY_HZ.store(0, Ordering::Release);
+            PIT_IRQ_ACTIVE.store(false, Ordering::Release);
+            return Err(PitIrqError::Driver(error));
+        }
+
+        if let Err(error) = unsafe { crate::interrupts::init::unmask_legacy_irq(0) } {
+            let _ = unsafe {
+                crate::interrupts::init::unregister_legacy_irq(0, pit_irq_handler)
+            };
+            PIT_FREQUENCY_HZ.store(0, Ordering::Release);
+            PIT_IRQ_ACTIVE.store(false, Ordering::Release);
+            return Err(PitIrqError::Interrupt(error));
+        }
+        Ok(config)
+    }
+
+    /// Mask IRQ0 and unregister the PIT tick callback.
+    ///
+    /// The PIT hardware continues counting; only its interrupt delivery is
+    /// disabled. This method does not change the PIT channel programming.
+    ///
+    /// # Safety
+    /// Must run on the BSP at CPL 0 with IF clear and no PIT handler in flight.
+    pub unsafe fn shutdown_periodic_irq(&mut self) -> Result<(), PitIrqError> {
+        if !PIT_IRQ_ACTIVE.load(Ordering::Acquire) {
+            return Err(PitIrqError::NotActive);
+        }
+        unsafe {
+            crate::interrupts::init::unregister_legacy_irq(0, pit_irq_handler)
+        }.map_err(PitIrqError::Interrupt)?;
+        PIT_FREQUENCY_HZ.store(0, Ordering::Release);
+        PIT_IRQ_ACTIVE.store(false, Ordering::Release);
+        self.config = None;
+        Ok(())
+    }
+
     /// Program channel 0. This does not unmask PIC IRQ0 or enable interrupts.
     ///
     /// # Safety
@@ -98,6 +186,25 @@ impl Pit {
         self.config = Some(config);
         Ok(config)
     }
+}
+
+
+/// Whether PIT periodic IRQ0 is currently registered and unmasked.
+#[inline]
+pub fn periodic_irq_active() -> bool {
+    PIT_IRQ_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Current PIT tick count since periodic IRQ initialization.
+#[inline]
+pub fn periodic_ticks() -> u64 {
+    PIT_TICKS.load(Ordering::Acquire)
+}
+
+/// Effective integer tick frequency configured for the PIT.
+#[inline]
+pub fn periodic_frequency_hz() -> u32 {
+    PIT_FREQUENCY_HZ.load(Ordering::Acquire)
 }
 
 impl Default for Pit {
