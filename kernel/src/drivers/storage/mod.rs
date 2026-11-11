@@ -25,4 +25,4 @@ pub use fat::{parse_bpb, probe_fat, FatBpb, FatError, FatKind};
 
 pub mod fat_read;
 pub use fat::{FatChainValue, FatDirEntry};
-pub use fat_read::{read_cluster, read_fat_entry, read_file_data, FatVolume};
+pub use fat_read::{enumerate_directory, read_cluster, read_fat_entry, read_file_data, FatVolume};
