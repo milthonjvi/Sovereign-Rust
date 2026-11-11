@@ -48,6 +48,9 @@ pub struct Compositor<'a, const LAYERS: usize, const DIRTY: usize> {
     height: usize,
     background: Color,
     layers: [Option<Layer<'a>>; LAYERS],
+    /// Slot indices ordered from back to front; LayerId remains a stable slot.
+    order: [usize; LAYERS],
+    order_len: usize,
     dirty: DirtyRegionSet<DIRTY>,
 }
 
@@ -60,6 +63,8 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
             height,
             background,
             layers: [None; LAYERS],
+            order: [0; LAYERS],
+            order_len: 0,
             dirty,
         })
     }
@@ -72,8 +77,8 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         LAYERS
     }
 
-    pub fn layer_count(&self) -> usize {
-        self.layers.iter().filter(|layer| layer.is_some()).count()
+    pub const fn layer_count(&self) -> usize {
+        self.order_len
     }
 
     pub fn has_pending_damage(&self) -> bool {
@@ -91,6 +96,8 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         let index = self.layers.iter().position(Option::is_none)
             .ok_or(CompositorError::NoLayerCapacity)?;
         self.layers[index] = Some(Layer { image, x, y, opacity, visible: true });
+        self.order[self.order_len] = index;
+        self.order_len += 1;
         self.mark_layer_bounds(image, x, y);
         Ok(LayerId(index))
     }
@@ -100,6 +107,12 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         let layer = self.layer(id)?;
         let old = *layer;
         self.layers[id.0] = None;
+        if let Some(position) = self.order[..self.order_len].iter().position(|&slot| slot == id.0) {
+            for index in position..self.order_len - 1 {
+                self.order[index] = self.order[index + 1];
+            }
+            self.order_len -= 1;
+        }
         self.mark_layer_bounds(old.image, old.x, old.y);
         Ok(())
     }
@@ -125,18 +138,27 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         let b = *self.layer(second)?;
         self.mark_layer_bounds(a.image, a.x, a.y);
         self.mark_layer_bounds(b.image, b.x, b.y);
-        self.layers.swap(first.0, second.0);
+        let first_position = self.order[..self.order_len].iter()
+            .position(|&slot| slot == first.0).ok_or(CompositorError::InvalidLayer)?;
+        let second_position = self.order[..self.order_len].iter()
+            .position(|&slot| slot == second.0).ok_or(CompositorError::InvalidLayer)?;
+        self.order.swap(first_position, second_position);
         Ok(())
     }
 
     /// Move a layer to the highest occupied slot, preserving its handle.
     pub fn raise_layer(&mut self, id: LayerId) -> Result<(), CompositorError> {
         let layer = *self.layer(id)?;
-        let highest = self.layers.iter().rposition(Option::is_some)
-            .ok_or(CompositorError::InvalidLayer)?;
-        if id.0 != highest {
+        let position = self.order[..self.order_len].iter()
+            .position(|&slot| slot == id.0).ok_or(CompositorError::InvalidLayer)?;
+        let highest = self.order_len - 1;
+        if position != highest {
             self.mark_layer_bounds(layer.image, layer.x, layer.y);
-            self.layers.swap(id.0, highest);
+            let slot = self.order[position];
+            for index in position..highest {
+                self.order[index] = self.order[index + 1];
+            }
+            self.order[highest] = slot;
         }
         Ok(())
     }
@@ -144,11 +166,15 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
     /// Move a layer to the lowest occupied slot, preserving its handle.
     pub fn lower_layer(&mut self, id: LayerId) -> Result<(), CompositorError> {
         let layer = *self.layer(id)?;
-        let lowest = self.layers.iter().position(Option::is_some)
-            .ok_or(CompositorError::InvalidLayer)?;
-        if id.0 != lowest {
+        let position = self.order[..self.order_len].iter()
+            .position(|&slot| slot == id.0).ok_or(CompositorError::InvalidLayer)?;
+        if position != 0 {
             self.mark_layer_bounds(layer.image, layer.x, layer.y);
-            self.layers.swap(id.0, lowest);
+            let slot = self.order[position];
+            for index in (1..=position).rev() {
+                self.order[index] = self.order[index - 1];
+            }
+            self.order[0] = slot;
         }
         Ok(())
     }
@@ -223,7 +249,10 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         region: Rect,
     ) -> Result<(), CompositorError> {
         target.fill_rect(region.x, region.y, region.width, region.height, self.background);
-        for layer in self.layers.iter().flatten() {
+        for order_index in 0..self.order_len {
+            let layer = self.layers[self.order[order_index]]
+                .as_ref()
+                .ok_or(CompositorError::InvalidLayer)?;
             if !layer.visible || layer.opacity == 0 {
                 continue;
             }
