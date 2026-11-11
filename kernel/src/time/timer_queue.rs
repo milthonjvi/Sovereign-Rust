@@ -1,9 +1,10 @@
 //! Fixed-capacity, allocation-free timer queue.
 //!
 //! The queue is a binary min-heap ordered by (deadline, insertion sequence).
-//! It performs O(N) insertion/cancellation because IDs are checked linearly,
-//! Synchronization is deliberately external: callers must protect a shared
-//! queue with the kernel's appropriate lock and define IRQ/task ownership.
+//! Insert and cancel are O(N) because IDs are checked linearly; next-deadline
+//! lookup is O(1), and expiration removal is O(log N). Batch draining is
+//! O(K log N) for K events. Synchronization is external: callers must protect
+//! shared queues with the appropriate kernel lock and define IRQ/task ownership.
 
 use super::deadline::Deadline;
 
