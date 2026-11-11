@@ -512,6 +512,34 @@ mod tests {
         assert_eq!(result.dsdt, Some(0x3000));
     }
 
+
+    #[test]
+    fn nonzero_hardware_reduced_facs_pointer_must_be_mappable() {
+        let root = make_xsdt(0x2000);
+        let mut fadt = make_sdt(*b"FACP", 268);
+        fadt[8] = 5;
+        fadt[40..44].copy_from_slice(&0x3000u32.to_le_bytes());
+        fadt[112..116].copy_from_slice(&(1u32 << 20).to_le_bytes());
+        fadt[132..140].copy_from_slice(&0x6000u64.to_le_bytes());
+        fadt[9] = 0;
+        fadt[9] = 0u8.wrapping_sub(fadt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let dsdt = make_sdt(*b"DSDT", 36);
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(fadt.as_slice()),
+            0x3000 => Some(dsdt.as_slice()),
+            _ => None,
+        });
+        assert_eq!(result, Err(AcpiError::UnsupportedAddress));
+    }
+
     #[test]
     fn full_hardware_platform_requires_facs_pointer() {
         let root = make_xsdt(0x2000);
