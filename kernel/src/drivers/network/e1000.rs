@@ -106,6 +106,8 @@ impl RingConfig {
         }
         let byte_length = descriptor_count.checked_mul(DESCRIPTOR_SIZE)
             .and_then(|n| u32::try_from(n).ok()).ok_or(E1000Error::InvalidRingSize)?;
+        physical_base.checked_add(byte_length as u64)
+            .ok_or(E1000Error::DmaAddressTooWide)?;
         if byte_length % DESCRIPTOR_SIZE as u32 != 0 {
             return Err(E1000Error::InvalidRingSize);
         }
