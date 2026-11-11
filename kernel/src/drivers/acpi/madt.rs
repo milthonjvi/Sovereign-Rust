@@ -32,6 +32,22 @@ impl<'a> Madt<'a> {
         MadtRecords { bytes: self.records, offset: 0 }
     }
 
+    /// Iterate over processor entries (legacy xAPIC and x2APIC).
+    /// Unknown MADT records are ignored; malformed records are yielded as errors.
+    pub fn processors(&self) -> MadtProcessors<'a> {
+        MadtProcessors { records: self.records() }
+    }
+
+    /// Iterate over IOAPIC descriptors without interpreting their MMIO registers.
+    pub fn io_apics(&self) -> MadtIoApics<'a> {
+        MadtIoApics { records: self.records() }
+    }
+
+    /// Iterate over ISA interrupt source overrides.
+    pub fn interrupt_overrides(&self) -> MadtInterruptOverrides<'a> {
+        MadtInterruptOverrides { records: self.records() }
+    }
+
     pub fn legacy_pic_compatible(&self) -> bool {
         self.flags & 1 != 0
     }
@@ -110,6 +126,93 @@ impl<'a> Iterator for MadtRecords<'a> {
         let end = self.offset + length;
         self.offset = end;
         Some(Ok(MadtRecord { record_type: kind, data: &self.bytes[start..end] }))
+    }
+}
+
+/// APIC identifier form reported by firmware.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessorApicId {
+    XApic(u8),
+    X2Apic(u32),
+}
+
+/// Normalized processor topology entry from MADT.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessorInfo {
+    pub processor_uid: u32,
+    pub apic_id: ProcessorApicId,
+    pub flags: u32,
+}
+
+impl ProcessorInfo {
+    /// ACPI flags bit 0 means enabled; bit 1 means online-capable.
+    pub const fn enabled(self) -> bool { self.flags & 1 != 0 }
+    pub const fn online_capable(self) -> bool { self.flags & 2 != 0 }
+    pub const fn usable(self) -> bool { self.flags & 3 != 0 }
+}
+
+pub struct MadtProcessors<'a> { records: MadtRecords<'a> }
+
+impl Iterator for MadtProcessors<'_> {
+    type Item = Result<ProcessorInfo, AcpiError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let record = match self.records.next()? {
+                Ok(record) => record,
+                Err(error) => return Some(Err(error)),
+            };
+            if let Some(cpu) = record.local_apic() {
+                return Some(Ok(ProcessorInfo {
+                    processor_uid: cpu.processor_uid as u32,
+                    apic_id: ProcessorApicId::XApic(cpu.apic_id),
+                    flags: cpu.flags,
+                }));
+            }
+            if let Some(cpu) = record.local_x2apic() {
+                return Some(Ok(ProcessorInfo {
+                    processor_uid: cpu.processor_uid,
+                    apic_id: ProcessorApicId::X2Apic(cpu.x2apic_id),
+                    flags: cpu.flags,
+                }));
+            }
+        }
+    }
+}
+
+pub struct MadtIoApics<'a> { records: MadtRecords<'a> }
+
+impl Iterator for MadtIoApics<'_> {
+    type Item = Result<IoApic, AcpiError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let record = match self.records.next()? {
+                Ok(record) => record,
+                Err(error) => return Some(Err(error)),
+            };
+            if let Some(io_apic) = record.io_apic() {
+                return Some(Ok(io_apic));
+            }
+        }
+    }
+}
+
+pub struct MadtInterruptOverrides<'a> { records: MadtRecords<'a> }
+
+impl Iterator for MadtInterruptOverrides<'_> {
+    type Item = Result<InterruptSourceOverride, AcpiError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let record = match self.records.next()? {
+                Ok(record) => record,
+                Err(error) => return Some(Err(error)),
+            };
+            if let Some(override_entry) = record.interrupt_source_override() {
+                return Some(Ok(override_entry));
+            }
+        }
     }
 }
 
