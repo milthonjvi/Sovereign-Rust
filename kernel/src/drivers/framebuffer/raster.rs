@@ -124,6 +124,26 @@ pub fn fill_polygon(
     Ok(())
 }
 
+
+/// Stroke a closed polygon by connecting each vertex to the next.
+///
+/// Coordinates are signed and clipping is delegated to the surface line
+/// primitive. Fewer than two vertices produce no output.
+pub fn stroke_polygon(
+    target: &mut FramebufferSurface<'_>,
+    vertices: &[(i64, i64)],
+    color: Color,
+) {
+    if vertices.len() < 2 {
+        return;
+    }
+    for index in 0..vertices.len() {
+        let start = vertices[index];
+        let end = vertices[(index + 1) % vertices.len()];
+        target.draw_line(start.0, start.1, end.0, end.1, color);
+    }
+}
+
 /// Fill a triangle using integer scanline intersections.
 ///
 /// Horizontal edges are excluded from edge intersection generation, and each
