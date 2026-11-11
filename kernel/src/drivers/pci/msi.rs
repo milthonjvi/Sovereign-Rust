@@ -154,6 +154,58 @@ pub unsafe fn disable_msix<A: ConfigAccess>(
     )
 }
 
+/// Enable MSI-X while keeping the function-level mask asserted.
+///
+/// # Safety
+/// The device must be quiescent, its table and PBA BAR ranges must have been
+/// validated and mapped, and all entries intended for delivery must already
+/// contain valid messages and registered APIC handlers.
+pub unsafe fn enable_msix_masked<A: ConfigAccess>(
+    io: &A,
+    address: PciAddress,
+    capability: Capability,
+) -> Result<(), ConfigError> {
+    if capability.id != MSIX_CAPABILITY_ID {
+        return Err(ConfigError::OutOfRange);
+    }
+    let _ = MsixCapability::read(io, address, capability)?;
+    let offset = capability.offset as u16;
+    let header = read_standard(io, address, offset)?;
+    let control = (header >> 16) as u16;
+    let masked = control | (1 << 14);
+    io.write_u32(address, offset, (header & 0xffff) | ((masked as u32) << 16))?;
+    let enabled_masked = masked | (1 << 15);
+    io.write_u32(address, offset, (header & 0xffff) | ((enabled_masked as u32) << 16))
+}
+
+/// Change the MSI-X function-level mask after table programming.
+///
+/// # Safety
+/// The caller must own the device's interrupt configuration and ensure every
+/// entry that may become active has a valid message and registered handler.
+pub unsafe fn set_msix_function_mask<A: ConfigAccess>(
+    io: &A,
+    address: PciAddress,
+    capability: Capability,
+    masked: bool,
+) -> Result<(), ConfigError> {
+    if capability.id != MSIX_CAPABILITY_ID {
+        return Err(ConfigError::OutOfRange);
+    }
+    let offset = capability.offset as u16;
+    if offset < 0x40
+        || offset > MAX_STANDARD_CAPABILITY_OFFSET
+        || offset & 3 != 0
+        || offset + 8 >= PCI_CONFIG_SIZE
+    {
+        return Err(ConfigError::OutOfRange);
+    }
+    let header = read_standard(io, address, offset)?;
+    let mut control = (header >> 16) as u16;
+    if masked { control |= 1 << 14; } else { control &= !(1 << 14); }
+    io.write_u32(address, offset, (header & 0xffff) | ((control as u32) << 16))
+}
+
 /// Errors returned while configuring a conventional MSI capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MsiConfigError {
