@@ -50,9 +50,8 @@ pub enum IrqGateError {
 
 /// Common assembly entry for remapped legacy PIC IRQs.
 ///
-/// The registered callback is responsible for acknowledging its interrupt
-/// controller before returning. For the 8259 PIC this means sending EOI,
-/// including to the slave and master for IRQs 8-15.
+/// The common dispatcher owns PIC acknowledgement and sends exactly one EOI
+/// after a registered callback returns. Device callbacks must not send EOI.
 #[unsafe(no_mangle)]
 pub extern "C" fn sovereign_irq_dispatch(frame: *const ExceptionFrame) {
     // SAFETY: Assembly passes a pointer to the register frame it just pushed.
