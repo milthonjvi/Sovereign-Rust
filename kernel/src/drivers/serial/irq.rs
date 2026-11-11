@@ -194,6 +194,8 @@ pub struct UartRxStatistics {
     pub framing_errors: usize,
     pub break_interrupts: usize,
     pub fifo_errors: usize,
+    /// Received characters carrying parity, framing, or break status.
+    pub errored_data_bytes: usize,
     /// Bytes discarded because the software SPSC queue had no free slot.
     pub software_queue_drops: usize,
     /// Times RX reached its per-drain byte budget with hardware data still pending.
@@ -206,6 +208,7 @@ struct AtomicRxStatistics {
     framing: AtomicUsize,
     breaks: AtomicUsize,
     fifo: AtomicUsize,
+    errored_data_bytes: AtomicUsize,
     software_drops: AtomicUsize,
     drain_budget_exhaustions: AtomicUsize,
 }
@@ -218,6 +221,7 @@ impl AtomicRxStatistics {
             framing: AtomicUsize::new(0),
             breaks: AtomicUsize::new(0),
             fifo: AtomicUsize::new(0),
+            errored_data_bytes: AtomicUsize::new(0),
             software_drops: AtomicUsize::new(0),
             drain_budget_exhaustions: AtomicUsize::new(0),
         }
@@ -230,8 +234,18 @@ impl AtomicRxStatistics {
             framing_errors: self.framing.load(Ordering::Relaxed),
             break_interrupts: self.breaks.load(Ordering::Relaxed),
             fifo_errors: self.fifo.load(Ordering::Relaxed),
+            errored_data_bytes: self.errored_data_bytes.load(Ordering::Relaxed),
             software_queue_drops: self.software_drops.load(Ordering::Relaxed),
             drain_budget_exhaustions: self.drain_budget_exhaustions.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Counts a character only when its associated LSR sample is followed by
+    /// a DATA-register read. This avoids counting a still-pending byte again
+    /// when a bounded drain's final status probe sees it on the next IRQ.
+    fn record_received_byte_status(&self, status: u8) {
+        if status & (PARITY_ERROR | FRAMING_ERROR | BREAK_INTERRUPT) != 0 {
+            self.errored_data_bytes.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -667,6 +681,7 @@ fn drain_port(
         }
         // SAFETY: LSR reports that the receive data register contains a byte.
         let byte = unsafe { io::in8(base + DATA) };
+        stats.record_received_byte_status(status);
         // SAFETY: This shared-line handler is the only producer for this queue.
         let accepted = unsafe { queue.push(byte) };
         if accepted {
@@ -923,9 +938,23 @@ mod tests {
             framing_errors: 1,
             break_interrupts: 1,
             fifo_errors: 1,
+            errored_data_bytes: 0,
             software_queue_drops: 0,
             drain_budget_exhaustions: 0,
         });
+    }
+
+    #[test]
+    fn errored_character_count_requires_a_consumed_data_byte() {
+        let stats = AtomicRxStatistics::new();
+        let errors = PARITY_ERROR | FRAMING_ERROR | BREAK_INTERRUPT;
+        // A final LSR probe can observe this byte without consuming it.
+        stats.record_lsr(DATA_READY | errors);
+        assert_eq!(stats.snapshot().errored_data_bytes, 0);
+        // The counter advances exactly when the matching DATA read occurs.
+        stats.record_received_byte_status(DATA_READY | errors);
+        stats.record_received_byte_status(DATA_READY);
+        assert_eq!(stats.snapshot().errored_data_bytes, 1);
     }
 
     #[test]
