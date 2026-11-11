@@ -1,5 +1,5 @@
 //! USB HID class support primitives for boot keyboards and mice.
-use super::{UsbError,descriptors::ParsedConfiguration,transfer::{SetupPacket,TransferType}};
+use super::{UsbError,controller::{HostController,TransferStatus},descriptors::ParsedConfiguration,transfer::{DeviceAddress,Endpoint,EndpointAddress,SetupPacket,TransferType}};
 
 pub const HID_CLASS:u8=3;
 pub const HID_SUBCLASS_BOOT:u8=1;
@@ -41,6 +41,11 @@ pub const fn set_idle(interface:u8,duration:u8,report_id:u8)->SetupPacket{
 }
 pub const fn get_report(interface:u8,report_type:u8,report_id:u8,length:u16)->SetupPacket{
  SetupPacket::new(0xa1,HID_GET_REPORT,((report_type as u16)<<8)|report_id as u16,interface as u16,length)
+}
+
+/// Standard GET_DESCRIPTOR request for a HID Report descriptor.
+pub const fn get_report_descriptor(interface:u8,length:u16)->SetupPacket{
+ SetupPacket::new(0x81,6,(HID_REPORT_DESCRIPTOR_TYPE as u16)<<8,interface as u16,length)
 }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -124,6 +129,29 @@ pub struct BootHidInterface{
  pub interface_number:u8,pub alternate_setting:u8,pub kind:BootHidKind,
  pub interrupt_in_address:u8,pub max_packet_size:u16,pub interval:u8,
 }
+impl BootHidInterface{
+ pub const fn endpoint(self)->Endpoint{
+  Endpoint{address:EndpointAddress::from_raw(self.interrupt_in_address),
+   transfer_type:TransferType::Interrupt,max_packet_size:self.max_packet_size,
+   interval:self.interval}
+ }
+ /// Reads one bounded raw report. Input owns semantic decoding and event publication.
+ pub fn read_report<C:HostController>(
+  self,controller:&mut C,address:DeviceAddress,buffer:&mut[u8],
+ )->Result<usize,UsbError>{
+  if buffer.is_empty()||buffer.len()>self.max_packet_size as usize{return Err(UsbError::BufferTooShort)}
+  let result=controller.interrupt_transfer(address,self.endpoint(),buffer)?;
+  match result.status{
+   TransferStatus::Success=>{},
+   TransferStatus::TimedOut=>return Err(UsbError::Timeout),
+   TransferStatus::NoDevice=>return Err(UsbError::ControllerUnavailable),
+   TransferStatus::Stall=>return Err(UsbError::Unsupported),
+   TransferStatus::Pending|TransferStatus::ControllerError=>return Err(UsbError::TransferFailed),
+  }
+  if result.bytes_transferred>buffer.len(){return Err(UsbError::TransferFailed)}
+  Ok(result.bytes_transferred)
+ }
+}
 /// Finds a boot-protocol HID interface and its interrupt-IN endpoint in a
 /// parsed configuration. It does not change the active alternate setting.
 pub fn find_boot_interface(config:&ParsedConfiguration,kind:BootHidKind)->Option<BootHidInterface>{
@@ -176,8 +204,6 @@ mod interface_tests{
 }
 
 
-use super::controller::{HostController,TransferStatus};
-use super::transfer::{DeviceAddress,Endpoint,EndpointAddress,TransferType};
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct KeyboardChanges{
