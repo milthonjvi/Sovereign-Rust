@@ -12,6 +12,8 @@ const MCR: u16 = 4;
 const LSR: u16 = 5;
 const DATA_READY: u8 = 1;
 const THR_EMPTY: u8 = 1 << 5;
+const TRANSMITTER_EMPTY: u8 = 1 << 6;
+const MODEM_STATUS: u16 = 6;
 const DEFAULT_POLL_LIMIT: usize = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +36,33 @@ impl Default for UartConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UartError {
     InvalidBasePort, InvalidBaudRate, InvalidFrameFormat, NotInitialized, Timeout,
+}
+
+
+/// Decoded UART Line Status Register (LSR).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UartLineStatus {
+    pub data_ready: bool,
+    pub overrun_error: bool,
+    pub parity_error: bool,
+    pub framing_error: bool,
+    pub break_interrupt: bool,
+    pub transmitter_holding_empty: bool,
+    pub transmitter_empty: bool,
+    pub fifo_error: bool,
+}
+
+/// Decoded UART Modem Status Register (MSR).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UartModemStatus {
+    pub delta_clear_to_send: bool,
+    pub delta_data_set_ready: bool,
+    pub trailing_edge_ring_indicator: bool,
+    pub delta_data_carrier_detect: bool,
+    pub clear_to_send: bool,
+    pub data_set_ready: bool,
+    pub ring_indicator: bool,
+    pub data_carrier_detect: bool,
 }
 
 /// Exclusive owner of one legacy 16550 UART I/O-port range.
@@ -147,6 +176,54 @@ impl Uart16550 {
             }
         }
         Ok(read)
+    }
+
+
+    /// Reads and decodes LSR. Reading this register may clear latched line errors.
+    pub fn line_status(&self) -> Result<UartLineStatus, UartError> {
+        self.ensure_initialized()?;
+        // SAFETY: This instance owns the UART; LSR is a read-only status register.
+        let value = unsafe { io::in8(self.port(LSR)) };
+        Ok(UartLineStatus {
+            data_ready: value & (1 << 0) != 0,
+            overrun_error: value & (1 << 1) != 0,
+            parity_error: value & (1 << 2) != 0,
+            framing_error: value & (1 << 3) != 0,
+            break_interrupt: value & (1 << 4) != 0,
+            transmitter_holding_empty: value & THR_EMPTY != 0,
+            transmitter_empty: value & TRANSMITTER_EMPTY != 0,
+            fifo_error: value & (1 << 7) != 0,
+        })
+    }
+
+    /// Reads modem input state and delta flags. Reading MSR clears delta flags.
+    pub fn modem_status(&self) -> Result<UartModemStatus, UartError> {
+        self.ensure_initialized()?;
+        // SAFETY: This instance owns the UART; MSR is a read-only status register.
+        let value = unsafe { io::in8(self.port(MODEM_STATUS)) };
+        Ok(UartModemStatus {
+            delta_clear_to_send: value & (1 << 0) != 0,
+            delta_data_set_ready: value & (1 << 1) != 0,
+            trailing_edge_ring_indicator: value & (1 << 2) != 0,
+            delta_data_carrier_detect: value & (1 << 3) != 0,
+            clear_to_send: value & (1 << 4) != 0,
+            data_set_ready: value & (1 << 5) != 0,
+            ring_indicator: value & (1 << 6) != 0,
+            data_carrier_detect: value & (1 << 7) != 0,
+        })
+    }
+
+    /// Waits until both the holding register and shift register are empty.
+    pub fn flush(&self) -> Result<(), UartError> {
+        self.ensure_initialized()?;
+        for _ in 0..self.poll_limit {
+            // SAFETY: This instance owns the UART.
+            if unsafe { io::in8(self.port(LSR)) } & TRANSMITTER_EMPTY != 0 {
+                return Ok(());
+            }
+            core::hint::spin_loop();
+        }
+        Err(UartError::Timeout)
     }
 
     pub fn shutdown(&mut self) -> Result<(), UartError> {
