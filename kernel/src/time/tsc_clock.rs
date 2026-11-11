@@ -77,12 +77,12 @@ impl TscClockSource {
         for _ in 0..max_spin_iterations {
             hpet_end = hpet.read_counter() & mask;
             elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
-            if elapsed_hpet as u128 >= target_ticks {
+            if (elapsed_hpet as u128) >= target_ticks {
                 break;
             }
             core::hint::spin_loop();
         }
-        if elapsed_hpet as u128 < target_ticks {
+        if (elapsed_hpet as u128) < target_ticks {
             return None;
         }
 
