@@ -44,7 +44,9 @@ pub struct E1000PciDevice {
 impl E1000PciDevice {
     pub fn from_function(function: &PciFunction) -> Result<Self, E1000PciError> {
         let identity = function.identity;
-        if !supports_device(identity.vendor_id, identity.device_id) {
+        if identity.class_code != 0x02 || identity.subclass != 0x00
+            || !supports_device(identity.vendor_id, identity.device_id)
+        {
             return Err(E1000PciError::UnsupportedDevice);
         }
         let model = E1000Model::from_device_id(identity.device_id)
