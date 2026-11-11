@@ -4,7 +4,7 @@
 //! only after all other allocations are complete; GetMemoryMap itself does not
 //! allocate, so its returned key can be used for the immediate exit attempt.
 
-use core::{ffi::c_void, mem};
+use core::{ffi::c_void, mem, ptr};
 
 use super::{
     boot_services::{allocate_loader_pages, EfiBootServices, EfiMemoryDescriptor},
@@ -58,6 +58,45 @@ impl EfiMemoryMapBuffer {
     pub const fn physical_base(&self) -> u64 { self.physical_base }
     pub const fn pages(&self) -> usize { self.pages }
     pub const fn capacity_bytes(&self) -> usize { self.pages * 4096 }
+
+    /// Read one descriptor from a previously captured snapshot using the
+    /// firmware-provided stride rather than assuming a packed Rust array.
+    pub fn descriptor(
+        &self,
+        captured: CapturedMemoryMap,
+        index: usize,
+    ) -> Result<EfiMemoryDescriptor, EfiStatus> {
+        if captured.physical_base != self.physical_base
+            || captured.pages != self.pages
+            || captured.capacity_bytes != self.capacity_bytes()
+            || captured.size_bytes > captured.capacity_bytes
+            || captured.descriptor_size < mem::size_of::<EfiMemoryDescriptor>()
+            || captured.descriptor_size & 7 != 0
+            || captured.size_bytes % captured.descriptor_size != 0
+            || captured.descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
+        {
+            return Err(EFI_COMPROMISED_DATA);
+        }
+        let count = captured.size_bytes / captured.descriptor_size;
+        if index >= count {
+            return Err(EFI_INVALID_PARAMETER);
+        }
+        let offset = index.checked_mul(captured.descriptor_size)
+            .ok_or(EFI_COMPROMISED_DATA)?;
+        let end = offset.checked_add(mem::size_of::<EfiMemoryDescriptor>())
+            .ok_or(EFI_COMPROMISED_DATA)?;
+        if end > captured.size_bytes {
+            return Err(EFI_COMPROMISED_DATA);
+        }
+        // SAFETY: Capture validated the descriptor stride and size; the buffer
+        // remains allocated and readable until ExitBootServices.
+        let pointer = unsafe {
+            (self.physical_base as usize as *const u8).add(offset)
+        };
+        // SAFETY: UEFI descriptor fields may be read unaligned when firmware
+        // provides a larger descriptor stride.
+        Ok(unsafe { ptr::read_unaligned(pointer.cast::<EfiMemoryDescriptor>()) })
+    }
 
     /// Capture the current firmware map without allocating additional memory.
     pub fn capture(&mut self) -> Result<CapturedMemoryMap, EfiStatus> {
