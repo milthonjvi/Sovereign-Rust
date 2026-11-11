@@ -133,7 +133,7 @@ pub fn find_boot_interface(config:&ParsedConfiguration,kind:BootHidKind)->Option
  };
  for iface in config.interfaces[..config.interface_len as usize].iter().flatten(){
   let d=iface.descriptor;
-  if d.class!=HID_CLASS||d.subclass!=HID_SUBCLASS_BOOT||d.protocol!=protocol{return continue}
+  if d.class!=HID_CLASS||d.subclass!=HID_SUBCLASS_BOOT||d.protocol!=protocol{continue}
   let start=iface.first_endpoint as usize;
   let end=start+iface.endpoint_count as usize;
   for endpoint in config.endpoints[start..end].iter().flatten(){
@@ -239,9 +239,9 @@ pub const MAX_HID_REPORT_IDS:usize=16;
 pub struct HidReportLayout{pub report_id:u8,pub input_bits:u32,pub output_bits:u32,pub feature_bits:u32}
 impl HidReportLayout{
  pub const EMPTY:Self=Self{report_id:0,input_bits:0,output_bits:0,feature_bits:0};
- pub const fn input_bytes(self)->u32{(self.input_bits+7)/8+(self.report_id!=0)as u32}
- pub const fn output_bytes(self)->u32{(self.output_bits+7)/8+(self.report_id!=0)as u32}
- pub const fn feature_bytes(self)->u32{(self.feature_bits+7)/8+(self.report_id!=0)as u32}
+ pub const fn input_bytes(self)->u32{self.input_bits.saturating_add(7)/8+(self.report_id!=0)as u32}
+ pub const fn output_bytes(self)->u32{self.output_bits.saturating_add(7)/8+(self.report_id!=0)as u32}
+ pub const fn feature_bytes(self)->u32{self.feature_bits.saturating_add(7)/8+(self.report_id!=0)as u32}
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 struct HidGlobalState{report_size:u32,report_count:u32,report_id:u8}
