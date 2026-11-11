@@ -35,7 +35,7 @@ pub struct E1000Device<'a, 'dma, R: E1000Registers> {
     rx_descriptors: &'a mut [RxDescriptor],
     tx_descriptors: &'a mut [TxDescriptor],
     rx_buffers: &'a mut [DmaBuffer<'dma>],
-    tx_buffers: &'a mut [DmaBuffer<'a>],
+    tx_buffers: &'a mut [DmaBuffer<'dma>],
     rx_queue: E1000RxQueue,
     tx_queue: E1000TxQueue,
     interface: NetworkInterfaceInfo,
