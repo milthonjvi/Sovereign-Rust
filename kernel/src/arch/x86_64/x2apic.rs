@@ -259,6 +259,21 @@ impl X2Apic {
         self.read_register(REG_TIMER_CURRENT_COUNT) as u32
     }
 
+    /// Disarm a one-shot countdown without masking its LVT source.
+    ///
+    /// Keeping the LVT unmasked allows a later queue insertion to arm the
+    /// counter without repeating interrupt registration.
+    pub fn disarm_one_shot_timer(&mut self) -> Result<(), X2ApicError> {
+        let lvt = self.read_register(REG_LVT_TIMER) as u32;
+        if lvt & (LVT_TIMER_PERIODIC | LVT_TIMER_TSC_DEADLINE) != 0
+            || !valid_tsc_deadline_vector((lvt & LVT_TIMER_VECTOR_MASK) as u8)
+        {
+            return Err(X2ApicError::InvalidTimerConfiguration);
+        }
+        self.write_register(REG_TIMER_INITIAL_COUNT, 0);
+        Ok(())
+    }
+
     /// Stop the one-shot countdown and mask local timer delivery.
     pub fn stop_one_shot_timer(&mut self) {
         self.mask_timer();
