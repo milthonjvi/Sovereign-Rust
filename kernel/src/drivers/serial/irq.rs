@@ -12,7 +12,6 @@ use crate::interrupts::init as interrupt_init;
 use super::{Uart16550, UartError, UartRxBuffer};
 
 const DATA: u16 = 0;
-const IER: u16 = 1;
 const LSR: u16 = 5;
 const DATA_READY: u8 = 1;
 const MAX_DRAIN_PER_PORT: usize = 64;
