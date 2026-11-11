@@ -17,4 +17,42 @@ impl Bar{pub const fn decode(index:u8,low:u32,high:Option<u32>)->Option<Self>{if
 /// PCIe ECAM window descriptor, normally sourced from ACPI MCFG.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct EcamWindow{pub segment:u16,pub start_bus:u8,pub end_bus:u8,pub physical_base:u64}
 impl EcamWindow{pub const fn contains(self,a:PciAddress)->bool{a.segment==self.segment&&a.bus>=self.start_bus&&a.bus<=self.end_bus}pub const fn offset(self,a:PciAddress,register:u16)->Option<u64>{if !self.contains(a)||register>=PCIE_CONFIG_SIZE{return None}Some((((a.bus-self.start_bus)as u64)<<20)|((a.device as u64)<<15)|((a.function as u64)<<12)|register as u64)}}
+
+/// Read the currently programmed BAR values without probing or modifying them.
+/// The output buffer must hold every decoded BAR; a 64-bit BAR consumes two
+/// configuration registers but produces one Bar entry.
+pub fn read_bars<A: ConfigAccess>(
+    io: &A,
+    function: PciFunction,
+    out: &mut [Bar],
+) -> Result<usize, ConfigError> {
+    let count = function.identity.bar_register_count();
+    let mut index = 0u8;
+    let mut written = 0usize;
+
+    while index < count {
+        let register = 0x10u16 + (index as u16) * 4;
+        let low = io.read_u32(function.address, register)?;
+        let is_64_bit_memory = low & 1 == 0 && ((low >> 1) & 3) == 2;
+        let high = if is_64_bit_memory {
+            if index + 1 >= count {
+                return Err(ConfigError::InvalidBar);
+            }
+            Some(io.read_u32(function.address, register + 4)?)
+        } else {
+            None
+        };
+
+        let bar = Bar::decode(index, low, high).ok_or(ConfigError::InvalidBar)?;
+        if written >= out.len() {
+            return Err(ConfigError::BufferTooSmall);
+        }
+        out[written] = bar;
+        written += 1;
+        index += if is_64_bit_memory { 2 } else { 1 };
+    }
+
+    Ok(written)
+}
+
 #[cfg(test)] mod tests{use super::*;#[test]fn bdf_bounds(){assert!(PciAddress::new(0,0,31,7).is_some());assert!(PciAddress::new(0,0,32,0).is_none());}#[test]fn bar_decode(){assert_eq!(Bar::decode(0,0x1001,None).unwrap().base,0x1000);assert!(Bar::decode(0,0x1004,None).is_none());assert_eq!(Bar::decode(0,0x100c,Some(1)).unwrap().base,0x1_0000_1000);}#[test]fn ecam_offset(){let w=EcamWindow{segment:0,start_bus:32,end_bus:63,physical_base:0xe0000000};let a=PciAddress{segment:0,bus:33,device:2,function:3};assert_eq!(w.offset(a,0x100),Some(0x10_0000+0x1_0000+0x1800+0x100));}}
