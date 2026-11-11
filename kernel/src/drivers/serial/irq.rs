@@ -713,9 +713,11 @@ mod tests {
         for base in [0x3F8, 0x2F8, 0x3E8, 0x2E8] {
             assert_eq!(transmit_statistics(base), Some(UartTxStatistics::default()));
             assert_eq!(receive_dropped_bytes(base), Some(0));
+            assert_eq!(receive_high_watermark(base), Some(0));
         }
         assert!(transmit_statistics(0x1234).is_none());
         assert!(receive_dropped_bytes(0x1234).is_none());
+        assert!(receive_high_watermark(0x1234).is_none());
     }
 
     #[test]
