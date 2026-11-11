@@ -140,8 +140,8 @@ impl<'a> ImageView<'a> {
             if opacity == 255 {
                 // Preserve source alpha without a multiply in the common
                 // full-opacity case. Fully opaque runs can use the surface's
-                // paired-store writer instead of four volatile byte reads and
-                // a blend operation per pixel.
+                // paired-store writer instead of one volatile pixel store per
+                // pixel when the destination is suitably aligned.
                 let mut source_x = source_start_x;
                 while source_x < source_end_x {
                     let color = self.pixels[source_row + source_x];
