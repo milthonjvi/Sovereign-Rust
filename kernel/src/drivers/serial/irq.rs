@@ -195,3 +195,26 @@ extern "C" fn irq4_handler(_vector: u8) {
 pub(super) fn is_attached(base: u16) -> bool {
     binding(base).is_some_and(|port| ATTACHED.load(Ordering::Acquire) & port.bit != 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_uart_irq_sharing_is_correct() {
+        assert_eq!(binding(0x3F8).unwrap().irq, 4);
+        assert_eq!(binding(0x3E8).unwrap().irq, 4);
+        assert_eq!(binding(0x2F8).unwrap().irq, 3);
+        assert_eq!(binding(0x2E8).unwrap().irq, 3);
+        assert!(binding(0x1234).is_none());
+    }
+
+    #[test]
+    fn every_legacy_uart_has_a_static_rx_queue() {
+        assert_eq!(receive_buffer(0x3F8).unwrap().capacity(), RX_CAPACITY - 1);
+        assert_eq!(receive_buffer(0x2F8).unwrap().capacity(), RX_CAPACITY - 1);
+        assert_eq!(receive_buffer(0x3E8).unwrap().capacity(), RX_CAPACITY - 1);
+        assert_eq!(receive_buffer(0x2E8).unwrap().capacity(), RX_CAPACITY - 1);
+        assert!(receive_buffer(0x1234).is_none());
+    }
+}
