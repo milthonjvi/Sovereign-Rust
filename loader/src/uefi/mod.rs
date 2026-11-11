@@ -9,7 +9,7 @@ mod system_table;
 pub use console::Console;
 pub use system_table::{EfiHandle, EfiSystemTable, EfiTableHeader};
 
-pub use elf_loader::{load_kernel_file, LoadedKernel};
+pub use elf_loader::{load_kernel_file, LoadedKernel, LoadedSegment};
 pub use kernel_file::inspect_kernel_file;
 pub use page_table_memory::UefiPageTableMemory;
 
