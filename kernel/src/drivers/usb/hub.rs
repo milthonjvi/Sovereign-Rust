@@ -255,3 +255,13 @@ mod hub_speed_semantics_tests{
   assert_eq!(ss.speed_superspeed(),Some(UsbSpeed::Super));assert_eq!(ss.superspeed_link_state(),3);
  }
 }
+
+#[cfg(test)]
+mod superspeed_resume_tests{
+ use super::*;
+ #[test]fn resumes_super_speed_port_by_selecting_u0(){
+  let request=port_action(2,HubPortAction::WarmResume);
+  assert_eq!(request.request,HUB_SET_FEATURE);assert_eq!(request.value,5);
+  assert_eq!(request.index,2);
+ }
+}
