@@ -105,8 +105,6 @@ impl<const N: usize> Ps2IrqService<N> {
         }
         Ok(())
     }
-
-
 }
 
 unsafe fn invoke_service<const N: usize>(context: *mut (), budget: usize) {
@@ -123,7 +121,7 @@ extern "C" fn ps2_irq_handler(_vector: u8) {
     if header.is_null() {
         return;
     }
-    // SAFETY: Header remains valid until callbacks are quiesced and unregistered.
+    // SAFETY: The registered service and header have static lifetime.
     let context = unsafe { (*header).context.load(Ordering::Acquire) };
     if context.is_null() {
         return;
