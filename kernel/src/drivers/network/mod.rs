@@ -22,6 +22,7 @@ pub mod ethernet;
 
 pub use device::{LinkState, NetworkDevice, NetworkInterfaceInfo};
 pub use dma::{DmaBuffer, DmaBufferError, DMA_BUFFER_ALIGNMENT, E1000_RX_BUFFER_MIN_SIZE};
+pub use e1000::{E1000Error, RingConfig, RingCursor, E1000_MAX_RING_DESCRIPTORS};
 pub use e1000_device::{E1000Device, E1000DeviceError, E1000_MAX_FRAME_SIZE};
 pub use e1000_filter::{E1000MulticastError, E1000MulticastFilter};
 pub use e1000_hw::{
