@@ -528,12 +528,12 @@ impl<'a> FramebufferSurface<'a> {
 
         for character in text.chars() {
             match character {
-                '\\n' => {
+                '\n' => {
                     cursor_x = origin_x;
                     cursor_y = cursor_y.saturating_add(FONT_LINE_HEIGHT);
                 }
-                '\\r' => cursor_x = origin_x,
-                '\\t' => {
+                '\r' => cursor_x = origin_x,
+                '\t' => {
                     let relative = cursor_x.saturating_sub(origin_x);
                     let tab_width = FONT_ADVANCE * 4;
                     let next = (relative / tab_width).saturating_add(1).saturating_mul(tab_width);
