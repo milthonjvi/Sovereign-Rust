@@ -157,6 +157,29 @@ pub unsafe fn mask_legacy_irq(irq_line: u8) -> Result<(), LegacyIrqError> {
     pic.mask(irq_line).map_err(|_| LegacyIrqError::PicFailure)
 }
 
+/// Mask an IRQ and unregister its exact callback.
+///
+/// # Safety
+/// Call with IF clear after ensuring no handler invocation is in flight.
+/// The callback must be the same function pointer previously registered.
+pub unsafe fn unregister_legacy_irq(
+    irq_line: u8,
+    handler: super::dispatch::InterruptHandler,
+) -> Result<(), LegacyIrqError> {
+    if !is_initialized() {
+        return Err(LegacyIrqError::NotInitialized);
+    }
+    if irq_line >= 16 {
+        return Err(LegacyIrqError::InvalidIrq);
+    }
+
+    // SAFETY: Caller serializes PIC state changes with IF clear.
+    let pic = unsafe { &mut *core::ptr::addr_of_mut!(LEGACY_PIC) };
+    pic.mask(irq_line).map_err(|_| LegacyIrqError::PicFailure)?;
+    super::dispatch::unregister(0x20 + irq_line, handler)
+        .map_err(|_| LegacyIrqError::HandlerNotRegistered)
+}
+
 /// Send the 8259 EOI from a registered IRQ callback.
 ///
 /// # Safety
