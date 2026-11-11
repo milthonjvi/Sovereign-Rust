@@ -246,6 +246,7 @@ mod tests {
     fn follows_extended_fadt_dsdt_pointer() {
         let root = make_xsdt(0x2000);
         let fadt = make_fadt(0x3000, 0x4000);
+        let facs = make_facs();
         let dsdt = make_sdt(*b"DSDT", 36);
         let rsdp = Rsdp {
             revision: 2,
@@ -258,6 +259,7 @@ mod tests {
             0x1000 => Some(root.as_slice()),
             0x2000 => Some(fadt.as_slice()),
             0x4000 => Some(dsdt.as_slice()),
+            0x5000 => Some(facs.as_slice()),
             _ => None,
         }).unwrap();
 
@@ -331,6 +333,7 @@ mod tests {
     fn falls_back_to_legacy_dsdt_when_extended_pointer_cannot_be_mapped() {
         let root = make_xsdt(0x2000);
         let fadt = make_fadt(0x3000, 0x1_0000_3000);
+        let facs = make_facs();
         let dsdt = make_sdt(*b"DSDT", 36);
         let rsdp = Rsdp {
             revision: 2,
@@ -343,6 +346,7 @@ mod tests {
             0x1000 => Some(root.as_slice()),
             0x2000 => Some(fadt.as_slice()),
             0x3000 => Some(dsdt.as_slice()),
+            0x5000 => Some(facs.as_slice()),
             _ => None,
         }).unwrap();
 
@@ -353,6 +357,7 @@ mod tests {
     fn does_not_hide_malformed_mapped_extended_dsdt_with_legacy_pointer() {
         let root = make_xsdt(0x2000);
         let fadt = make_fadt(0x3000, 0x4000);
+        let facs = make_facs();
         let wrong_table = make_sdt(*b"APIC", 36);
         let legacy_dsdt = make_sdt(*b"DSDT", 36);
         let rsdp = Rsdp {
@@ -367,6 +372,7 @@ mod tests {
             0x2000 => Some(fadt.as_slice()),
             0x3000 => Some(legacy_dsdt.as_slice()),
             0x4000 => Some(wrong_table.as_slice()),
+            0x5000 => Some(facs.as_slice()),
             _ => None,
         });
 
@@ -449,6 +455,7 @@ mod tests {
     fn rejects_fadt_dsdt_pointer_to_wrong_signature() {
         let root = make_xsdt(0x2000);
         let fadt = make_fadt(0x3000, 0);
+        let facs = make_facs();
         let wrong_table = make_sdt(*b"APIC", 36);
         let rsdp = Rsdp {
             revision: 2,
@@ -461,6 +468,7 @@ mod tests {
             0x1000 => Some(root.as_slice()),
             0x2000 => Some(fadt.as_slice()),
             0x3000 => Some(wrong_table.as_slice()),
+            0x5000 => Some(facs.as_slice()),
             _ => None,
         });
 
