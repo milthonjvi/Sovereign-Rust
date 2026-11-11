@@ -617,6 +617,10 @@ unsafe fn find_acpi_rsdp(system_table: &EfiSystemTable) -> Option<(u64, u64)> {
         let Some(length) = (unsafe { validate_rsdp(entry.vendor_table.cast()) }) else {
             continue;
         };
+        // The ACPI 2.0 configuration GUID must not advertise a legacy v1 RSDP.
+        if is_acpi_20 && length < 36 {
+            continue;
+        }
         let candidate = (entry.vendor_table as usize as u64, length);
         if is_acpi_20 {
             return Some(candidate);
