@@ -252,6 +252,9 @@ impl<'a> ImageView<'a> {
         if destination_width == 0 || destination_height == 0 {
             return Ok(());
         }
+        if destination_width == self.width && destination_height == self.height {
+            return self.draw(target, destination_x, destination_y);
+        }
 
         let target_info = *target.info();
         let left = (destination_x as i128).max(0);
