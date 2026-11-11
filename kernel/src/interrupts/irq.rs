@@ -4,6 +4,9 @@ use super::dispatch::dispatch_vector;
 use super::exceptions::ExceptionFrame;
 use super::idt::{Idt, IdtEntry, IdtError, INTERRUPT_GATE};
 
+/// The assembly stubs encode vectors 0x20 through 0x2F directly.
+pub const IRQ_VECTOR_OFFSET: u8 = 0x20;
+
 core::arch::global_asm!(include_str!("../arch/x86_64/irq.S"));
 
 unsafe extern "C" {
