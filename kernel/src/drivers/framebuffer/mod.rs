@@ -18,4 +18,4 @@ pub use info::{FramebufferError, FramebufferInfo};
 pub use image::{ImageView, ImageViewError};
 pub use surface::FramebufferSurface;
 
-pub use raster::{fill_ellipse, fill_polygon, fill_triangle, stroke_polygon, stroke_triangle, ScanlineIntersection};
+pub use raster::{fill_ellipse, fill_polygon, fill_triangle, stroke_ellipse, stroke_polygon, stroke_triangle, ScanlineIntersection};
