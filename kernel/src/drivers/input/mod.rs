@@ -7,8 +7,10 @@
 pub mod event;
 pub mod keyboard;
 pub mod mouse;
+pub mod pipeline;
 pub mod ps2;
 pub mod queue;
 
 pub use event::{InputEvent, KeyCode, MouseButtons};
+pub use pipeline::{InputPipelineStats, Ps2InputPipeline};
 pub use queue::{EventQueue, SpscConsumer, SpscProducer, SpscQueue};
