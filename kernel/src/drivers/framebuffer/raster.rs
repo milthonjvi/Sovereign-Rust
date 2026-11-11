@@ -109,17 +109,68 @@ pub fn stroke_triangle(
 
 #[cfg(test)]
 mod tests {
-    use super::fill_triangle;
+    use super::{fill_triangle, stroke_triangle};
+    use crate::drivers::framebuffer::color::{Color, PixelFormat};
+    use crate::drivers::framebuffer::info::FramebufferInfo;
+    use crate::drivers::framebuffer::surface::FramebufferSurface;
+
+    fn surface<'a>(memory: &'a mut [u8; 8 * 8 * 4]) -> FramebufferSurface<'a> {
+        let info = FramebufferInfo {
+            address: 1,
+            width: 8,
+            height: 8,
+            pitch: 8 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the test array is writable, correctly sized, and exclusively borrowed.
+        unsafe { FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap() }
+    }
 
     #[test]
-    fn intersection_math_handles_extreme_signed_coordinates() {
-        // A triangle far outside the visible area must clip without wrapping.
-        // Actual pixel writes require a mapped framebuffer and are tested by
-        // the kernel's hardware integration path.
-        let a = (i64::MIN, i64::MIN);
-        let b = (i64::MAX, i64::MIN);
-        let c = (0, i64::MAX);
-        assert!(a.0 < b.0 && c.0 == 0);
-        let _ = fill_triangle;
+    fn fills_triangle_as_horizontal_spans() {
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        fill_triangle(
+            &mut target,
+            (1, 1),
+            (6, 1),
+            (1, 6),
+            Color::RED,
+        ).unwrap();
+
+        assert_eq!(memory[(1 * 8 + 1) * 4..(1 * 8 + 1) * 4 + 4], [255, 0, 0, 0]);
+        assert_eq!(memory[(2 * 8 + 2) * 4..(2 * 8 + 2) * 4 + 4], [255, 0, 0, 0]);
+        assert_eq!(memory[(6 * 8 + 6) * 4..(6 * 8 + 6) * 4 + 4], [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_unrepresentable_intersection_arithmetic() {
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        assert_eq!(
+            fill_triangle(
+                &mut target,
+                (i64::MIN, i64::MIN),
+                (i64::MAX, i64::MIN),
+                (0, i64::MAX),
+                Color::WHITE,
+            ),
+            Err(crate::drivers::framebuffer::info::FramebufferError::SizeOverflow),
+        );
+    }
+
+    #[test]
+    fn outlines_triangle_edges() {
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        stroke_triangle(
+            &mut target,
+            (1, 1),
+            (5, 1),
+            (1, 5),
+            Color::GREEN,
+        ).unwrap();
+        assert_eq!(memory[(1 * 8 + 1) * 4..(1 * 8 + 1) * 4 + 4], [0, 255, 0, 0]);
     }
 }
