@@ -24,7 +24,34 @@ pub struct AcpiTables {
     pub dsdt: Option<u64>,
 }
 
+/// Failure while converting discovered firmware data into interrupt topology.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MadtTopologyDiscoveryError {
+    MissingMadt,
+    Acpi(AcpiError),
+    Topology(super::topology::MadtTopologyError),
+}
+
 impl AcpiTables {
+    /// Parse the discovered MADT into a validated fixed-capacity interrupt
+    /// topology. The supplied mapper remains owned by the boot/memory layer.
+    pub fn interrupt_topology<'a, F>(
+        &self,
+        mut map_table: F,
+    ) -> Result<super::topology::MadtInterruptTopology, MadtTopologyDiscoveryError>
+    where
+        F: FnMut(u64) -> Option<&'a [u8]>,
+    {
+        let address = self.madt.ok_or(MadtTopologyDiscoveryError::MissingMadt)?;
+        let bytes = map_table(address).ok_or(
+            MadtTopologyDiscoveryError::Acpi(AcpiError::UnsupportedAddress)
+        )?;
+        let madt = super::madt::Madt::parse(bytes)
+            .map_err(MadtTopologyDiscoveryError::Acpi)?;
+        super::topology::MadtInterruptTopology::parse(&madt)
+            .map_err(MadtTopologyDiscoveryError::Topology)
+    }
+
     /// Discover known tables using a caller-provided physical mapping function.
     ///
     /// The callback must return a slice covering the complete table at the
