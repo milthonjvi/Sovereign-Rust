@@ -23,6 +23,7 @@ pub struct Fadt {
     pub reset_value: Option<u8>,
     pub x_firmware_ctrl: Option<u64>,
     pub x_dsdt: Option<u64>,
+    pub extended_pm_registers: Option<ExtendedPmRegisters>,
 }
 
 impl Fadt {
@@ -46,6 +47,21 @@ impl Fadt {
         let reset_value = b.get(128).copied();
         let x_firmware_ctrl = if b.len() >= 140 { Some(read_u64(b, 132)?) } else { None };
         let x_dsdt = if b.len() >= 148 { Some(read_u64(b, 140)?) } else { None };
+        // ACPI FADT extended PM register GAS fields occupy bytes 148..244.
+        let extended_pm_registers = if b.len() >= 244 {
+            Some(ExtendedPmRegisters {
+                pm1a_event: GenericAddress::parse(&b[148..160])?,
+                pm1b_event: GenericAddress::parse(&b[160..172])?,
+                pm1a_control: GenericAddress::parse(&b[172..184])?,
+                pm1b_control: GenericAddress::parse(&b[184..196])?,
+                pm2_control: GenericAddress::parse(&b[196..208])?,
+                pm_timer: GenericAddress::parse(&b[208..220])?,
+                gpe0: GenericAddress::parse(&b[220..232])?,
+                gpe1: GenericAddress::parse(&b[232..244])?,
+            })
+        } else {
+            None
+        };
 
         Ok(Self {
             firmware_ctrl: read_u32(b, 36)?,
@@ -62,6 +78,7 @@ impl Fadt {
             reset_value,
             x_firmware_ctrl,
             x_dsdt,
+            extended_pm_registers,
         })
     }
 
@@ -97,6 +114,37 @@ impl Fadt {
             return Err(AcpiError::InvalidGas);
         }
         Ok(Some((gas, value)))
+    }
+}
+
+/// Extended FADT power-management register descriptors (ACPI GAS).
+///
+/// A zero address denotes an absent register block. These descriptors do not
+/// imply that the corresponding hardware block is enabled or safe to access.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtendedPmRegisters {
+    pub pm1a_event: GenericAddress,
+    pub pm1b_event: GenericAddress,
+    pub pm1a_control: GenericAddress,
+    pub pm1b_control: GenericAddress,
+    pub pm2_control: GenericAddress,
+    pub pm_timer: GenericAddress,
+    pub gpe0: GenericAddress,
+    pub gpe1: GenericAddress,
+}
+
+impl ExtendedPmRegisters {
+    /// Validate each populated GAS descriptor without performing register I/O.
+    pub fn validate(&self) -> Result<(), AcpiError> {
+        for gas in [
+            self.pm1a_event, self.pm1b_event, self.pm1a_control, self.pm1b_control,
+            self.pm2_control, self.pm_timer, self.gpe0, self.gpe1,
+        ] {
+            if gas.is_present() {
+                gas.validate()?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -217,6 +265,35 @@ mod tests {
             access_size: GenericAddress::ACCESS_BYTE,
             address: 0xCF9,
         }
+    }
+
+    #[test]
+    fn parses_and_validates_extended_pm_gas_registers() {
+        let mut bytes = std::vec![0u8; 244];
+        bytes[0..4].copy_from_slice(b"FACP");
+        bytes[4..8].copy_from_slice(&(244u32).to_le_bytes());
+        bytes[8] = 6;
+        // X_PM1a_CNT_BLK at offset 172: System I/O, 16-bit register, word access.
+        bytes[172] = GenericAddress::ADDRESS_SPACE_SYSTEM_IO;
+        bytes[173] = 16;
+        bytes[175] = GenericAddress::ACCESS_WORD;
+        bytes[176..184].copy_from_slice(&0x404u64.to_le_bytes());
+        let checksum = 0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        bytes[9] = checksum;
+
+        let fadt = Fadt::parse(&bytes).unwrap();
+        let registers = fadt.extended_pm_registers.unwrap();
+        assert_eq!(registers.pm1a_control.address, 0x404);
+        assert_eq!(registers.pm1a_control.validate(), Ok(()));
+        assert_eq!(registers.validate(), Ok(()));
+
+        let mut malformed = bytes;
+        malformed[174] = 8; // bit offset + width exceeds the 16-bit access.
+        malformed[9] = 0;
+        let checksum = 0u8.wrapping_sub(malformed.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        malformed[9] = checksum;
+        let fadt = Fadt::parse(&malformed).unwrap();
+        assert_eq!(fadt.extended_pm_registers.unwrap().validate(), Err(AcpiError::InvalidGas));
     }
 
     #[test]
