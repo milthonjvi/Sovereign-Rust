@@ -5,7 +5,7 @@
 //! hardware layer must validate each controller's actual redirection count
 //! before constructing the final GSI ranges.
 
-use super::{AcpiError, madt::{InterruptSourceOverride, IoApic, Madt}};
+use super::madt::{InterruptSourceOverride, IoApic, Madt};
 
 pub const MAX_MADT_IO_APICS: usize = 16;
 pub const MAX_MADT_OVERRIDES: usize = 256;
@@ -22,7 +22,6 @@ pub enum MadtTopologyError {
 }
 
 /// Validated, allocation-free interrupt-controller metadata from one MADT.
-#[derive(Clone, Copy)]
 pub struct MadtInterruptTopology {
     io_apics: [Option<IoApic>; MAX_MADT_IO_APICS],
     io_apic_count: usize,
@@ -99,7 +98,7 @@ impl MadtInterruptTopology {
                         record.data[6], record.data[7], record.data[8], record.data[9],
                     ]);
                     if address == 0 || address & 0xFFF != 0 {
-                        return Err(MadtTopologyError::InvalidIoApicAddress);
+                        return Err(MadtTopologyError::InvalidControllerAddress);
                     }
                     if topology.local_apic_address_override.replace(address).is_some() {
                         return Err(MadtTopologyError::MalformedRecord);
