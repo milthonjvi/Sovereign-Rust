@@ -125,9 +125,11 @@ impl Iterator for UsableRegionIter<'_, '_> {
             // UEFI returns descriptors in ascending physical-address order.
             // Reject overlaps and reordered entries rather than risking double
             // allocation of the same physical pages.
-            if self.previous_end.is_some_and(|end| region.start < end) {
-                self.failed = true;
-                return Some(Err(BootMemoryError::OverlappingOrUnorderedDescriptors));
+            if let Some(previous_end) = self.previous_end {
+                if region.start < previous_end {
+                    self.failed = true;
+                    return Some(Err(BootMemoryError::OverlappingOrUnorderedDescriptors));
+                }
             }
             self.previous_end = Some(region.end);
 
