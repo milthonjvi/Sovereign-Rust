@@ -291,6 +291,10 @@ impl IoApicController {
 
     /// Program an entry masked, writing destination before delivery attributes.
     /// A separate call to `set_masked(false)` is required to enable delivery.
+    ///
+    /// `destination_apic_id` is the 8-bit physical destination field supported
+    /// by the I/O APIC redirection format. Systems with wider x2APIC IDs require
+    /// interrupt remapping for destinations that cannot be represented here.
     pub fn configure_masked(
         &mut self,
         gsi: u32,
@@ -583,13 +587,13 @@ mod tests {
 
     #[test]
     fn external_routes_match_the_interrupt_subsystem_vector_policy() {
-        assert!(!valid_redirection_vector(0x2F));
-        assert!(valid_redirection_vector(0x30));
-        assert!(valid_redirection_vector(0x7F));
-        assert!(!valid_redirection_vector(0x80));
-        assert!(valid_redirection_vector(0x81));
-        assert!(valid_redirection_vector(0xFE));
-        assert!(!valid_redirection_vector(0xFF));
+        for vector in 0u8..=u8::MAX {
+            assert_eq!(
+                valid_redirection_vector(vector),
+                crate::interrupts::apic::is_apic_vector(vector),
+                "IOAPIC vector policy differs at {vector:#04x}",
+            );
+        }
     }
 
     #[test]
