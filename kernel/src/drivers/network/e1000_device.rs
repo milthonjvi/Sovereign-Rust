@@ -254,6 +254,111 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         Ok(Some(causes))
     }
 
+    /// Fill an available DMA TX buffer directly, avoiding an intermediate frame copy.
+    ///
+    /// The closure receives the selected buffer and returns the number of bytes
+    /// written. It must not retain the buffer borrow or access the NIC reentrantly.
+    pub fn transmit_with<F>(&mut self, fill: F) -> Result<(), DriverError>
+    where
+        F: FnOnce(&mut [u8]) -> usize,
+    {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+
+        let mut available = [u16::MAX; 1];
+        let count = match self.tx_queue.reclaim_and_available_slots(
+            self.registers,
+            self.tx_descriptors,
+            &mut available,
+        ) {
+            Ok(count) => count,
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                    self.faulted = true;
+                }
+                return Err(map_queue_error(error));
+            }
+        };
+        if count == 0 {
+            return Err(DriverError::ResourceUnavailable);
+        }
+
+        let index = available[0] as usize;
+        let buffer = &mut self.tx_buffers[index];
+        let length = fill(buffer.as_mut_slice());
+        if length == 0 || length > E1000_MAX_FRAME_SIZE || length > buffer.len() {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        if let Err(error) = self.tx_queue.submit(
+            self.registers,
+            self.tx_descriptors,
+            buffer.dma_address(),
+            length,
+        ) {
+            if queue_error_is_fatal(&error) {
+                self.ready = false;
+                self.faulted = true;
+            }
+            return Err(map_queue_error(error));
+        }
+        Ok(())
+    }
+
+    /// Process completed RX frames directly from their DMA buffers without copying.
+    ///
+    /// The callback runs while the current buffer is CPU-owned. Its slice cannot
+    /// outlive the call; the descriptor is recycled immediately after the callback
+    /// returns. At most one complete RX ring is examined per invocation.
+    pub fn receive_with<F>(&mut self, mut consume: F) -> Result<usize, DriverError>
+    where
+        F: FnMut(&[u8]),
+    {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+
+        let mut delivered = 0usize;
+        for _ in 0..self.rx_descriptors.len() {
+            let polled = match self.rx_queue.poll(self.registers, self.rx_descriptors) {
+                Ok(polled) => polled,
+                Err(error) => {
+                    if queue_error_is_fatal(&error) {
+                        self.ready = false;
+                        self.faulted = true;
+                    }
+                    return Err(map_queue_error(error));
+                }
+            };
+            let Some((index, completion)) = polled else {
+                break;
+            };
+
+            let slot = index as usize;
+            let was_fragmented = self.dropping_rx_frame;
+            if !completion.end_of_packet {
+                self.dropping_rx_frame = true;
+            } else {
+                self.dropping_rx_frame = false;
+            }
+
+            let length = completion.length as usize;
+            let valid = !was_fragmented
+                && completion.end_of_packet
+                && completion.errors == 0
+                && length != 0
+                && length <= E1000_MAX_FRAME_SIZE
+                && length <= self.rx_buffers[slot].len();
+            if valid {
+                consume(&self.rx_buffers[slot].as_slice()[..length]);
+                delivered += 1;
+            }
+            self.recycle_rx(index)?;
+        }
+        Ok(delivered)
+    }
+
     /// Copy and publish several frames as one hardware batch.
     ///
     /// The slots and submissions arrays are caller-owned scratch storage and
