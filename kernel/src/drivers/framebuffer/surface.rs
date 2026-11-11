@@ -89,6 +89,41 @@ impl<'a> FramebufferSurface<'a> {
         }
     }
 
+    /// Write a contiguous span of pixels using paired volatile stores when aligned.
+    ///
+    /// # Safety
+    /// The complete span must fit inside the validated mapping and begin at a
+    /// valid pixel boundary. The caller must have clipped the span to the
+    /// framebuffer dimensions.
+    pub(crate) unsafe fn write_pixels_unchecked(&mut self, offset: usize, pixels: &[Color]) {
+        let destination = unsafe { self.base.as_ptr().add(offset) };
+        let mut index = 0usize;
+        if (destination as usize) & (core::mem::align_of::<u64>() - 1) == 0 {
+            let pairs = pixels.len() / 2;
+            for pair in 0..pairs {
+                let first = Color::new(pixels[index].red, pixels[index].green, pixels[index].blue)
+                    .memory_bytes(self.info.pixel_format);
+                let second = Color::new(pixels[index + 1].red, pixels[index + 1].green, pixels[index + 1].blue)
+                    .memory_bytes(self.info.pixel_format);
+                let packed = u64::from_le_bytes([
+                    first[0], first[1], first[2], first[3],
+                    second[0], second[1], second[2], second[3],
+                ]);
+                // SAFETY: caller guarantees the complete clipped span; each
+                // iteration writes exactly two pixels within that span.
+                unsafe {
+                    ptr::write_volatile(destination.add(index * 4).cast::<u64>(), packed);
+                }
+                index += 2;
+            }
+        }
+        while index < pixels.len() {
+            // SAFETY: caller guarantees the complete clipped span.
+            unsafe { self.write_pixel_unchecked(offset + index * 4, pixels[index]); }
+            index += 1;
+        }
+    }
+
     /// Alpha-composite a source color over the destination pixel.
     ///
     /// Source alpha uses the conventional range: 0 is transparent and 255 is
