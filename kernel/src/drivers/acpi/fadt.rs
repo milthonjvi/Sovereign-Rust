@@ -169,8 +169,16 @@ impl Fadt {
         if self.pm_hardware_mode() != PmHardwareMode::HardwareReduced {
             return Ok(None);
         }
-        let control = self.sleep_control_register.ok_or(AcpiError::InvalidGas)?;
-        let status = self.sleep_status_register.ok_or(AcpiError::InvalidGas)?;
+        let (control, status) = match (
+            self.sleep_control_register,
+            self.sleep_status_register,
+        ) {
+            (None, None) => return Ok(None),
+            (Some(control), Some(status)) => (control, status),
+            // The two optional sleep registers form one interface. A
+            // half-populated pair is malformed rather than partially usable.
+            _ => return Err(AcpiError::InvalidGas),
+        };
         for gas in [control, status] {
             gas.validate()?;
             if !gas.is_system_memory_io_or_pci_config_bus0()
@@ -292,6 +300,7 @@ impl PmRegisterBlockLengths {
     pub fn validate(self) -> Result<(), AcpiError> {
         if (self.pm1_event != 0 && (self.pm1_event < 4 || self.pm1_event % 2 != 0))
             || (self.pm1_control != 0 && self.pm1_control < 2)
+            || (self.pm2_control != 0 && self.pm2_control != 1)
             || (self.pm_timer != 0 && self.pm_timer != 4)
             || self.gpe0 % 2 != 0
             || self.gpe1 % 2 != 0
@@ -554,6 +563,19 @@ mod tests {
     }
 
     #[test]
+    fn requires_pm2_control_block_to_be_one_byte_when_present() {
+        let valid = PmRegisterBlockLengths {
+            pm1_event: 4, pm1_control: 2, pm2_control: 1,
+            pm_timer: 4, gpe0: 8, gpe1: 2,
+        };
+        assert_eq!(valid.validate(), Ok(()));
+        assert_eq!(
+            PmRegisterBlockLengths { pm2_control: 2, ..valid }.validate(),
+            Err(AcpiError::InvalidLength),
+        );
+    }
+
+    #[test]
     fn validates_fixed_register_block_lengths() {
         let valid = PmRegisterBlockLengths {
             pm1_event: 4, pm1_control: 2, pm2_control: 1,
@@ -594,9 +616,21 @@ mod tests {
     }
 
     #[test]
-    fn reduced_hardware_requires_valid_sleep_registers() {
+    fn reduced_hardware_sleep_registers_are_optional_but_must_be_a_pair() {
         let b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
         let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validated_sleep_registers(), Ok(None));
+
+        let mut partial = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
+        partial[244] = GenericAddress::ADDRESS_SPACE_SYSTEM_MEMORY;
+        partial[245] = 8;
+        partial[247] = GenericAddress::ACCESS_BYTE;
+        partial[248..256].copy_from_slice(&0x1000u64.to_le_bytes());
+        partial[9] = 0;
+        partial[9] = 0u8.wrapping_sub(
+            partial.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+        );
+        let fadt = Fadt::parse(&partial).unwrap();
         assert_eq!(fadt.validated_sleep_registers(), Err(AcpiError::InvalidGas));
     }
 
