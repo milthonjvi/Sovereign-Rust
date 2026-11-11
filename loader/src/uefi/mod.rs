@@ -2,12 +2,14 @@ mod boot_services;
 mod console;
 mod kernel_file;
 mod protocols;
+mod page_table_memory;
 mod system_table;
 
 pub use console::Console;
 pub use system_table::{EfiHandle, EfiSystemTable, EfiTableHeader};
 
 pub use kernel_file::inspect_kernel_file;
+pub use page_table_memory::UefiPageTableMemory;
 
 /// UEFI GUID representation.
 #[repr(C)]
