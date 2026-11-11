@@ -273,6 +273,9 @@ use super::*;
             device.registers.writes.last(),
             Some(&(REG_MTA_BASE + (hash >> 5) as u32 * 4, 1u32 << (hash & 0x1f))),
         );
+        let writes_after_first_filter = device.registers.writes.len();
+        assert_eq!(device.set_multicast_filter(&[group]), Ok(()));
+        assert_eq!(device.registers.writes.len(), writes_after_first_filter);
         let writes_before_invalid = device.registers.writes.len();
         assert_eq!(
             device.set_multicast_filter(&[super::super::ethernet::MacAddress([0x02, 0, 0, 0, 0, 1])]),
