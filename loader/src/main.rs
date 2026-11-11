@@ -527,6 +527,16 @@ fn transition_to_kernel(
             "or r10, 0x10000",
             "mov cr0, r10",
             "mov cr3, rax",
+            // CR3 reload does not invalidate global TLB entries when PGE is
+            // active. Toggle PGE without disturbing LA57/PCIDE to flush them.
+            "mov r10, cr4",
+            "test r10, 0x80",
+            "jz 2f",
+            "mov r11, r10",
+            "btr r11, 7",
+            "mov cr4, r11",
+            "mov cr4, r10",
+            "2:",
             "mov rdi, rdx",
             "jmp r8",
             in("rax") page_table_root,
@@ -535,6 +545,7 @@ fn transition_to_kernel(
             in("r8") kernel_entry,
             in("r9") &idtr,
             lateout("r10") _,
+            lateout("r11") _,
             options(noreturn)
         );
     }
