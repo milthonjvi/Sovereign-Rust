@@ -430,8 +430,15 @@ fn midpoint_masked(a: u64, b: u64, mask: u64) -> u64 {
     a.wrapping_add((b.wrapping_sub(a) & mask) / 2) & mask
 }
 
-fn map_x2apic_error(_error: X2ApicError) -> DriverError {
-    DriverError::InvalidConfiguration
+fn map_x2apic_error(error: X2ApicError) -> DriverError {
+    match error {
+        X2ApicError::FeatureUnavailable => DriverError::UnsupportedDevice,
+        X2ApicError::InvalidPhysicalBase => DriverError::ResourceUnavailable,
+        X2ApicError::InvalidVector | X2ApicError::InvalidTimerConfiguration => {
+            DriverError::InvalidConfiguration
+        }
+        X2ApicError::DeliveryTimeout => DriverError::HardwareFault,
+    }
 }
 
 /// IA32_TSC_DEADLINE model-specific register.
