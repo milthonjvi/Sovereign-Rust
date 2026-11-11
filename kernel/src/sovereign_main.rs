@@ -39,8 +39,7 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
     // accepting any boot-provided pointer or adopting the kernel image.
     const EFI_LOADER_DATA: u32 = 2;
     let boot_info_physical = boot_info_pointer as u64;
-    let ownership_valid = unsafe {
-        memory_map.contains_range_with_type(
+    let ownership_valid = memory_map.contains_range_with_type(
             boot_info_physical,
             4096,
             EFI_LOADER_DATA,
@@ -54,8 +53,7 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
             boot_info.kernel_physical_base,
             boot_info.kernel_image_size,
             EFI_LOADER_DATA,
-        ).unwrap_or(false)
-    };
+        ).unwrap_or(false);
     if !ownership_valid {
         fatal_halt();
     }
