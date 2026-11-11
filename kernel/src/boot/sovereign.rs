@@ -14,11 +14,50 @@ pub const BOOT_INFO_FLAG_FRAMEBUFFER_VALID: u64 = 1 << 0;
 pub const BOOT_INFO_FLAG_ACPI_VALID: u64 = 1 << 1;
 const MAX_MEMORY_DESCRIPTORS: u64 = 1_000_000;
 
+static BOOT_INFO_READY: AtomicBool = AtomicBool::new(false);
+static mut BOOT_INFO: Option<SovereignBootInfo> = None;
+
 static ACPI_TABLES_READY: AtomicBool = AtomicBool::new(false);
 static mut ACPI_TABLES: Option<AcpiTables> = None;
 static MADT_TOPOLOGY_READY: AtomicBool = AtomicBool::new(false);
 static mut MADT_TOPOLOGY: core::mem::MaybeUninit<MadtInterruptTopology> =
     core::mem::MaybeUninit::uninit();
+
+/// Publish the validated Sovereign Boot handoff for later kernel subsystems.
+///
+/// # Safety
+/// Call exactly once on the bootstrap processor after validating the handoff
+/// and its identity mappings, with interrupts disabled. The boot-info and
+/// memory-map pages must remain mapped and reserved for the kernel lifetime.
+pub unsafe fn install_boot_info(info: SovereignBootInfo) -> bool {
+    if BOOT_INFO_READY.load(Ordering::Acquire) {
+        return false;
+    }
+    // SAFETY: The documented bootstrap contract guarantees exclusive access.
+    unsafe { ptr::addr_of_mut!(BOOT_INFO).write(Some(info)) };
+    BOOT_INFO_READY.store(true, Ordering::Release);
+    true
+}
+
+/// Borrow the immutable, validated boot handoff.
+pub fn boot_info() -> Option<&'static SovereignBootInfo> {
+    if !BOOT_INFO_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    // SAFETY: Release/Acquire publication makes the immutable value visible.
+    unsafe { (&*ptr::addr_of!(BOOT_INFO)).as_ref() }
+}
+
+/// Reconstruct a borrowed view of the identity-mapped UEFI memory map.
+///
+/// The memory manager must copy any metadata it needs before reclaiming the
+/// loader-owned memory-map buffer.
+pub fn memory_map() -> Option<EfiMemoryMap<'static>> {
+    let info = boot_info()?;
+    // SAFETY: install_boot_info is called only after validating and mapping the
+    // complete memory-map buffer; the documented contract retains that buffer.
+    unsafe { info.memory_map().ok() }
+}
 
 /// Publish validated ACPI table addresses for later kernel subsystems.
 ///
