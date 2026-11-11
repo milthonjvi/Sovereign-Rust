@@ -420,3 +420,25 @@ mod controller_state_tests{
   assert_eq!(h.configure_dma(&mut io,0x2001,0x3000,4),Err(XhciError::InvalidDmaAddress));
  }
 }
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum CompletionCode{Invalid,Success,DataBufferError,Babble,UsbTransactionError,TrbError,Stall,ResourceError,BandwidthError,NoSlots,ShortPacket,ParameterError,ContextStateError,MissedService,CommandRingStopped,CommandAborted,Stopped,Unknown(u8)}
+impl CompletionCode{
+ pub const fn from_raw(value:u8)->Self{match value{
+  0=>Self::Invalid,1=>Self::Success,2=>Self::DataBufferError,3=>Self::Babble,
+  4=>Self::UsbTransactionError,5=>Self::TrbError,6=>Self::Stall,7=>Self::ResourceError,
+  8=>Self::BandwidthError,9=>Self::NoSlots,13=>Self::ShortPacket,17=>Self::ParameterError,
+  19=>Self::ContextStateError,23=>Self::MissedService,24=>Self::CommandRingStopped,
+  25=>Self::CommandAborted,26=>Self::Stopped,v=>Self::Unknown(v),
+ }}
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct PortStatusChangeEvent{pub port_id:u8}
+impl PortStatusChangeEvent{
+ pub fn parse(trb:Trb)->Result<Self,XhciError>{
+  if trb.trb_type()!=TrbType::PortStatusChange as u8{return Err(XhciError::InvalidCapability)}
+  let port_id=(trb.parameter>>24)as u8;
+  if port_id==0{return Err(XhciError::InvalidCapability)}
+  Ok(Self{port_id})
+ }
+}
