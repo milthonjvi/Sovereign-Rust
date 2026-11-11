@@ -19,8 +19,8 @@ use super::e1000_hw::{
 use super::ethernet::MacAddress;
 
 /// Maximum Ethernet frame accepted by this non-jumbo adapter (header included,
-/// FCS excluded because RCTL.SECRC strips it).
-pub const E1000_MAX_FRAME_SIZE: usize = ETHERNET_DEFAULT_MTU as usize + 14;
+/// FCS excluded because RCTL.SECRC strips it). Includes two VLAN tags.
+pub const E1000_MAX_FRAME_SIZE: usize = ETHERNET_DEFAULT_MTU as usize + 22;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum E1000DeviceError {
