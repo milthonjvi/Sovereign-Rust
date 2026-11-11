@@ -194,7 +194,7 @@ impl Fadt {
             if !gas.is_system_memory_io_or_pci_config_bus0()
                 || gas.bit_width != 8
                 || gas.bit_offset != 0
-                || gas.access_size != GenericAddress::ACCESS_BYTE
+                || !gas.has_byte_access_encoding()
             {
                 return Err(AcpiError::InvalidGas);
             }
@@ -283,7 +283,7 @@ impl Fadt {
         if !gas.is_system_memory_io_or_pci_config_bus0()
             || gas.bit_width != 8
             || gas.bit_offset != 0
-            || gas.access_size != GenericAddress::ACCESS_BYTE
+            || !gas.has_byte_access_encoding()
         {
             return Err(AcpiError::InvalidGas);
         }
@@ -324,9 +324,9 @@ pub struct PmRegisterBlockLengths {
 impl PmRegisterBlockLengths {
     /// Validate size constraints defined by the ACPI register model.
     pub fn validate(self) -> Result<(), AcpiError> {
-        if (self.pm1_event != 0 && self.pm1_event != 4)
-            || (self.pm1_control != 0 && self.pm1_control != 2)
-            || (self.pm2_control != 0 && self.pm2_control != 1)
+        if (self.pm1_event != 0 && self.pm1_event < 4)
+            || (self.pm1_control != 0 && self.pm1_control < 2)
+            || (self.pm2_control != 0 && self.pm2_control < 1)
             || (self.pm_timer != 0 && self.pm_timer != 4)
             || self.gpe0 % 2 != 0
             || self.gpe1 % 2 != 0
@@ -361,24 +361,23 @@ impl ExtendedPmRegisters {
     ) -> Result<(), AcpiError> {
         self.validate()?;
         let checks = [
-            (self.pm1a_event, lengths.pm1_event, false),
-            (self.pm1b_event, lengths.pm1_event, false),
-            (self.pm1a_control, lengths.pm1_control, false),
-            (self.pm1b_control, lengths.pm1_control, false),
-            (self.pm2_control, lengths.pm2_control, true),
-            (self.pm_timer, lengths.pm_timer, false),
-            (self.gpe0, lengths.gpe0, false),
-            (self.gpe1, lengths.gpe1, false),
+            (self.pm1a_event, lengths.pm1_event, 0u8),
+            (self.pm1b_event, lengths.pm1_event, 0),
+            (self.pm1a_control, lengths.pm1_control, 0),
+            (self.pm1b_control, lengths.pm1_control, 0),
+            (self.pm2_control, lengths.pm2_control, 1),
+            (self.pm_timer, lengths.pm_timer, 0),
+            (self.gpe0, lengths.gpe0, 2),
+            (self.gpe1, lengths.gpe1, 2),
         ];
-        for (gas, length, is_pm2_control) in checks {
-            if !gas.is_present() {
-                continue;
-            }
-            if length == 0 || gas.bit_width as u16 != (length as u16) * 8 {
-                return Err(AcpiError::InvalidGas);
-            }
-            if is_pm2_control && (gas.bit_width != 8 || gas.bit_offset != 0) {
-                return Err(AcpiError::InvalidGas);
+        for (gas, length, kind) in checks {
+            if !gas.is_present() { continue; }
+            if length == 0 { return Err(AcpiError::InvalidGas); }
+            match kind {
+                1 if gas.bit_width != 8 || gas.bit_offset != 0 => return Err(AcpiError::InvalidGas),
+                2 => {},
+                _ if gas.bit_width as u16 != (length as u16) * 8 => return Err(AcpiError::InvalidGas),
+                _ => {},
             }
             let end = gas.address.checked_add(length as u64)
                 .ok_or(AcpiError::UnsupportedAddress)?;
@@ -395,15 +394,18 @@ impl ExtendedPmRegisters {
     pub fn validate(&self) -> Result<(), AcpiError> {
         for gas in [
             self.pm1a_event, self.pm1b_event, self.pm1a_control, self.pm1b_control,
-            self.pm2_control, self.pm_timer, self.gpe0, self.gpe1,
+            self.pm2_control, self.pm_timer,
         ] {
             if gas.is_present() {
                 gas.validate()?;
-                // FADT fixed power-management blocks are only defined in
-                // System Memory or System I/O address space.
-                if !gas.is_system_memory_or_io() {
-                    return Err(AcpiError::InvalidGas);
-                }
+                if !gas.is_system_memory_or_io() { return Err(AcpiError::InvalidGas); }
+            }
+        }
+        // ACPI directs OSPM to ignore GAS width, offset and access-size fields
+        // for X_GPE0_BLK and X_GPE1_BLK.
+        for gas in [self.gpe0, self.gpe1] {
+            if gas.is_present() && !gas.is_system_memory_or_io() {
+                return Err(AcpiError::InvalidGas);
             }
         }
         Ok(())
@@ -447,6 +449,12 @@ impl GenericAddress {
     /// A zero GAS address denotes an unimplemented register block.
     pub const fn is_present(self) -> bool {
         self.address != 0
+    }
+
+    /// Undefined access size is permitted; consumers infer byte access from
+    /// the fixed register's declared 8-bit width.
+    pub const fn has_byte_access_encoding(self) -> bool {
+        self.access_size == Self::ACCESS_UNDEFINED || self.access_size == Self::ACCESS_BYTE
     }
 
     /// Validate GAS field encoding and arithmetic without dereferencing address.
@@ -618,9 +626,11 @@ mod tests {
             pm_timer: 4, gpe0: 8, gpe1: 2,
         };
         assert_eq!(valid.validate(), Ok(()));
-        assert_eq!(PmRegisterBlockLengths { pm1_event: 2, ..valid }.validate(), Err(AcpiError::InvalidLength));
-        assert_eq!(PmRegisterBlockLengths { pm1_event: 5, ..valid }.validate(), Err(AcpiError::InvalidLength));
+        assert_eq!(PmRegisterBlockLengths { pm1_event: 3, ..valid }.validate(), Err(AcpiError::InvalidLength));
         assert_eq!(PmRegisterBlockLengths { pm1_control: 1, ..valid }.validate(), Err(AcpiError::InvalidLength));
+        assert_eq!(PmRegisterBlockLengths { pm1_event: 6, ..valid }.validate(), Ok(()));
+        assert_eq!(PmRegisterBlockLengths { pm1_control: 4, ..valid }.validate(), Ok(()));
+        assert_eq!(PmRegisterBlockLengths { pm2_control: 2, ..valid }.validate(), Ok(()));
         assert_eq!(PmRegisterBlockLengths { pm_timer: 3, ..valid }.validate(), Err(AcpiError::InvalidLength));
         assert_eq!(PmRegisterBlockLengths { gpe0: 3, ..valid }.validate(), Err(AcpiError::InvalidLength));
         assert_eq!(PmRegisterBlockLengths {
@@ -677,18 +687,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_pm2_gas_with_nonzero_bit_offset() {
+    fn validates_pm2_gas_as_one_byte_register_independent_of_block_length() {
         let mut b = make_fadt(244, 0, None, None);
-        b[90] = 1;
+        b[90] = 2;
         b[196] = GenericAddress::ADDRESS_SPACE_SYSTEM_IO;
         b[197] = 8;
-        b[198] = 1; // PM2 register must start at bit zero.
-        b[199] = GenericAddress::ACCESS_WORD;
+        b[198] = 0;
+        b[199] = GenericAddress::ACCESS_UNDEFINED;
         b[200..208].copy_from_slice(&0xB2u64.to_le_bytes());
         b[9] = 0;
         b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
         let fadt = Fadt::parse(&b).unwrap();
-        assert_eq!(fadt.validate_pm_registers(), Err(AcpiError::InvalidGas));
+        assert_eq!(fadt.validate_pm_registers(), Ok(()));
+
+        b[198] = 1;
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let malformed = Fadt::parse(&b).unwrap();
+        assert_eq!(malformed.validate_pm_registers(), Err(AcpiError::InvalidGas));
     }
 
     #[test]
