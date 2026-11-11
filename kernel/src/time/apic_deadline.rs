@@ -44,6 +44,16 @@ pub struct TimerProcessReport {
     pub buffer_unavailable: bool,
 }
 
+/// Outcome of cancelling a queued timer and updating the comparator.
+///
+/// `removed` is authoritative even if comparator reprogramming fails: the
+/// event has already been removed from the software queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimerCancelReport {
+    pub removed: Option<TimerEvent>,
+    pub reprogram_error: Option<DriverError>,
+}
+
 /// Per-CPU timer queue driven by the local APIC TSC-deadline facility.
 pub struct TscDeadlineQueue<S: ClockSource, const N: usize> {
     service: TimerService<S, N>,
@@ -169,11 +179,14 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
     ///
     /// # Safety
     /// Must be called on the CPU that owns this timer instance.
-    pub unsafe fn cancel(&self, id: TimerId) -> Result<Option<TimerEvent>, DriverError> {
+    pub unsafe fn cancel(&self, id: TimerId) -> TimerCancelReport {
         let removed = self.service.cancel(id);
         // SAFETY: Same-CPU requirement is part of this method's contract.
-        unsafe { self.reprogram()? };
-        Ok(removed)
+        let reprogram_error = unsafe { self.reprogram() }.err();
+        if reprogram_error.is_some() {
+            super::interrupt::signal_timer_work_pending();
+        }
+        TimerCancelReport { removed, reprogram_error }
     }
 
     /// Drain expired events and program the next queued deadline.
