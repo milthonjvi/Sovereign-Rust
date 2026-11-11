@@ -9,11 +9,18 @@ use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use crate::arch::x86_64::io;
 use crate::interrupts::init as interrupt_init;
 
-use super::{Uart16550, UartError, UartRxBuffer};
+use super::{Uart16550, UartError, UartFifo, UartRxBuffer, UartTxBuffer};
 
 const DATA: u16 = 0;
 const LSR: u16 = 5;
 const DATA_READY: u8 = 1;
+const IER: u16 = 1;
+const IIR: u16 = 2;
+const THR_EMPTY: u8 = 1 << 5;
+const RX_INTERRUPT_ENABLE: u8 = 1;
+const THRE_INTERRUPT_ENABLE: u8 = 1 << 1;
+const THRE_INTERRUPT_ID: u8 = 0x02;
+const MAX_TX_PER_IRQ: usize = 64;
 const OVERRUN_ERROR: u8 = 1 << 1;
 const PARITY_ERROR: u8 = 1 << 2;
 const FRAMING_ERROR: u8 = 1 << 3;
@@ -34,6 +41,14 @@ static COM1_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
 static COM2_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
 static COM3_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
 static COM4_RX: UartRxBuffer<RX_CAPACITY> = UartRxBuffer::new();
+static COM1_TX: UartTxBuffer = UartTxBuffer::new();
+static COM2_TX: UartTxBuffer = UartTxBuffer::new();
+static COM3_TX: UartTxBuffer = UartTxBuffer::new();
+static COM4_TX: UartTxBuffer = UartTxBuffer::new();
+static COM1_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
+static COM2_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
+static COM3_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
+static COM4_TX_DEPTH: AtomicUsize = AtomicUsize::new(1);
 
 /// Hardware receive errors observed by the UART interrupt handler.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -106,6 +121,8 @@ struct PortBinding {
     handler: extern "C" fn(u8),
     queue: &'static UartRxBuffer<RX_CAPACITY>,
     stats: &'static AtomicRxStatistics,
+    tx_queue: &'static UartTxBuffer,
+    tx_depth: &'static AtomicUsize,
 }
 
 fn binding(base: u16) -> Option<PortBinding> {
@@ -113,22 +130,22 @@ fn binding(base: u16) -> Option<PortBinding> {
         0x3F8 => Some(PortBinding {
             irq: 4, bit: COM1_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM1_RX,
-            stats: &COM1_STATS,
+            stats: &COM1_STATS, tx_queue: &COM1_TX, tx_depth: &COM1_TX_DEPTH,
         }),
         0x2F8 => Some(PortBinding {
             irq: 3, bit: COM2_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM2_RX,
-            stats: &COM2_STATS,
+            stats: &COM2_STATS, tx_queue: &COM2_TX, tx_depth: &COM2_TX_DEPTH,
         }),
         0x3E8 => Some(PortBinding {
             irq: 4, bit: COM3_BIT, shared_line_mask: IRQ4_PORTS,
             handler: irq4_handler, queue: &COM3_RX,
-            stats: &COM3_STATS,
+            stats: &COM3_STATS, tx_queue: &COM3_TX, tx_depth: &COM3_TX_DEPTH,
         }),
         0x2E8 => Some(PortBinding {
             irq: 3, bit: COM4_BIT, shared_line_mask: IRQ3_PORTS,
             handler: irq3_handler, queue: &COM4_RX,
-            stats: &COM4_STATS,
+            stats: &COM4_STATS, tx_queue: &COM4_TX, tx_depth: &COM4_TX_DEPTH,
         }),
         _ => None,
     }
@@ -155,6 +172,8 @@ pub unsafe fn attach_interrupts(
     }
 
     let first_on_line = current & port.shared_line_mask == 0;
+    let depth = match uart.fifo_capability() { UartFifo::None => 1, UartFifo::Bytes16 => 16, UartFifo::Bytes64 => 64 };
+    port.tx_depth.store(depth, Ordering::Release);
     if first_on_line {
         // SAFETY: Caller keeps IF clear and guarantees exclusive IRQ3/IRQ4 ownership.
         unsafe { interrupt_init::register_legacy_irq(port.irq, port.handler) }
@@ -221,6 +240,27 @@ pub unsafe fn detach_interrupts(uart: &mut Uart16550) -> Result<(), UartIrqError
     Ok(())
 }
 
+/// Queue bytes for interrupt-driven transmission on an attached UART.
+///
+/// Returns the accepted prefix length; the caller must retry any suffix.
+///
+/// # Safety
+/// Call with IF clear and exactly one serialized producer per UART queue.
+/// The UART must already be attached through `attach_interrupts`.
+pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, UartIrqError> {
+    uart.ensure_initialized().map_err(UartIrqError::Uart)?;
+    let port = binding(uart.base_port()).ok_or(UartIrqError::UnsupportedPort)?;
+    if ATTACHED.load(Ordering::Acquire) & port.bit == 0 { return Err(UartIrqError::NotAttached); }
+    // SAFETY: Caller guarantees the SPSC producer contract.
+    let accepted = unsafe { port.tx_queue.push_slice(bytes) };
+    if accepted != 0 {
+        // Preserve RX-ready while arming THRE. IF is clear per API contract.
+        // SAFETY: Exclusive UART ownership is held by the caller.
+        unsafe { io::out8(uart.base_port() + IER, RX_INTERRUPT_ENABLE | THRE_INTERRUPT_ENABLE); }
+    }
+    Ok(accepted)
+}
+
 /// Returns the static RX queue associated with a legacy UART base port.
 pub fn receive_buffer(base: u16) -> Option<&'static UartRxBuffer<RX_CAPACITY>> {
     binding(base).map(|port| port.queue)
@@ -252,16 +292,42 @@ fn drain_port(
     }
 }
 
+fn service_transmit(base: u16, queue: &'static UartTxBuffer, depth: &'static AtomicUsize) {
+    for _ in 0..MAX_TX_PER_IRQ {
+        // SAFETY: This shared handler owns the attached UART's registers.
+        let iir = unsafe { io::in8(base + IIR) };
+        if iir & 1 != 0 || iir & 0x0E != THRE_INTERRUPT_ID { break; }
+        // SAFETY: IIR identifies THRE as the pending interrupt cause.
+        if unsafe { io::in8(base + LSR) } & THR_EMPTY == 0 { break; }
+        let limit = core::cmp::min(depth.load(Ordering::Acquire), 64);
+        let mut sent = 0;
+        while sent < limit {
+            // SAFETY: IRQ is the sole consumer of this SPSC queue.
+            let Some(byte) = (unsafe { queue.pop() }) else { break; };
+            // SAFETY: THRE reports FIFO space for this burst.
+            unsafe { io::out8(base + DATA, byte); }
+            sent += 1;
+        }
+        if queue.is_empty() {
+            // Disable THRE only; RX remains enabled on the shared UART.
+            // SAFETY: IER bit zero remains set for RX.
+            unsafe { io::out8(base + IER, RX_INTERRUPT_ENABLE); }
+            break;
+        }
+        if sent == 0 { break; }
+    }
+}
+
 extern "C" fn irq3_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM2_BIT != 0 { drain_port(0x2F8, &COM2_RX, &COM2_STATS); }
-    if attached & COM4_BIT != 0 { drain_port(0x2E8, &COM4_RX, &COM4_STATS); }
+    if attached & COM2_BIT != 0 { service_transmit(0x2F8, &COM2_TX, &COM2_TX_DEPTH); drain_port(0x2F8, &COM2_RX, &COM2_STATS); }
+    if attached & COM4_BIT != 0 { service_transmit(0x2E8, &COM4_TX, &COM4_TX_DEPTH); drain_port(0x2E8, &COM4_RX, &COM4_STATS); }
 }
 
 extern "C" fn irq4_handler(_vector: u8) {
     let attached = ATTACHED.load(Ordering::Acquire);
-    if attached & COM1_BIT != 0 { drain_port(0x3F8, &COM1_RX, &COM1_STATS); }
-    if attached & COM3_BIT != 0 { drain_port(0x3E8, &COM3_RX, &COM3_STATS); }
+    if attached & COM1_BIT != 0 { service_transmit(0x3F8, &COM1_TX, &COM1_TX_DEPTH); drain_port(0x3F8, &COM1_RX, &COM1_STATS); }
+    if attached & COM3_BIT != 0 { service_transmit(0x3E8, &COM3_TX, &COM3_TX_DEPTH); drain_port(0x3E8, &COM3_RX, &COM3_STATS); }
 }
 
 /// Reports whether a UART port is currently connected to its shared IRQ line.
