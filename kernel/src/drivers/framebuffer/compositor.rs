@@ -131,7 +131,7 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
     pub fn move_layer(&mut self, id: LayerId, x: i64, y: i64) -> Result<(), CompositorError> {
         let old = *self.layer(id)?;
         self.mark_layer_bounds(old.image, old.x, old.y);
-        let layer = self.layers[id.0].as_mut().ok_or(CompositorError::InvalidLayer)?;
+        let layer = self.layers[id.slot].as_mut().ok_or(CompositorError::InvalidLayer)?;
         layer.x = x;
         layer.y = y;
         self.mark_layer_bounds(old.image, x, y);
@@ -160,7 +160,7 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
     pub fn raise_layer(&mut self, id: LayerId) -> Result<(), CompositorError> {
         let layer = *self.layer(id)?;
         let position = self.order[..self.order_len].iter()
-            .position(|&slot| slot == id.0).ok_or(CompositorError::InvalidLayer)?;
+            .position(|&slot| slot == id.slot).ok_or(CompositorError::InvalidLayer)?;
         let highest = self.order_len - 1;
         if position != highest {
             self.mark_layer_bounds(layer.image, layer.x, layer.y);
@@ -177,7 +177,7 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
     pub fn lower_layer(&mut self, id: LayerId) -> Result<(), CompositorError> {
         let layer = *self.layer(id)?;
         let position = self.order[..self.order_len].iter()
-            .position(|&slot| slot == id.0).ok_or(CompositorError::InvalidLayer)?;
+            .position(|&slot| slot == id.slot).ok_or(CompositorError::InvalidLayer)?;
         if position != 0 {
             self.mark_layer_bounds(layer.image, layer.x, layer.y);
             let slot = self.order[position];
@@ -195,7 +195,7 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         if old.opacity == opacity {
             return Ok(());
         }
-        let layer = self.layers[id.0].as_mut().ok_or(CompositorError::InvalidLayer)?;
+        let layer = self.layers[id.slot].as_mut().ok_or(CompositorError::InvalidLayer)?;
         layer.opacity = opacity;
         self.mark_layer_bounds(old.image, old.x, old.y);
         Ok(())
@@ -207,7 +207,7 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         if old.visible == visible {
             return Ok(());
         }
-        self.layers[id.0].as_mut().ok_or(CompositorError::InvalidLayer)?.visible = visible;
+        self.layers[id.slot].as_mut().ok_or(CompositorError::InvalidLayer)?.visible = visible;
         self.mark_layer_bounds(old.image, old.x, old.y);
         Ok(())
     }
