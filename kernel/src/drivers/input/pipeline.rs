@@ -8,7 +8,7 @@ use super::event::InputEvent;
 use super::keyboard::set1::Set1Decoder;
 use super::mouse::packet::Ps2MouseDecoder;
 use super::queue::{SpscConsumer, SpscProducer, SpscQueue};
-use super::ps2::{Ps2Controller, Ps2DataByte, Ps2Error};
+use super::ps2::{Ps2Controller, Ps2DataByte, Ps2Error, Ps2MouseProtocol};
 
 pub const STATUS_AUXILIARY: u8 = 1 << 5;
 pub const STATUS_TIMEOUT: u8 = 1 << 6;
@@ -35,12 +35,19 @@ impl<'a, const N: usize> Ps2InputPipeline<'a, N> {
     pub fn new(queue: &'a mut SpscQueue<InputEvent, N>, wheel_enabled: bool)
         -> (Self, SpscConsumer<'a, InputEvent, N>)
     {
+        Self::new_with_protocol(queue, if wheel_enabled { Ps2MouseProtocol::Wheel } else { Ps2MouseProtocol::Standard })
+    }
+
+    /// Constructs decoders using the exact protocol negotiated with the mouse.
+    pub fn new_with_protocol(
+        queue: &'a mut SpscQueue<InputEvent, N>, protocol: Ps2MouseProtocol,
+    ) -> (Self, SpscConsumer<'a, InputEvent, N>) {
         let (producer, consumer) = queue.split();
         (
             Self {
                 producer,
                 keyboard: Set1Decoder::new(),
-                mouse: Ps2MouseDecoder::new(wheel_enabled),
+                mouse: Ps2MouseDecoder::new_with_protocol(protocol),
                 stats: InputPipelineStats::default(),
             },
             consumer,
