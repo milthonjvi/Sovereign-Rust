@@ -28,7 +28,7 @@ impl PagePermissions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PageTableError {
     MisalignedAddress, NonCanonicalAddress, PhysicalAddressOutOfRange,
-    AllocationFailed, InvalidTablePointer, AlreadyMapped, CorruptIntermediateEntry,
+    AllocationFailed, InvalidTablePointer, AlreadyMapped, CorruptIntermediateEntry,\n    NxeNotEnabled, WritableExecutableAlias,
 }
 
 /// Supplies unique, zeroed, page-aligned table pages and their writable mapping.
@@ -50,7 +50,7 @@ pub struct PageTableBuilder<M: PageTableMemory> {
 }
 
 impl<M: PageTableMemory> PageTableBuilder<M> {
-    pub fn new(mut memory: M) -> Result<Self, PageTableError> {
+    pub fn new(mut memory: M, nxe_enabled: bool) -> Result<Self, PageTableError> {\n        if !nxe_enabled { return Err(PageTableError::NxeNotEnabled); }
         let (physical, virtual_ptr) = memory.allocate_zeroed_table()?;
         validate_table_page(physical, virtual_ptr)?;
         Ok(Self { memory, root_physical: physical, root_virtual: virtual_ptr })
@@ -63,7 +63,7 @@ impl<M: PageTableMemory> PageTableBuilder<M> {
         if virtual_address & (PAGE_SIZE - 1) != 0 || physical_address & (PAGE_SIZE - 1) != 0 {
             return Err(PageTableError::MisalignedAddress);
         }
-        if !is_canonical(virtual_address) { return Err(PageTableError::NonCanonicalAddress); }
+        if !is_canonical(virtual_address) { return Err(PageTableError::NonCanonicalAddress); }\n        if permissions.writable && permissions.executable {\n            return Err(PageTableError::WritableExecutableAlias);\n        }
         if physical_address & !ADDRESS_MASK != 0 { return Err(PageTableError::PhysicalAddressOutOfRange); }
         let indices = [
             ((virtual_address >> 39) & 0x1ff) as usize,
