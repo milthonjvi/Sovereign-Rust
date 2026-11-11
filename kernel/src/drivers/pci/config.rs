@@ -16,7 +16,7 @@ pub fn scan_bus<A:ConfigAccess>(io:&A,segment:u16,bus:u8,out:&mut[PciFunction])-
 impl Bar{pub const fn decode(index:u8,low:u32,high:Option<u32>)->Option<Self>{if low&1!=0{return Some(Self{index,kind:BarKind::Io,prefetchable:false,base:(low&!3)as u64,raw_low:low,raw_high:None})}let ty=(low>>1)&3;if ty==0{Some(Self{index,kind:BarKind::Memory32,prefetchable:low&8!=0,base:(low&!15)as u64,raw_low:low,raw_high:None})}else if ty==2{match high{Some(hi)=>Some(Self{index,kind:BarKind::Memory64,prefetchable:low&8!=0,base:((hi as u64)<<32)|(low as u64&!15),raw_low:low,raw_high:Some(hi)}),None=>None}}else{None}}}
 /// PCIe ECAM window descriptor, normally sourced from ACPI MCFG.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct EcamWindow{pub segment:u16,pub start_bus:u8,pub end_bus:u8,pub physical_base:u64}
-impl EcamWindow{pub const fn contains(self,a:PciAddress)->bool{a.segment==self.segment&&a.bus>=self.start_bus&&a.bus<=self.end_bus}pub const fn offset(self,a:PciAddress,register:u16)->Option<u64>{if !self.contains(a)||register>=PCIE_CONFIG_SIZE{return None}Some((((a.bus-self.start_bus)as u64)<<20)|((a.device as u64)<<15)|((a.function as u64)<<12)|register as u64)}}
+impl EcamWindow{pub const fn contains(self,a:PciAddress)->bool{a.segment==self.segment&&a.bus>=self.start_bus&&a.bus<=self.end_bus}pub const fn offset(self,a:PciAddress,register:u16)->Option<u64>{if !self.contains(a)||a.device>=MAX_DEVICES||a.function>=MAX_FUNCTIONS||register>=PCIE_CONFIG_SIZE||register&3!=0{return None}Some((((a.bus-self.start_bus)as u64)<<20)|((a.device as u64)<<15)|((a.function as u64)<<12)|register as u64)}}
 
 /// Read the currently programmed BAR values without probing or modifying them.
 /// The output buffer must hold every decoded BAR; a 64-bit BAR consumes two
