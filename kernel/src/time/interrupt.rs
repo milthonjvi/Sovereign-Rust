@@ -51,3 +51,38 @@ pub fn take_timer_work_pending() -> bool {
 pub fn timer_work_pending() -> bool {
     TIMER_WORK_PENDING.load(Ordering::Acquire)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timer_vector_registration_signals_deferred_work() {
+        const VECTOR: u8 = 0xF0;
+        assert!(!take_timer_work_pending());
+        register_timer_interrupt(VECTOR).unwrap();
+        assert!(dispatch::dispatch_vector(VECTOR));
+        assert!(take_timer_work_pending());
+        assert!(!take_timer_work_pending());
+        assert_eq!(
+            dispatch::unregister(VECTOR, timer_interrupt_handler),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn rejects_non_apic_vectors() {
+        assert_eq!(
+            register_timer_interrupt(0x20),
+            Err(TimerInterruptError::InvalidVector)
+        );
+        assert_eq!(
+            register_timer_interrupt(0x80),
+            Err(TimerInterruptError::InvalidVector)
+        );
+        assert_eq!(
+            register_timer_interrupt(0xFF),
+            Err(TimerInterruptError::InvalidVector)
+        );
+    }
+}
