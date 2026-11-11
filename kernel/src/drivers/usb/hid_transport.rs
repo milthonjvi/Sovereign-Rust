@@ -144,6 +144,7 @@ impl HidInterruptEndpoint{
   read_interrupt_report(controller,address,self.endpoint,buffer)
  }
  pub fn from_parsed(parsed:super::descriptors::ParsedEndpoint,speed:super::transfer::UsbSpeed)->Result<Self,UsbError>{
+  parsed.validate_for_speed(speed)?;
   if parsed.address&0x80==0||(parsed.attributes&3)!=TransferType::Interrupt as u8
    ||parsed.max_packet_size==0||parsed.interval==0{
    return Err(UsbError::MalformedDescriptor)
