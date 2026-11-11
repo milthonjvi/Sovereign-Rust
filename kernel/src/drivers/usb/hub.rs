@@ -20,7 +20,7 @@ impl SuperSpeedHubDescriptor{
   if b.len()<10||b[1]!=HUB_DESCRIPTOR_SS||b[2]==0{return Err(UsbError::MalformedDescriptor)}
   let bitmap_bytes=((b[2] as usize+1)+7)/8;
   let required=10+bitmap_bytes;
-  if b[0] as usize<required||b.len()<required{return Err(UsbError::BufferTooShort)}
+  if (b[0] as usize)<required||b.len()<required{return Err(UsbError::BufferTooShort)}
   Ok(Self{ports:b[2],characteristics:u16::from_le_bytes([b[3],b[4]]),power_on_to_good:b[5],controller_current:b[6],header_decode_latency:b[7],hub_delay:u16::from_le_bytes([b[8],b[9]])})
  }
 }
