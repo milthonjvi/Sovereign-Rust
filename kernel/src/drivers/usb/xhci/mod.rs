@@ -31,7 +31,7 @@ impl CapabilityRegisters{
 /// software from overwriting commands not yet retired by completion events.
 pub struct XhciProducerRing<'a,const N:usize>{entries:&'a mut[Trb;N],physical_base:u64,enqueue:usize,cycle:bool,in_flight:usize}
 impl<'a,const N:usize>XhciProducerRing<'a,N>{
- pub fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
+ /// # Safety\n /// `physical_base` must be the DMA address of `entries`, which must be\n /// contiguous, coherent, 64-byte aligned, and remain pinned for the ring lifetime.\n pub unsafe fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
   if N<2||physical_base&0x3f!=0{return Err(XhciError::InvalidRing)}
   for entry in entries.iter_mut(){unsafe{core::ptr::write_volatile(entry,Trb::EMPTY);}}
   let mut ring=Self{entries,physical_base,enqueue:0,cycle:true,in_flight:0};
@@ -81,7 +81,7 @@ impl<'a,const N:usize>XhciProducerRing<'a,N>{
 
 /// Consumer for an already configured DMA event ring. Event TRBs are returned
 /// only when their Cycle bit matches the consumer cycle state.
-pub struct XhciEventRing<'a,const N:usize>{entries:&'a[Trb;N],dequeue:usize,cycle:bool}
+pub struct XhciEventRing<'a,const N:usize>{entries:&'a mut[Trb;N],dequeue:usize,cycle:bool}
 impl<'a,const N:usize>XhciEventRing<'a,N>{
  pub fn new(entries:&'a[Trb;N])->Result<Self,XhciError>{
   if N==0{return Err(XhciError::InvalidRing)}
@@ -106,7 +106,7 @@ mod ring_tests{
  use super::*;
  #[test]fn producer_ring_wraps_with_link_trb_and_cycle_toggle(){
   let mut entries=[Trb::EMPTY;4];
-  let mut ring=XhciProducerRing::new(&mut entries,0x1000).unwrap();
+  let mut ring=unsafe{XhciProducerRing::new(&mut entries,0x1000)}.unwrap();
   assert_eq!(ring.push(Trb{parameter:1,status:0,control:1}).unwrap(),0);
   assert_eq!(ring.push(Trb{parameter:2,status:0,control:1}).unwrap(),1);
   assert_eq!(ring.push(Trb{parameter:3,status:0,control:1}).unwrap(),2);
@@ -117,13 +117,13 @@ mod ring_tests{
  }
  #[test]fn producer_requires_dma_alignment(){
   let mut entries=[Trb::EMPTY;4];
-  assert!(matches!(XhciProducerRing::new(&mut entries,0x1001),Err(XhciError::InvalidRing)));
+  assert!(matches!(unsafe{XhciProducerRing::new(&mut entries,0x1001)},Err(XhciError::InvalidRing)));
  }
  #[test]fn event_ring_consumes_only_matching_cycle(){
   let mut entries=[Trb::EMPTY;2];
   entries[0]=Trb{parameter:7,status:0,control:1};
   entries[1]=Trb{parameter:8,status:0,control:1};
-  let mut ring=XhciEventRing::new(&entries).unwrap();
+  let mut ring=unsafe{XhciEventRing::new(&mut entries)}.unwrap();
   assert_eq!(ring.pop().unwrap().parameter,7);assert_eq!(ring.pop().unwrap().parameter,8);
   assert_eq!(ring.pop(),None);assert_eq!(ring.dequeue_index(),0);assert!(!ring.consumer_cycle());
  }
