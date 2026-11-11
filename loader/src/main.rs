@@ -376,6 +376,9 @@ struct DescriptorTablePointer {
     base: u64,
 }
 
+const _: [(); 16] = [(); mem::size_of::<IdtEntry>()];
+const _: [(); 10] = [(); mem::size_of::<DescriptorTablePointer>()];
+
 unsafe fn build_emergency_idt(physical_base: u64) {
     let selector: u16;
     // SAFETY: Reading CS is valid in x86_64 UEFI long mode.
