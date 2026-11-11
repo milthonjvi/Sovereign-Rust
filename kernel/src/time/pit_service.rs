@@ -24,12 +24,14 @@ pub enum PitTimerServiceError {
     Pit(PitIrqError),
     ClockSourceUnavailable,
     Service(TimerServiceError),
+    NotActive,
 }
 
 /// BSP timer service driven by periodic legacy PIC IRQ0 ticks.
 pub struct PitTimerService<const N: usize> {
     pit: Pit,
     service: TimerService<PitClockSource, N>,
+    active: bool,
 }
 
 impl<const N: usize> PitTimerService<N> {
@@ -60,7 +62,7 @@ impl<const N: usize> PitTimerService<N> {
                 return Err(PitTimerServiceError::Service(error));
             }
         };
-        Ok(Self { pit, service })
+        Ok(Self { pit, service, active: true })
     }
 
     /// Current monotonic time in nanoseconds.
@@ -76,8 +78,12 @@ impl<const N: usize> PitTimerService<N> {
         deadline: Deadline,
         kind: u32,
         context: usize,
-    ) -> Result<(), TimerServiceError> {
+    ) -> Result<(), PitTimerServiceError> {
+        if !self.active {
+            return Err(PitTimerServiceError::NotActive);
+        }
         self.service.schedule_at(id, deadline, kind, context)
+            .map_err(PitTimerServiceError::Service)
     }
 
     /// Schedule an event after a relative duration.
@@ -87,8 +93,12 @@ impl<const N: usize> PitTimerService<N> {
         delay_ns: u64,
         kind: u32,
         context: usize,
-    ) -> Result<Deadline, TimerServiceError> {
+    ) -> Result<Deadline, PitTimerServiceError> {
+        if !self.active {
+            return Err(PitTimerServiceError::NotActive);
+        }
         self.service.schedule_after(id, delay_ns, kind, context)
+            .map_err(PitTimerServiceError::Service)
     }
 
     /// Cancel a queued event. No hardware reprogramming is needed for periodic PIT.
@@ -106,7 +116,7 @@ impl<const N: usize> PitTimerService<N> {
         &self,
         output: &mut [Option<TimerEvent>],
     ) -> Option<usize> {
-        if !take_periodic_work_pending() {
+        if !self.active || !take_periodic_work_pending() {
             return None;
         }
         if output.is_empty() {
@@ -133,8 +143,13 @@ impl<const N: usize> PitTimerService<N> {
     /// # Safety
     /// Must run on the BSP at CPL 0 with IF clear and no PIT handler in flight.
     pub unsafe fn shutdown(&mut self) -> Result<(), PitTimerServiceError> {
+        if !self.active {
+            return Err(PitTimerServiceError::NotActive);
+        }
         // SAFETY: The caller fulfills the PIT teardown contract.
         unsafe { self.pit.shutdown_periodic_irq() }
-            .map_err(PitTimerServiceError::Pit)
+            .map_err(PitTimerServiceError::Pit)?;
+        self.active = false;
+        Ok(())
     }
 }
