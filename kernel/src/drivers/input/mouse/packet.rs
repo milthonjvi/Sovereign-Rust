@@ -1,10 +1,23 @@
 //! PS/2 mouse packet decoder for three-byte and wheel four-byte packets.
 use crate::drivers::input::event::{InputEvent, MouseButtons};
+use crate::drivers::input::ps2::Ps2MouseProtocol;
 #[derive(Clone, Copy, Debug)]
-pub struct Ps2MouseDecoder { packet: [u8;4], index: u8, packet_len: u8, previous_buttons: Option<MouseButtons> }
+pub struct Ps2MouseDecoder {
+ packet: [u8;4], index: u8, packet_len: u8,
+ protocol: Ps2MouseProtocol, previous_buttons: Option<MouseButtons>,
+}
 impl Ps2MouseDecoder {
+ /// Compatibility constructor for standard or IntelliMouse wheel packets.
  pub const fn new(wheel_enabled: bool) -> Self {
-  Self { packet:[0;4], index:0, packet_len:if wheel_enabled {4} else {3}, previous_buttons:None }
+  Self::new_with_protocol(if wheel_enabled { Ps2MouseProtocol::Wheel } else { Ps2MouseProtocol::Standard })
+ }
+ /// Selects packet semantics from the device ID negotiated during PS/2 setup.
+ pub const fn new_with_protocol(protocol: Ps2MouseProtocol) -> Self {
+  let packet_len = match protocol {
+   Ps2MouseProtocol::Standard => 3,
+   Ps2MouseProtocol::Wheel | Ps2MouseProtocol::FiveButton => 4,
+  };
+  Self { packet:[0;4], index:0, packet_len, protocol, previous_buttons:None }
  }
  /// Discards an incomplete packet and forces the next packet to resynchronize.
  pub fn reset_stream(&mut self) {
@@ -22,7 +35,9 @@ impl Ps2MouseDecoder {
   // synthesize a large movement from the saturated data byte.
   let dx=if flags&0x40!=0 {0} else {axis(self.packet[1],flags&0x10!=0)};
   let dy=if flags&0x80!=0 {0} else {-axis(self.packet[2],flags&0x20!=0)};
-  let extra=if self.packet_len==4 {(self.packet[3]&0x30)>>1} else {0};
+  // Bits 4-5 of the fourth byte are button 4/5 only for the Explorer
+  // protocol. They are reserved in ordinary IntelliMouse wheel packets.
+  let extra=if self.protocol==Ps2MouseProtocol::FiveButton {(self.packet[3]&0x30)>>1} else {0};
   let buttons=MouseButtons::from_bits((flags&7)|extra); let mut count=0;
   if dx!=0 || dy!=0 { out[count]=Some(InputEvent::MouseMotion{dx,dy}); count+=1; }
   if self.previous_buttons!=Some(buttons) {
@@ -55,6 +70,20 @@ mod tests {
   assert_eq!(out[2],Some(InputEvent::MouseWheel{delta:-1}));
  }
 
+ #[test] fn standard_wheel_protocol_ignores_reserved_button_bits() {
+  let mut d=Ps2MouseDecoder::new_with_protocol(Ps2MouseProtocol::Wheel);
+  let mut out=[None;3];
+  d.feed(0x08,&mut out); d.feed(0,&mut out); d.feed(0,&mut out);
+  assert_eq!(d.feed(0x30,&mut out),0);
+ }
+ #[test] fn five_button_protocol_decodes_extra_buttons_and_signed_wheel() {
+  let mut d=Ps2MouseDecoder::new_with_protocol(Ps2MouseProtocol::FiveButton);
+  let mut out=[None;3];
+  d.feed(0x08,&mut out); d.feed(0,&mut out); d.feed(0,&mut out);
+  assert_eq!(d.feed(0x3F,&mut out),2);
+  assert_eq!(out[0],Some(InputEvent::MouseButtons{buttons:MouseButtons::from_bits(0x18)}));
+  assert_eq!(out[1],Some(InputEvent::MouseWheel{delta:-1}));
+ }
  #[test] fn reset_discards_partial_packet() {
   let mut d=Ps2MouseDecoder::new(false); let mut out=[None;3];
   assert_eq!(d.feed(0x09,&mut out),0);
