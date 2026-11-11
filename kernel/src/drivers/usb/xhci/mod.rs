@@ -282,7 +282,11 @@ impl XhciController{
   Ok(false)
  }
  /// Addresses must be physical, DMA-visible and aligned as required by xHCI.
- pub fn configure_dma<I:RegisterIo>(&mut self,io:&mut I,dcbaa:u64,command_ring:u64,slots:u8)->Result<(),XhciError>{
+ /// # Safety
+ /// The supplied physical addresses must refer to pinned, coherent DMA regions.
+ /// DCBAA[0] must be zero; controllers requiring scratchpads are rejected until
+ /// their scratchpad array is provisioned by the caller.
+ pub unsafe fn configure_dma<I:RegisterIo>(&mut self,io:&mut I,dcbaa:u64,command_ring:u64,slots:u8)->Result<(),XhciError>{
   if self.state!=ControllerState::Reset{return Err(XhciError::InvalidState)}
   if dcbaa&0x3f!=0||command_ring&0x3f!=0||(!self.capabilities.address_64bit&&(dcbaa>>32!=0||command_ring>>32!=0)){return Err(XhciError::InvalidDmaAddress)}
   if self.capabilities.scratchpad_buffers!=0{return Err(XhciError::NotReady)}
@@ -296,7 +300,10 @@ impl XhciController{
  }
  /// Programs interrupter zero. The caller must have populated the single
  /// ERST entry at erst_physical with event_ring_physical and trb_count.
- pub fn configure_event_ring<I:RegisterIo>(&mut self,io:&mut I,erst_physical:u64,event_ring_physical:u64,trb_count:u16)->Result<(),XhciError>{
+ /// # Safety
+ /// ERST and event_ring_physical must reference initialized, pinned, coherent
+ /// DMA memory; the ERST entry must describe the supplied event-ring segment.
+ pub unsafe fn configure_event_ring<I:RegisterIo>(&mut self,io:&mut I,erst_physical:u64,event_ring_physical:u64,trb_count:u16)->Result<(),XhciError>{
   if self.state!=ControllerState::Reset||!self.dma_configured||self.event_ring_configured{return Err(XhciError::InvalidState)}
   if erst_physical&0x3f!=0||event_ring_physical&0x3f!=0||trb_count==0||(!self.capabilities.address_64bit&&(erst_physical>>32!=0||event_ring_physical>>32!=0)){return Err(XhciError::InvalidDmaAddress)}
   let interrupter=self.runtime_base+0x20;
@@ -316,7 +323,7 @@ impl XhciController{
    None=>Ok(None),
   }
  }
- pub fn update_event_ring_dequeue<I:RegisterIo>(&self,io:&mut I,dequeue_physical:u64)->Result<(),XhciError>{
+ fn update_event_ring_dequeue<I:RegisterIo>(&self,io:&mut I,dequeue_physical:u64)->Result<(),XhciError>{
   if self.state!=ControllerState::Running||dequeue_physical&0x0f!=0{return Err(XhciError::InvalidState)}
   let erdp=self.runtime_base+0x20+0x18;
   io.write32(erdp+4,(dequeue_physical>>32)as u32)?;
@@ -399,9 +406,9 @@ mod controller_state_tests{
   let mut h=XhciController::discover(&io).unwrap();
   h.request_halt(&mut io).unwrap();assert!(h.poll_halted(&io).unwrap());
   h.request_reset(&mut io).unwrap();assert!(h.poll_reset(&io).unwrap());
-  h.configure_dma(&mut io,0x2000,0x3000,8).unwrap();
+  unsafe{h.configure_dma(&mut io,0x2000,0x3000,8)}.unwrap();
   assert_eq!(io.words[0x40/4+OP_CONFIG/4],8);
-  h.configure_event_ring(&mut io,0x4000,0x5000,256).unwrap();
+  unsafe{h.configure_event_ring(&mut io,0x4000,0x5000,256)}.unwrap();
   assert_eq!(io.words[(0x100+0x20+0x08)/4],1);
   h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());
   assert_eq!(h.state,ControllerState::Running);
@@ -429,7 +436,7 @@ mod controller_state_tests{
  #[test]fn rejects_unaligned_dma_addresses(){
   let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8;
   let mut h=XhciController::discover(&io).unwrap();h.state=ControllerState::Reset;
-  assert_eq!(h.configure_dma(&mut io,0x2001,0x3000,4),Err(XhciError::InvalidDmaAddress));
+  assert_eq!(unsafe{h.configure_dma(&mut io,0x2001,0x3000,4)},Err(XhciError::InvalidDmaAddress));
  }
 }
 
