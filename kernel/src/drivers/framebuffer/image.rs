@@ -293,6 +293,40 @@ mod tests {
     }
 
     #[test]
+    fn alpha_blit_handles_transparent_partial_and_opaque_pixels() {
+        use super::super::color::PixelFormat;
+        use super::super::info::FramebufferInfo;
+        use super::super::surface::FramebufferSurface;
+
+        let source = [
+            Color::with_alpha(255, 0, 0, 128),
+            Color::with_alpha(255, 255, 255, 0),
+            Color::with_alpha(0, 255, 0, 255),
+        ];
+        let image = ImageView::new(&source, 3, 1, 3).unwrap();
+        let mut memory = [0u8; 3 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 3,
+            height: 1,
+            pitch: 3 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the backing array is writable, correctly sized, and exclusively borrowed.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        target.clear(Color::new(0, 0, 255));
+        image.draw_alpha_blended(&mut target, 0, 0).unwrap();
+        drop(target);
+
+        assert_eq!(&memory[0..4], &[128, 0, 127, 0]);
+        assert_eq!(&memory[4..8], &[0, 0, 255, 0]);
+        assert_eq!(&memory[8..12], &[0, 255, 0, 0]);
+    }
+
+    #[test]
     fn validates_last_row_extent() {
         let pixels = [Color::BLACK; 5];
         assert_eq!(
