@@ -308,9 +308,10 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
 
     /// Process completed RX frames directly from their DMA buffers without copying.
     ///
-    /// The callback runs while the current buffer is CPU-owned. Its slice cannot
-    /// outlive the call; the descriptor is recycled immediately after the callback
-    /// returns. At most one complete RX ring is examined per invocation.
+    /// The callback runs while the current buffer is CPU-owned. It must be bounded
+    /// and nonblocking; its slice cannot outlive the call. The descriptor is recycled
+    /// immediately after the callback returns. At most one complete RX ring is
+    /// examined per invocation.
     pub fn receive_with<F>(&mut self, mut consume: F) -> Result<usize, DriverError>
     where
         F: FnMut(&[u8]),
