@@ -483,6 +483,10 @@ impl E1000TxQueue {
         Ok(completed)
     }
 
+    pub(crate) const fn pending_count(&self) -> u16 {
+        self.pending
+    }
+
     const fn cursor_count(&self) -> usize {
         self.cursor.mask() as usize + 1
     }
