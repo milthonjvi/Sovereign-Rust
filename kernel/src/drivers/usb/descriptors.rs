@@ -115,30 +115,27 @@ impl ParsedEndpoint{
    UsbSpeed::Full=>{
     let size_ok=match transfer{
      2=>matches!(packet,8|16|32|64),
-     1=>packet<=1023,
-     3=>packet<=64,
+     1=>packet<=1023&&self.interval>=1&&self.interval<=16,
+     3=>packet<=64&&self.interval!=0,
      _=>false,
     };
     size_ok&&self.transactions_per_microframe==1
-     &&(transfer!=1||self.interval!=0)
    }
    UsbSpeed::High=>{
     let size_ok=match transfer{
      2=>packet==512,
-     1|3=>packet<=1024,
+     1|3=>packet<=1024&&self.interval>=1&&self.interval<=16,
      _=>false,
     };
-    size_ok&&self.interval>=1&&self.interval<=16
-     &&self.transactions_per_microframe<=3
+    size_ok&&self.transactions_per_microframe<=3
    }
    UsbSpeed::Super|UsbSpeed::SuperPlus=>{
     let size_ok=match transfer{
-     2=>packet<=1024,
-     1|3=>packet<=1024,
+     2=>packet==1024,
+     1|3=>packet<=1024&&self.interval>=1&&self.interval<=16,
      _=>false,
     };
-    size_ok&&self.interval>=1&&self.interval<=16
-     &&self.transactions_per_microframe==1&&self.has_ss_companion
+    size_ok&&self.transactions_per_microframe==1&&self.has_ss_companion
    }
   };
   if !valid{return Err(UsbError::MalformedDescriptor)}
