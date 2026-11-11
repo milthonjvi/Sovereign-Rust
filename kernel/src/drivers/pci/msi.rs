@@ -285,6 +285,8 @@ mod tests {
 
         let undersized_table = BarResource::new(table_bar, 0x2000).unwrap();
         assert_eq!(msix.validate_resources(&[undersized_table, pba]), Err(ConfigError::InvalidBar));
+        let overlapping = MsixCapability { pending_bit_array_bar: 2, pending_bit_array_offset: 0x2070, ..msix };
+        assert_eq!(overlapping.validate_resources(&[table]), Err(ConfigError::InvalidBar));
     }
 
     #[test]
