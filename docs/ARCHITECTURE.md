@@ -13,87 +13,73 @@
 
 ## Sovereign Boot
 
-The loader lives in `loader/` as an independent workspace package and targets
-`x86_64-unknown-uefi`. It currently provides:
+The native Rust UEFI application lives in `loader/` and targets
+`x86_64-unknown-uefi`. It opens
+`\\EFI\\BOOT\\sovereign-kernel.elf` from the boot device and accepts
+bounded ELF64 x86_64 `ET_EXEC` images. Its loader currently performs:
 
-1. A UEFI application entry point and validated system-table signature/size.
-2. An allocation-free Simple Text Output Protocol wrapper.
-3. The Boot Services HandleProtocol entry needed to locate firmware protocols.
-4. Loaded Image and Simple File System protocol definitions.
-5. Opening the boot device's FAT volume and looking for
-   `\\EFI\\BOOT\\sovereign-kernel.elf`.
-6. Reading the ELF64 header and obtaining the file size through `EFI_FILE_INFO`.
-7. Requiring `ET_EXEC` (until relocations exist), bounding the program-header table,
-   and validating each `PT_LOAD` file range, memory size, alignment, canonical virtual
-   address range, and executable entry-point coverage.
+1. UEFI system-table validation, console output, Loaded Image and Simple File
+   System protocol discovery.
+2. ELF header and program-header validation, including checked file ranges,
+   segment alignment, canonical virtual ranges, executable entry coverage,
+   page-level overlap rejection, and W^X rejection.
+3. One contiguous physical allocation for the kernel virtual image span
+   (maximum 256 MiB), zero initialization of the complete span, segment copies,
+   and BSS/inter-segment zeroing.
+4. PE32+ inspection of the loaded EFI application. Headers are mapped RO/NX,
+   executable sections RX, and writable data sections RW/NX.
+5. CR0.WP and EFER.NXE enablement, plus active CR4.LA57 detection. The page-table
+   builder creates the matching four- or five-level hierarchy with 4 KiB leaves.
+6. Identity mappings for the EFI image, firmware GDT, emergency IDT, a dedicated
+   256 KiB kernel stack, boot-info page, and 1 MiB memory-map buffer. Kernel
+   segments are mapped at their linked higher-half virtual addresses with
+   ELF-derived permissions.
+7. Population and validation of SovereignBootInfo v1, including the physical
+   memory-map address, actual descriptor byte size and stride, descriptor
+   version, kernel physical/virtual range, and entry point.
+8. A final GetMemoryMap refresh and bounded ExitBootServices retry sequence.
+   The preallocated boot-info page is refreshed between each map capture and
+   exit attempt without allocating or calling another firmware service.
+9. Installation of a minimal emergency IDT, CR3 switch, SysV stack setup, and
+   transfer to the kernel entry point. No firmware service is called after
+   ExitBootServices succeeds.
 
-The loader defines the initial versioned handoff ABI in
-`loader/src/boot_info.rs`. Version 1 carries physical-address fields for the
-firmware memory map, loaded kernel image, entry point, and optional ACPI and
-framebuffer metadata. The UEFI entry point now populates the structure and
-validates its fields before retaining it; the kernel-side validator now exists in `kernel/src/boot/sovereign.rs` and
-is exported by `kernel/src/boot/mod.rs`. It validates the ABI, checked address
-ranges, optional metadata flags, and UEFI descriptor stride, and reads memory
-map entries without assuming descriptors are tightly packed. The consumer is
-not yet wired into a separate kernel entry point or actual register handoff. The kernel must validate all ranges before
-dereferencing physical addresses.
+The page-table implementation rejects duplicate leaf mappings, invalid
+physical/virtual addresses, and writable+executable leaves. A private NX
+proof token ensures EFER.NXE was enabled before installing NX entries.
+CR0.WP is enabled so supervisor writes respect read-only mappings. The
+four-/five-level choice follows the firmware's active CR4.LA57 setting.
 
-A guarded CPU helper in `loader/src/cpu.rs` checks extended CPUID support,
-enables EFER.NXE only when the processor advertises NX, enables CR0.WP so
-supervisor writes respect read-only PTEs, and detects active CR4.LA57 mode.
-The UEFI entry point invokes it before constructing the new page tables.
+The handoff contract is defined in `loader/src/boot_info.rs`. Its kernel-side
+mirror and validator live in `kernel/src/boot/sovereign.rs`; the consumer
+checks ABI size/version, flags, physical and virtual ranges, and descriptor
+stride. The memory-map reader uses firmware-provided stride rather than
+assuming descriptors are tightly packed.
 
-The loader also contains a four-/five-level x86_64 page-table builder in
-`loader/src/page_tables.rs`, plus a UEFI `AllocatePages` provider in
-`loader/src/uefi/page_table_memory.rs`. It detects the active CR4.LA57 mode and builds the matching four- or
-five-level hierarchy. It maps 4 KiB pages, rejects duplicate leaf mappings
-and writable+executable mappings, and requires a verified EFER.NXE token
-before creating tables. The UEFI entry point now allocates a bounded contiguous physical span for the
-validated ELF virtual image, copies every non-empty `PT_LOAD` file payload,
-and zeroes the full span first so BSS and inter-segment gaps are initialized.
-ELF segments that share a 4 KiB page are rejected, as are writable+executable
-segments. The entry point then builds a new four-level page-table root and maps
-each kernel segment with its ELF-derived write/execute permissions and NX
-protection. The image allocation and page-table allocations use UEFI
-`AllocatePages` and remain owned by the loader.
+A separate kernel binary target, `sovereign-kernel-uefi`, uses
+`kernel/src/sovereign_main.rs` and the linker entry `_start`. It receives
+the boot-info pointer in RDI, validates the handoff and every memory descriptor,
+initializes the bootstrap GDT/TSS/IDT/PIC, and then halts with interrupts
+disabled. The existing `sovereign-kernel` binary and Limine entry remain
+unchanged as the compatibility path.
 
-The loader now also reserves a 1 MiB UEFI memory-map buffer and a boot-info
-page before page-table construction. It parses the loaded PE32+ image and identity-maps headers RO/NX, executable
-sections RX, and writable data sections RW/NX. It also maps a bounded window
-around the current RSP as RW/NX, the memory-map buffer as read-only, and the
-boot-info page as read-only in the new address space. After
-all page-table allocations, it captures a memory-map snapshot and populates
-SovereignBootInfo v1 with the map's physical address, byte size, descriptor
-stride/version, and kernel image metadata. The snapshot is not yet final for
-ExitBootServices: later firmware calls can invalidate its map key.
+### Remaining validation and limitations
 
-This is still not a complete handoff. The page-table root is not loaded into
-CR3, and the loader does not call ExitBootServices or transfer control. The
-kernel does not yet consume the Sovereign Boot ABI. The UEFI allocation
-provider and image loader currently access allocated pages through the
-firmware's active identity mapping. The current-stack mapping is a conservative
-window, not a firmware-provided authoritative stack bound. The loader PE sections receive section-derived permissions. This parser must
-be validated against actual firmware-built EFI images before relying on those
-mappings for a CR3 transition.
+- The loader and UEFI page provider access freshly allocated physical pages
+  through the firmware's active identity mapping before CR3 changes. This
+  assumption must be verified on supported firmware implementations.
+- PE32+ section parsing, the GDT mapping, emergency IDT, and the full transition
+  have not yet been compiled or exercised on real firmware.
+- The kernel entry validates the memory map but does not yet initialize the
+  physical memory manager, reclaim loader memory, discover ACPI, initialize
+  framebuffer output, or enable device interrupts.
+- The boot image packaging pipeline must place the UEFI application at
+  `EFI/BOOT/BOOTX64.EFI` and the dedicated UEFI kernel binary at
+  `EFI/BOOT/sovereign-kernel.elf`.
 
-A bounded ExitBootServices helper now refreshes the memory map and retries
-stale map keys without allocating or making unrelated firmware calls between
-capture and each exit attempt. It is not invoked by the current entry point.
-
-The next stages are:
-
-1. Validate exact EFI image section permissions and obtain authoritative stack bounds.
-2. Integrate the final memory-map refresh and ExitBootServices retry helper,
-   with no intervening allocations or firmware calls.
-3. Add the post-exit CR3 switch and x86_64 transition stub.
-4. Add the kernel-side SovereignBootInfo consumer and entry ABI.
-5. Validate the full path in QEMU and on physical UEFI hardware before retiring
-   the Limine compatibility path.
-
-Until those stages are integrated and tested, the kernel's existing Limine
-handoff remains in place as a temporary compatibility path. Do not remove
-Limine requests or image support before the Sovereign Boot path has passed
-emulator and physical-machine validation.
+No successful build, QEMU boot, or physical-machine boot has been recorded yet.
+Limine requests and the existing Limine image path must remain until the
+Sovereign UEFI path passes those validations.
 
 ## Kernel layers
 
