@@ -92,6 +92,56 @@ impl HubPortStatus{
  /// SuperSpeed port link state (wPortStatus bits 5..8).
  pub const fn superspeed_link_state(self)->u8{((self.status>>5)&0x0f)as u8}
 }
+impl HubPortStatus{
+ /// USB 2.0 port speed; full speed is represented by neither speed bit.
+ pub const fn usb2_speed(self)->Option<super::transfer::UsbSpeed>{
+  if !self.connected(){return None}
+  match self.status&(Self::LOW_SPEED|Self::HIGH_SPEED){
+   0=>Some(super::transfer::UsbSpeed::Full),
+   Self::LOW_SPEED=>Some(super::transfer::UsbSpeed::Low),
+   Self::HIGH_SPEED=>Some(super::transfer::UsbSpeed::High),
+   _=>None,
+  }
+ }
+}
+
+/// SuperSpeed hub port status uses different power and link-state fields from
+/// USB 2.0 hubs; keep the interpretation separate to avoid bit aliasing.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct SuperSpeedPortStatus{
+ pub status:u16,pub change:u16,pub link_state:u8,pub speed_id:u8,
+}
+impl SuperSpeedPortStatus{
+ pub const CONNECTION:u16=1<<0;
+ pub const ENABLE:u16=1<<1;
+ pub const OVER_CURRENT:u16=1<<3;
+ pub const RESET:u16=1<<4;
+ pub const POWER:u16=1<<9;
+ pub const fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<4{return Err(UsbError::BufferTooShort)}
+  let status=u16::from_le_bytes([bytes[0],bytes[1]]);
+  Ok(Self{status,change:u16::from_le_bytes([bytes[2],bytes[3]]),
+   link_state:((status>>5)&0x0f)as u8,speed_id:((status>>10)&0x0f)as u8})
+ }
+ pub const fn connected(self)->bool{self.status&Self::CONNECTION!=0}
+ pub const fn enabled(self)->bool{self.status&Self::ENABLE!=0}
+ pub const fn powered(self)->bool{self.status&Self::POWER!=0}
+ pub const fn over_current(self)->bool{self.status&Self::OVER_CURRENT!=0}
+ pub const fn reset(self)->bool{self.status&Self::RESET!=0}
+ pub const fn speed(self)->Option<super::transfer::UsbSpeed>{
+  if !self.connected(){return None}
+  match self.speed_id{
+   1=>Some(super::transfer::UsbSpeed::Full),
+   2=>Some(super::transfer::UsbSpeed::Low),
+   3=>Some(super::transfer::UsbSpeed::High),
+   4=>Some(super::transfer::UsbSpeed::Super),
+   5=>Some(super::transfer::UsbSpeed::SuperPlus),
+   _=>None,
+  }
+ }
+ pub const fn has_change(self)->bool{self.change!=0}
+}
+
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,WarmResume,ClearConnectionChange,ClearEnableChange,ClearSuspendChange,ClearOverCurrentChange,ClearResetChange}
 impl HubPortAction{
