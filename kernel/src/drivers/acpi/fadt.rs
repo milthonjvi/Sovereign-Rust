@@ -183,7 +183,7 @@ impl GenericAddress {
 
     /// Validate GAS field encoding and arithmetic without dereferencing address.
     pub fn validate(self) -> Result<(), AcpiError> {
-        if self.address == 0 || self.bit_width == 0 || self.bit_offset > 7 {
+        if self.address == 0 || self.bit_width == 0 {
             return Err(AcpiError::InvalidGas);
         }
         if self.access_size > Self::ACCESS_QWORD {
@@ -347,6 +347,11 @@ mod tests {
         assert_eq!(gas.validate(), Err(AcpiError::InvalidGas));
         gas = valid_reset_gas();
         gas.bit_offset = 8;
+        gas.bit_width = 8;
+        gas.access_size = GenericAddress::ACCESS_DWORD;
+        assert_eq!(gas.validate(), Ok(()));
+        gas.bit_offset = 31;
+        gas.bit_width = 2;
         assert_eq!(gas.validate(), Err(AcpiError::InvalidGas));
         gas = valid_reset_gas();
         gas.access_size = 5;
