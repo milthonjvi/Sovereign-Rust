@@ -294,7 +294,7 @@ impl XhciController{
   io.write32(interrupter+0x0c,erst_physical as u32)?;
   io.write32(interrupter+0x18,(event_ring_physical>>32)as u32)?;
   io.write32(interrupter+0x14,event_ring_physical as u32)?;
-  io.write32(interrupter,1<<1)?;
+  io.write32(interrupter,(1<<1)|1)?;
   self.event_ring_configured=true;Ok(())
  }
  pub fn dequeue_event<I:RegisterIo,const N:usize>(&self,io:&mut I,ring:&mut XhciEventRing<'_,N>)->Result<Option<Trb>,XhciError>{
