@@ -23,7 +23,7 @@ mod tx_queue;
 pub(crate) use rx_queue::E1000RxQueue;
 
 const RESET_POLL_LIMIT: usize = 1_000_000;
-const RESET_POST_WRITE_SPINS: usize = 4_096;
+const RESET_POST_WRITE_SPINS: usize = 16_384;
 const RING_LENGTH_ALIGNMENT: u32 = 128;
 const TCTL_COLLISION_THRESHOLD: u32 = 0x10;
 const TCTL_COLLISION_DISTANCE: u32 = 0x40;
