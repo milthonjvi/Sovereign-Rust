@@ -171,3 +171,6 @@ const fn is_canonical(address: u64) -> bool {
 // ABI v1 layout is fixed at 160 bytes with 8-byte alignment.
 const _: [(); 160] = [(); core::mem::size_of::<SovereignBootInfo>()];
 const _: [(); 8] = [(); core::mem::align_of::<SovereignBootInfo>()];
+
+// UEFI descriptor prefix is 40 bytes; firmware may provide a larger stride.
+const _: [(); 40] = [(); core::mem::size_of::<EfiMemoryDescriptor>()];
