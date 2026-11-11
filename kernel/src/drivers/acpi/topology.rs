@@ -19,6 +19,10 @@ pub enum MadtTopologyError {
     DuplicateIoApicId,
     DuplicateIoApicAddress,
     DuplicateOverrideSource,
+    DuplicateLocalApicAddressOverride,
+    InvalidOverrideBus,
+    InvalidOverrideSource,
+    InvalidOverrideFlags,
 }
 
 /// Validated, allocation-free interrupt-controller metadata from one MADT.
@@ -50,6 +54,9 @@ impl MadtInterruptTopology {
             match record.record_type {
                 // I/O APIC (type 1): ID, reserved, MMIO address, GSI base.
                 1 => {
+                    if record.data.len() != 10 || record.data[1] != 0 {
+                        return Err(MadtTopologyError::MalformedRecord);
+                    }
                     let descriptor = record.io_apic()
                         .ok_or(MadtTopologyError::MalformedRecord)?;
                     if descriptor.address == 0 || descriptor.address & 0xFFF != 0 {
@@ -73,8 +80,25 @@ impl MadtInterruptTopology {
                 }
                 // Interrupt Source Override (type 2).
                 2 => {
+                    if record.data.len() != 8 {
+                        return Err(MadtTopologyError::MalformedRecord);
+                    }
                     let entry = record.interrupt_source_override()
                         .ok_or(MadtTopologyError::MalformedRecord)?;
+                    if entry.bus != 0 {
+                        return Err(MadtTopologyError::InvalidOverrideBus);
+                    }
+                    // ISA IRQ inputs are 0..=15. MPS INTI polarity and
+                    // trigger encodings 0b10 are reserved; bits 4..15
+                    // must also remain clear.
+                    if entry.source > 15 {
+                        return Err(MadtTopologyError::InvalidOverrideSource);
+                    }
+                    let polarity = entry.flags & 0b11;
+                    let trigger = (entry.flags >> 2) & 0b11;
+                    if polarity == 0b10 || trigger == 0b10 || entry.flags & 0xFFF0 != 0 {
+                        return Err(MadtTopologyError::InvalidOverrideFlags);
+                    }
                     if topology.overrides[..topology.override_count]
                         .iter().flatten().any(|existing|
                             existing.bus == entry.bus && existing.source == entry.source)
@@ -90,7 +114,7 @@ impl MadtInterruptTopology {
                 // Processor Local APIC Address Override (type 5): reserved
                 // u16 followed by a 64-bit physical address.
                 5 => {
-                    if record.data.len() != 10 {
+                    if record.data.len() != 10 || record.data[0] != 0 || record.data[1] != 0 {
                         return Err(MadtTopologyError::MalformedRecord);
                     }
                     let address = u64::from_le_bytes([
@@ -101,7 +125,7 @@ impl MadtInterruptTopology {
                         return Err(MadtTopologyError::InvalidControllerAddress);
                     }
                     if topology.local_apic_address_override.replace(address).is_some() {
-                        return Err(MadtTopologyError::MalformedRecord);
+                        return Err(MadtTopologyError::DuplicateLocalApicAddressOverride);
                     }
                 }
                 _ => {}
@@ -193,6 +217,74 @@ mod tests {
         let madt = Madt::parse(&bytes).unwrap();
         assert_eq!(MadtInterruptTopology::parse(&madt).err(),
             Some(MadtTopologyError::DuplicateIoApicAddress));
+    }
+
+    #[test]
+    fn rejects_non_isa_interrupt_source_overrides() {
+        let records = [2, 10, 1, 1, 0x25, 0, 0, 0, 0x0F, 0];
+        let bytes = madt_with_records(&records);
+        let madt = Madt::parse(&bytes).unwrap();
+        assert_eq!(
+            MadtInterruptTopology::parse(&madt).err(),
+            Some(MadtTopologyError::InvalidOverrideBus),
+        );
+    }
+
+    #[test]
+    fn rejects_out_of_range_isa_irq_sources() {
+        let records = [2, 10, 0, 16, 0x25, 0, 0, 0, 0x0F, 0];
+        let bytes = madt_with_records(&records);
+        let madt = Madt::parse(&bytes).unwrap();
+        assert_eq!(
+            MadtInterruptTopology::parse(&madt).err(),
+            Some(MadtTopologyError::InvalidOverrideSource),
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_interrupt_override_flag_encodings() {
+        for flags in [0x0002u16, 0x0008, 0x0010, 0x8000] {
+            let mut records = [2, 10, 0, 1, 0x25, 0, 0, 0, 0, 0];
+            records[8..10].copy_from_slice(&flags.to_le_bytes());
+            let bytes = madt_with_records(&records);
+            let madt = Madt::parse(&bytes).unwrap();
+            assert_eq!(
+                MadtInterruptTopology::parse(&madt).err(),
+                Some(MadtTopologyError::InvalidOverrideFlags),
+                "flags {flags:#06x}",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_nonzero_reserved_bytes_in_controller_records() {
+        let io_apic = [1, 12, 1, 1, 0x00, 0x10, 0x00, 0xFE, 0, 0, 0, 0];
+        let bytes = madt_with_records(&io_apic);
+        let madt = Madt::parse(&bytes).unwrap();
+        assert_eq!(
+            MadtInterruptTopology::parse(&madt).err(),
+            Some(MadtTopologyError::MalformedRecord),
+        );
+
+        let lapic_override = [5, 12, 1, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE];
+        let bytes = madt_with_records(&lapic_override);
+        let madt = Madt::parse(&bytes).unwrap();
+        assert_eq!(
+            MadtInterruptTopology::parse(&madt).err(),
+            Some(MadtTopologyError::MalformedRecord),
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_local_apic_address_overrides() {
+        let override_record = [5, 12, 0, 0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE];
+        let records = [override_record.as_slice(), override_record.as_slice()].concat();
+        let bytes = madt_with_records(&records);
+        let madt = Madt::parse(&bytes).unwrap();
+        assert_eq!(
+            MadtInterruptTopology::parse(&madt).err(),
+            Some(MadtTopologyError::DuplicateLocalApicAddressOverride),
+        );
     }
 
     #[test]
