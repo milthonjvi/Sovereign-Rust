@@ -719,6 +719,13 @@ mod tests {
     use super::*;
     use std::vec::Vec;
 
+    fn mock_dma_buffer<'a>(address: u64, bytes: &'a mut [u8]) -> DmaBuffer<'a> {
+        // SAFETY: MockRegisters never accesses backing memory; synthetic DMA addresses
+        // are used only to exercise descriptor setup and queue ownership.
+        unsafe { DmaBuffer::new(address, bytes) }.unwrap()
+    }
+
+
     #[derive(Default)]
     struct MockRegisters {
         writes: Vec<(u32, u32)>,
@@ -774,7 +781,7 @@ mod tests {
         let mut rx = [RxDescriptor::default(); 32];
         let mut rx_storage = [[0u8; 2048]; 32];
         let rx_buffers: Vec<DmaBuffer<'_>> = rx_storage.iter_mut().enumerate()
-            .map(|(index, bytes)| DmaBuffer::new(0x4000 + index as u64 * 2048, bytes).unwrap())
+            .map(|(index, bytes)| mock_dma_buffer(0x4000 + index as u64 * 2048, bytes))
             .collect();
         let mut tx = [TxDescriptor::default(); 32];
         // SAFETY: MockRegisters does not perform DMA; these buffers model the
@@ -977,7 +984,7 @@ mod tests {
         let mut rx = [RxDescriptor::default(); 32];
         let mut rx_storage = [[0u8; 2048]; 32];
         let rx_buffers: Vec<DmaBuffer<'_>> = rx_storage.iter_mut().enumerate()
-            .map(|(index, bytes)| DmaBuffer::new(0x4000 + index as u64 * 2048, bytes).unwrap())
+            .map(|(index, bytes)| mock_dma_buffer(0x4000 + index as u64 * 2048, bytes))
             .collect();
         let mut tx = [TxDescriptor::default(); 32];
         // SAFETY: MockRegisters does not perform DMA; these buffers model pinned mappings.
