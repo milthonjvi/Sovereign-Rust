@@ -92,3 +92,24 @@ pub fn pause() {
     // SAFETY: PAUSE is an unprivileged spin-wait hint.
     unsafe { core::arch::asm!("pause", options(nomem, nostack, preserves_flags)); }
 }
+
+#[inline]
+/// Write CR0.
+///
+/// # Safety
+/// Must be called at CPL 0. The caller must preserve architectural CR0 invariants.
+pub unsafe fn write_cr0(value: u64) {
+    // SAFETY: Caller guarantees ring 0 and a valid CR0 value.
+    unsafe { core::arch::asm!("mov cr0, {}", in(reg) value, options(nomem, nostack, preserves_flags)); }
+}
+
+#[inline]
+/// Write CR4.
+///
+/// # Safety
+/// Must be called at CPL 0. The caller must enable only features supported by
+/// the processor and must satisfy their associated OS-state requirements.
+pub unsafe fn write_cr4(value: u64) {
+    // SAFETY: Caller guarantees ring 0 and a valid CR4 value.
+    unsafe { core::arch::asm!("mov cr4, {}", in(reg) value, options(nomem, nostack, preserves_flags)); }
+}
