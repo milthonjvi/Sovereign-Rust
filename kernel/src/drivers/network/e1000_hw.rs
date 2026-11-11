@@ -532,9 +532,10 @@ impl E1000RxQueue {
         if limit == 0 {
             return Ok(0);
         }
+        let mut scan_cursor = self.cursor;
         let mut count = 0;
         while count < limit {
-            let index = self.cursor.index() as usize;
+            let index = scan_cursor.index() as usize;
             let descriptor = unsafe { descriptors.as_ptr().add(index) };
             // SAFETY: read the device-written DD byte from the pinned ring.
             let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
@@ -542,8 +543,7 @@ impl E1000RxQueue {
                 break;
             }
             output[count].0 = index as u16;
-            self.cursor.advance();
-            self.outstanding += 1;
+            scan_cursor.advance();
             count += 1;
         }
         if count == 0 {
@@ -559,6 +559,8 @@ impl E1000RxQueue {
             let completion = descriptor.completion().ok_or(E1000QueueError::InvalidRing)?;
             item.1 = completion;
         }
+        self.cursor = scan_cursor;
+        self.outstanding += count as u16;
         Ok(count)
     }
 
