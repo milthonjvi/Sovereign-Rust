@@ -162,7 +162,7 @@ impl UhciController{
  pub fn clear_port_changes<I:UhciPortIo>(&self,io:&mut I,port:u8,changes:u16)->Result<(),super::UsbError>{
   let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
   if changes&!(PORT_CONNECT_CHANGE|PORT_ENABLE_CHANGE)!=0{return Err(super::UsbError::InvalidAddress)}
-  io.write16(self.reg(offset),changes)
+  let current=io.read16(self.reg(offset))?;\n  let preserve=current&(PORT_ENABLE|PORT_RESET|PORT_SUSPEND);\n  io.write16(self.reg(offset),preserve|changes)
  }
 }
 
