@@ -33,6 +33,7 @@ static ACTIVE_PS2_CONTEXT: AtomicPtr<IrqContextHeader> = AtomicPtr::new(ptr::nul
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ps2IrqError {
     InvalidDrainBudget,
+    InvalidQueueCapacity,
     ContextAlreadyInstalled,
     HandlerAlreadyRegistered,
 }
@@ -58,6 +59,9 @@ impl<const N: usize> Ps2IrqService<N> {
         wheel_enabled: bool,
         drain_budget: usize,
     ) -> Result<(Self, SpscConsumer<'static, InputEvent, N>), Ps2IrqError> {
+        if N < 2 {
+            return Err(Ps2IrqError::InvalidQueueCapacity);
+        }
         if drain_budget == 0 || drain_budget > MAX_IRQ_DRAIN_BUDGET {
             return Err(Ps2IrqError::InvalidDrainBudget);
         }
