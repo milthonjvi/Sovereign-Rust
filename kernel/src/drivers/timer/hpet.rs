@@ -165,6 +165,40 @@ impl Hpet {
         Ok(())
     }
 
+    /// Program a one-shot comparator and enable delivery only after the
+    /// deadline and stale-status clear have completed.
+    ///
+    /// This is the preferred one-shot API when the timer must not generate an
+    /// interrupt from a partially programmed comparator.
+    pub fn arm_oneshot(
+        &mut self,
+        timer: u8,
+        route: u8,
+        deadline: u64,
+    ) -> Result<(), DriverError> {
+        if timer >= self.capabilities.timer_count || route > 31 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let config_offset = TIMER_CONFIGURATION_BASE + timer as usize * TIMER_STRIDE;
+        let current = self.read_register(config_offset);
+        if !route_is_supported(current, route) {
+            return Err(DriverError::UnsupportedDevice);
+        }
+        if current & (1 << 5) == 0 && deadline > u32::MAX as u64 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        // Preserve capability and reserved bits, but keep interrupt delivery
+        // disabled while changing the route and comparator.
+        let config = (current & !TIMER_WRITABLE_CONTROL) | ((route as u64) << 9);
+        self.write_register(config_offset, config);
+        let comparator_offset = TIMER_COMPARATOR_BASE + timer as usize * TIMER_STRIDE;
+        self.write_register(comparator_offset, deadline);
+        self.write_register(GENERAL_INTERRUPT_STATUS, 1u64 << timer);
+        self.write_register(config_offset, config | TIMER_INTERRUPT_ENABLE);
+        Ok(())
+    }
+
     /// Configure a periodic HPET timer and arm its first deadline.
     ///
     /// The timer must advertise periodic capability. The comparator receives
