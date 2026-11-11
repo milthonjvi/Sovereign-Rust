@@ -22,6 +22,7 @@ pub enum BarProgramError {
     AllocationMismatch,
     InvalidResource(ResourceError),
     ReadbackMismatch,
+    DecodeDisableFailed,
     RestoreFailed,
 }
 
@@ -86,6 +87,24 @@ pub unsafe fn program_bar<A: ConfigAccess>(
         } else {
             Err(BarProgramError::Access(error))
         };
+    }
+
+    // A successful config write does not prove that the device applied it.
+    // Do not touch BARs unless both decode enables are observed clear.
+    match io.read_u32(function.address, COMMAND_STATUS) {
+        Ok(current) if current as u16 & (COMMAND_IO_SPACE | COMMAND_MEMORY_SPACE) == 0 => {}
+        Ok(_) => {
+            if io.write_u32(function.address, COMMAND_STATUS, original_command as u32).is_err() {
+                return Err(BarProgramError::RestoreFailed);
+            }
+            return Err(BarProgramError::DecodeDisableFailed);
+        }
+        Err(error) => {
+            if io.write_u32(function.address, COMMAND_STATUS, original_command as u32).is_err() {
+                return Err(BarProgramError::RestoreFailed);
+            }
+            return Err(BarProgramError::Access(error));
+        }
     }
 
     let low_register = BAR0 + (allocation.bar_index as u16) * 4;
