@@ -374,6 +374,55 @@ impl E1000TxQueue {
         Ok(available)
     }
 
+    /// Reclaim completed descriptors and collect free producer slots in one scan
+    /// phase and one DMA read barrier. Intended for high-throughput batch TX.
+    pub fn reclaim_and_available_slots<R: E1000Registers>(
+        &mut self,
+        registers: &mut R,
+        descriptors: &[TxDescriptor],
+        output: &mut [u16],
+    ) -> Result<usize, E1000QueueError<R::Error>> {
+        if descriptors.len() != self.cursor_count() {
+            return Err(E1000QueueError::InvalidRing);
+        }
+
+        let mut reclaimed = 0usize;
+        while reclaimed < self.pending as usize {
+            let index = self.clean.index() as usize;
+            let descriptor = unsafe { descriptors.as_ptr().add(index) };
+            // SAFETY: read the device-written ownership byte from the pinned ring.
+            let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+            if status & TXD_STATUS_DD == 0 {
+                break;
+            }
+            self.clean.advance();
+            reclaimed += 1;
+        }
+        self.pending -= reclaimed as u16;
+
+        let free = descriptors.len() - 1 - self.pending as usize;
+        let limit = core::cmp::min(output.len(), free);
+        let count = descriptors.len();
+        let start = self.cursor.index() as usize;
+        let mut available = 0usize;
+        while available < limit {
+            let index = (start + available) & (count - 1);
+            let descriptor = unsafe { descriptors.as_ptr().add(index) };
+            // SAFETY: read the device-written ownership byte from the pinned ring.
+            let status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*descriptor).status)) };
+            if status & TXD_STATUS_DD == 0 {
+                break;
+            }
+            output[available] = index as u16;
+            available += 1;
+        }
+
+        if reclaimed != 0 || available != 0 {
+            registers.dma_read_barrier();
+        }
+        Ok(available)
+    }
+
     /// Return the next completed descriptor index in submission order.
     /// The caller can use this index to release the matching DMA buffer.
     pub fn reap_one<R: E1000Registers>(
