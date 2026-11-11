@@ -224,7 +224,7 @@ impl<'a> DoubleBuffer<'a> {
         let front = SoftwareBuffer::new(first, width, height, stride)?;
         let mut back = SoftwareBuffer::new(second, width, height, stride)?;
         // Establish an identical baseline so later dirty-only synchronization
-        // is correct even when the caller supplied uninitialized/stale storage.
+        // is correct even when the caller supplied stale pixel contents.
         back.copy_regions_from(
             &front,
             &[Rect { x: 0, y: 0, width, height }],
