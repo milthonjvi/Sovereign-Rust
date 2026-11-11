@@ -144,7 +144,13 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         if self.stopped || self.faulted {
             return Err(DriverError::NotReady);
         }
-        let link = read_link_state(self.registers).map_err(|_| DriverError::HardwareFault)?;
+        let link = match read_link_state(self.registers) {
+            Ok(link) => link,
+            Err(_) => {
+                self.ready = false;
+                return Err(DriverError::HardwareFault);
+            }
+        };
         self.interface.link = link;
         Ok(link)
     }
@@ -191,11 +197,16 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         }
         if causes & E1000_ICR_TXDW != 0 {
             let mut no_slots = [];
-            self.tx_queue.reclaim_and_available_slots(
+            if let Err(error) = self.tx_queue.reclaim_and_available_slots(
                 self.registers,
                 self.tx_descriptors,
                 &mut no_slots,
-            ).map_err(map_queue_error)?;
+            ) {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                }
+                return Err(map_queue_error(error));
+            }
         }
         Ok(Some(causes))
     }
@@ -228,11 +239,19 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         {
             return Err(DriverError::InvalidConfiguration);
         }
-        let available = self.tx_queue.reclaim_and_available_slots(
+        let available = match self.tx_queue.reclaim_and_available_slots(
             self.registers,
             self.tx_descriptors,
             &mut slots[..frames.len()],
-        ).map_err(map_queue_error)?;
+        ) {
+            Ok(available) => available,
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                }
+                return Err(map_queue_error(error));
+            }
+        };
         if available != frames.len() {
             return Err(DriverError::ResourceUnavailable);
         }
@@ -255,11 +274,19 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             submissions[frame_index] = (buffer.dma_address(), frame.len());
         }
 
-        self.tx_queue.submit_batch(
+        match self.tx_queue.submit_batch(
             self.registers,
             self.tx_descriptors,
             &submissions[..frames.len()],
-        ).map_err(map_queue_error)
+        ) {
+            Ok(count) => Ok(count),
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                }
+                Err(map_queue_error(error))
+            }
+        }
     }
 
     /// Receive several completed Ethernet frames with one descriptor scan
@@ -283,11 +310,19 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
             return Err(DriverError::InvalidConfiguration);
         }
 
-        let received = self.rx_queue.poll_batch(
+        let received = match self.rx_queue.poll_batch(
             self.registers,
             self.rx_descriptors,
             &mut completions[..limit],
-        ).map_err(map_queue_error)?;
+        ) {
+            Ok(received) => received,
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                }
+                return Err(map_queue_error(error));
+            }
+        };
         if received == 0 {
             return Ok(0);
         }
@@ -413,10 +448,16 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
         // non-jumbo configuration uses 2 KiB buffers, but malformed or
         // unexpectedly fragmented input is drained and dropped safely.
         for _ in 0..self.rx_descriptors.len() {
-            let Some((index, completion)) = self.rx_queue
-                .poll(self.registers, self.rx_descriptors)
-                .map_err(map_queue_error)?
-            else {
+            let polled = match self.rx_queue.poll(self.registers, self.rx_descriptors) {
+                Ok(polled) => polled,
+                Err(error) => {
+                    if queue_error_is_fatal(&error) {
+                        self.ready = false;
+                    }
+                    return Err(map_queue_error(error));
+                }
+            };
+            let Some((index, completion)) = polled else {
                 return Ok(None);
             };
 
@@ -463,11 +504,20 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
         }
 
         let mut available = [u16::MAX; 1];
-        if self.tx_queue.reclaim_and_available_slots(
+        let available_count = match self.tx_queue.reclaim_and_available_slots(
             self.registers,
             self.tx_descriptors,
             &mut available,
-        ).map_err(map_queue_error)? == 0 {
+        ) {
+            Ok(count) => count,
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                }
+                return Err(map_queue_error(error));
+            }
+        };
+        if available_count == 0 {
             return Err(DriverError::ResourceUnavailable);
         }
         let index = available[0] as usize;
@@ -477,12 +527,17 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
         }
         buffer.as_mut_slice()[..frame.len()].copy_from_slice(frame);
 
-        self.tx_queue.submit(
+        if let Err(error) = self.tx_queue.submit(
             self.registers,
             self.tx_descriptors,
             buffer.dma_address(),
             frame.len(),
-        ).map_err(map_queue_error)?;
+        ) {
+            if queue_error_is_fatal(&error) {
+                self.ready = false;
+            }
+            return Err(map_queue_error(error));
+        }
         Ok(())
     }
 
@@ -496,6 +551,10 @@ fn map_interrupt_error<E>(error: super::e1000_irq::E1000InterruptError<E>) -> Dr
         super::e1000_irq::E1000InterruptError::Register(_) => DriverError::HardwareFault,
         _ => DriverError::InvalidConfiguration,
     }
+}
+
+fn queue_error_is_fatal<E>(error: &E1000QueueError<E>) -> bool {
+    matches!(error, E1000QueueError::Register(_) | E1000QueueError::InvalidRing)
 }
 
 fn map_queue_error<E>(error: E1000QueueError<E>) -> DriverError {
