@@ -44,3 +44,7 @@ pub struct EfiConfigurationTable {
 const _: [(); 120] = [(); core::mem::size_of::<EfiSystemTable>()];
 const _: [(); 24] = [(); core::mem::size_of::<EfiConfigurationTable>()];
 const _: [(); 16] = [(); core::mem::size_of::<super::EfiGuid>()];
+
+const _: [(); 104] = [(); core::mem::offset_of!(EfiSystemTable, number_of_table_entries)];
+const _: [(); 112] = [(); core::mem::offset_of!(EfiSystemTable, configuration_table)];
+const _: [(); 16] = [(); core::mem::offset_of!(EfiConfigurationTable, vendor_table)];
