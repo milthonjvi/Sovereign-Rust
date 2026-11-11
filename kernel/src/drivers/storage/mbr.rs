@@ -293,8 +293,10 @@ mod tests {
     fn rejects_ebr_cycles() {
         let mut first = empty_mbr();
         set_raw_entry(&mut first, 0, 0, 0x83, 1, 20);
-        set_raw_entry(&mut first, 1, 0, 0x0F, 0, 400);
-        let mut disk = MockDisk { first, second: empty_mbr() };
+        set_raw_entry(&mut first, 1, 0, 0x0F, 100, 400);
+        let mut second = empty_mbr();
+        set_raw_entry(&mut second, 1, 0, 0x0F, 100, 400);
+        let mut disk = MockDisk { first, second };
         let mut scratch = [0u8; 512];
         let mut visited = [0u64; 4];
         let mut output = [None; 4];
