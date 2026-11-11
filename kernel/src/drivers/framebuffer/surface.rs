@@ -508,6 +508,9 @@ impl<'a> FramebufferSurface<'a> {
         let first_column_offset = start_x * 4;
         let pixel_count = end_x - start_x;
         let row_bytes = pixel_count * 4;
+        // The framebuffer's fourth byte is reserved; keep the optimized
+        // paired-store path consistent with write_pixel_unchecked.
+        let color = Color::new(color.red, color.green, color.blue);
         let bytes = color.memory_bytes(self.info.pixel_format);
         let packed_pair = u64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3],
