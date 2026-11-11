@@ -54,7 +54,7 @@ impl ConfigurationDescriptor{
  pub const LENGTH:usize=9;
  pub fn parse(b:&[u8])->Result<Self,UsbError>{
   if b.len()<Self::LENGTH{return Err(UsbError::BufferTooShort)}
-  if b[0]<9||b[1]!=CONFIGURATION_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  if b[0]!=9||b[1]!=CONFIGURATION_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
   let d=Self{total_length:u16::from_le_bytes([b[2],b[3]]),interface_count:b[4],
    configuration_value:b[5],configuration_index:b[6],attributes:b[7],max_power:b[8]};
   if d.total_length<9||d.interface_count==0||d.configuration_value==0||d.attributes&0x80==0{
@@ -70,7 +70,7 @@ pub struct InterfaceDescriptor{
 }
 impl InterfaceDescriptor{
  fn parse(b:&[u8])->Result<Self,UsbError>{
-  if b.len()<9||b[0]<9||b[1]!=INTERFACE_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  if b.len()<9||b[0]!=9||b[1]!=INTERFACE_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
   Ok(Self{number:b[2],alternate_setting:b[3],endpoint_count:b[4],class:b[5],
    subclass:b[6],protocol:b[7],string_index:b[8]})
  }
@@ -83,7 +83,7 @@ pub struct ParsedEndpoint{
 }
 impl ParsedEndpoint{
  fn parse(b:&[u8])->Result<Self,UsbError>{
-  if b.len()<7||b[0]<7||b[1]!=ENDPOINT_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
+  if b.len()<7||b[0]!=7||b[1]!=ENDPOINT_DESCRIPTOR{return Err(UsbError::MalformedDescriptor)}
   let raw=u16::from_le_bytes([b[4],b[5]]);
   let packet=raw&0x07ff;
   let mult=((raw>>11)&3) as u8;
