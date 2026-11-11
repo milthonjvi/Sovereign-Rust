@@ -442,3 +442,16 @@ impl PortStatusChangeEvent{
   Ok(Self{port_id})
  }
 }
+
+#[cfg(test)]
+mod event_decode_tests{
+ use super::*;
+ #[test]fn decodes_port_status_change_and_completion_codes(){
+  let trb=Trb{parameter:5u64<<24,status:0,control:(TrbType::PortStatusChange as u32)<<10};
+  assert_eq!(PortStatusChangeEvent::parse(trb).unwrap().port_id,5);
+  assert_eq!(CompletionCode::from_raw(1),CompletionCode::Success);
+  assert_eq!(CompletionCode::from_raw(6),CompletionCode::Stall);
+  assert_eq!(CompletionCode::from_raw(13),CompletionCode::ShortPacket);
+  assert_eq!(CompletionCode::from_raw(250),CompletionCode::Unknown(250));
+ }
+}
