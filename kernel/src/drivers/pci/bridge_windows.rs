@@ -95,7 +95,7 @@ impl PciBridgeWindows {
         let prefetch_limit = (limit_upper << 32)
             | ((((prefetch >> 16) & 0x0000_fff0) as u64) << 16)
             | 0x000f_ffff;
-        let prefetch_window = if identity.command & 2 != 0 && prefetch_base <= prefetch_limit {
+        let prefetch_window = if command & 2 != 0 && prefetch_base <= prefetch_limit {
             Some(make_window(ResourceSpace::Memory, true, prefetch_base, prefetch_limit)?)
         } else { None };
 
@@ -179,10 +179,14 @@ mod tests {
         let mut registers = [0u32; 64];
         registers[(COMMAND_STATUS / 4) as usize] = 2;
         registers[(MEMORY_BASE_LIMIT / 4) as usize] = 0x80f0_8000;
+        registers[(PREFETCH_BASE_LIMIT / 4) as usize] = 0x0001_0001;
+        registers[(PREFETCH_BASE_UPPER / 4) as usize] = 1;
+        registers[(PREFETCH_LIMIT_UPPER / 4) as usize] = 1;
         let mut stale = bridge();
         stale.identity.command = 0;
         let windows = PciBridgeWindows::read(stale, &MockConfig(registers)).unwrap();
         assert!(windows.memory.is_some());
+        assert!(windows.prefetchable_memory.is_some());
         assert!(windows.io.is_none());
 
         registers[(COMMAND_STATUS / 4) as usize] = 0;
