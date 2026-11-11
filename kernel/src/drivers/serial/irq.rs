@@ -291,6 +291,11 @@ pub unsafe fn transmit_async(uart: &Uart16550, bytes: &[u8]) -> Result<usize, Ua
     Ok(accepted)
 }
 
+/// Returns the number of RX bytes dropped because the software queue was full.
+pub fn receive_dropped_bytes(base: u16) -> Option<usize> {
+    binding(base).map(|port| port.queue.dropped_bytes())
+}
+
 /// Returns a snapshot of transmit counters for a legacy UART.
 pub fn transmit_statistics(base: u16) -> Option<UartTxStatistics> {
     binding(base).map(|port| port.tx_stats.snapshot())
@@ -396,6 +401,16 @@ mod tests {
         assert_eq!(receive_buffer(0x3E8).map(|queue| queue.capacity()).unwrap_or(0), RX_CAPACITY - 1);
         assert_eq!(receive_buffer(0x2E8).map(|queue| queue.capacity()).unwrap_or(0), RX_CAPACITY - 1);
         assert!(receive_buffer(0x1234).is_none());
+    }
+
+    #[test]
+    fn every_legacy_uart_exposes_independent_tx_statistics() {
+        for base in [0x3F8, 0x2F8, 0x3E8, 0x2E8] {
+            assert_eq!(transmit_statistics(base), Some(UartTxStatistics::default()));
+            assert_eq!(receive_dropped_bytes(base), Some(0));
+        }
+        assert!(transmit_statistics(0x1234).is_none());
+        assert!(receive_dropped_bytes(0x1234).is_none());
     }
 
     #[test]
