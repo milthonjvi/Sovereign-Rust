@@ -38,6 +38,7 @@ pub fn fill_triangle(
 
     let edges = [(a, b), (b, c), (c, a)];
     let mut intersections = [0i128; 3];
+    let mut fractional = [false; 3];
 
     for y in min_y..=max_y {
         let mut count = 0usize;
@@ -52,18 +53,20 @@ pub fn fill_triangle(
                 continue;
             }
 
-            let dx = (x1 as i128).checked_sub(x0 as i128)
+            let dx = (upper.0 as i128).checked_sub(lower.0 as i128)
                 .ok_or(FramebufferError::SizeOverflow)?;
-            let dy = (y1 as i128).checked_sub(y0 as i128)
+            let dy = (upper.1 as i128).checked_sub(lower.1 as i128)
                 .ok_or(FramebufferError::SizeOverflow)?;
-            let scan_offset = (y as i128).checked_sub(y0 as i128)
+            let scan_offset = (y as i128).checked_sub(lower.1 as i128)
                 .ok_or(FramebufferError::SizeOverflow)?;
             let numerator = scan_offset.checked_mul(dx)
                 .ok_or(FramebufferError::SizeOverflow)?;
-            let intersection = (x0 as i128)
-                .checked_add(numerator / dy)
+            let quotient = numerator.div_euclid(dy);
+            let intersection = (lower.0 as i128)
+                .checked_add(quotient)
                 .ok_or(FramebufferError::SizeOverflow)?;
             intersections[count] = intersection;
+            fractional[count] = numerator.rem_euclid(dy) != 0;
             count += 1;
         }
 
@@ -72,15 +75,21 @@ pub fn fill_triangle(
         }
         if intersections[0] > intersections[1] {
             intersections.swap(0, 1);
+            fractional.swap(0, 1);
         }
         if count == 3 && intersections[1] > intersections[2] {
             intersections.swap(1, 2);
+            fractional.swap(1, 2);
             if intersections[0] > intersections[1] {
                 intersections.swap(0, 1);
+                fractional.swap(0, 1);
             }
         }
 
-        let left = intersections[0].max(min_x as i128);
+        // Pixel centers are integer sample positions: ceil the left edge and
+        // floor the right edge so fractional intersections never overdraw.
+        let left_edge = intersections[0] + i128::from(fractional[0]);
+        let left = left_edge.max(min_x as i128);
         let right = intersections[count - 1].min(max_x as i128);
         if left > right {
             continue;
