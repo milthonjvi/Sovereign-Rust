@@ -50,6 +50,8 @@ USB-side APIs already present:
 - `drivers::usb::hid_transport::read_report_descriptor` to fetch the complete Report descriptor through the validated control-transfer path.
 - `drivers::usb::hid::BootHidInterface::read_report` for bounded raw report transport.
 - `drivers::usb::hid::get_report_descriptor` to construct the class-independent Report Descriptor request.
+- `drivers::usb::hid::execute_set_protocol` and `execute_set_idle` to issue validated HID class control requests.
+- `drivers::usb::hid::execute_get_report` to retrieve Input, Output or Feature reports through the common control-transfer path; it returns the actual transferred byte count, including valid short IN responses.
 - `drivers::usb::hid::BootKeyboardReport::parse`
 - `drivers::usb::hid::BootMouseReport::parse`
 - `drivers::usb::hid::BootMouseReportWheel::parse`
