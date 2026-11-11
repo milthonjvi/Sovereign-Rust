@@ -99,7 +99,8 @@ mod tests {
     fn validates_below_one_megabyte_limit() {
         let bar = Bar { index: 0, kind: BarKind::MemoryBelow1M, prefetchable: false, base: 0x80000, raw_low: 0x80002, raw_high: None };
         assert!(BarResource::new(bar, 0x10000).is_ok());
-        assert_eq!(BarResource::new(bar, 0x20000), Err(ResourceError::AddressWidthExceeded));
+        let zero_based = Bar { base: 0, raw_low: 0x2, ..bar };
+        assert_eq!(BarResource::new(zero_based, 0x20_0000), Err(ResourceError::AddressWidthExceeded));
     }
 
     #[test]
