@@ -132,9 +132,7 @@ pub extern "efiapi" fn efi_main(
         return EFI_COMPROMISED_DATA;
     }
     // SAFETY: AllocatePages returned one writable page for 256 IDT gates.
-    unsafe {
-        build_emergency_idt(emergency_idt_physical)?;
-    }
+    unsafe { build_emergency_idt(emergency_idt_physical) };
 
     // NX must be enabled before any PTE with the NX bit is installed.
     // SAFETY: UEFI x86_64 applications execute at CPL 0; CPUID/MSR support is
@@ -306,7 +304,7 @@ pub extern "efiapi" fn efi_main(
     // SAFETY: The loader reserved one writable identity-mapped page for this ABI.
     unsafe { boot_info_pointer.write(boot_info) };
 
-    if !console.write_ascii("Kernel mappings and boot-info prepared; exiting UEFI Boot Services.\\r\\n") {
+    if !console.write_ascii("Kernel mappings and boot-info prepared; exiting UEFI Boot Services.\r\n") {
         return EFI_INVALID_PARAMETER;
     }
 
