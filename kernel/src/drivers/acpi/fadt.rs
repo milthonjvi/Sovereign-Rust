@@ -904,6 +904,41 @@ mod tests {
     }
 
     #[test]
+    fn ignores_gpe_gas_width_offset_and_access_size_as_required() {
+        let empty = GenericAddress {
+            address_space: GenericAddress::ADDRESS_SPACE_SYSTEM_IO,
+            bit_width: 0, bit_offset: 0,
+            access_size: GenericAddress::ACCESS_UNDEFINED, address: 0,
+        };
+        let gpe0 = GenericAddress {
+            address_space: GenericAddress::ADDRESS_SPACE_SYSTEM_IO,
+            bit_width: 0, bit_offset: 0xFF,
+            access_size: 0xFF, address: 0x500,
+        };
+        let registers = ExtendedPmRegisters {
+            pm1a_event: empty, pm1b_event: empty,
+            pm1a_control: empty, pm1b_control: empty,
+            pm2_control: empty, pm_timer: empty,
+            gpe0, gpe1: empty,
+        };
+        let lengths = PmRegisterBlockLengths {
+            pm1_event: 0, pm1_control: 0, pm2_control: 0,
+            pm_timer: 0, gpe0: 2, gpe1: 0,
+        };
+        assert_eq!(registers.validate_against_lengths(lengths), Ok(()));
+    }
+
+    #[test]
+    fn accepts_undefined_access_size_for_byte_reset_register() {
+        let mut gas = valid_reset_gas();
+        gas.access_size = GenericAddress::ACCESS_UNDEFINED;
+        let fadt = Fadt::parse(&make_fadt(
+            148, FADT_RESET_REG_SUP, Some(gas), Some(6),
+        )).unwrap();
+        assert_eq!(fadt.validated_reset_register(), Ok(Some((gas, 6))));
+    }
+
+    #[test]
     fn treats_zero_address_pm_gas_as_absent() {
         let empty = GenericAddress {
             address_space: 0xFF,
