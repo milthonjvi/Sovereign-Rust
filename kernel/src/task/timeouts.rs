@@ -132,10 +132,7 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
     pub unsafe fn cancel_sleep(&self, task: TaskId) -> TaskCancelReport {
         // SAFETY: Same-CPU requirement is part of this method's contract.
         let report = unsafe { self.timers.cancel(TimerId(task.0)) };
-        TaskCancelReport {
-            cancelled: report.removed.is_some(),
-            timer_reprogram_error: report.reprogram_error,
-        }
+        task_cancel_report(report)
     }
 
     /// Collect expired task IDs for insertion into the scheduler ready queue.
@@ -192,6 +189,14 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
     }
 }
 
+/// Convert the timer backend's cancellation result into task semantics.
+fn task_cancel_report(report: TimerCancelReport) -> TaskCancelReport {
+    TaskCancelReport {
+        cancelled: report.removed.is_some(),
+        timer_reprogram_error: report.reprogram_error,
+    }
+}
+
 /// Convert a drained timer batch into task wakeups without discarding
 /// the hardware reprogramming status.
 fn task_wakeup_report(
@@ -242,6 +247,26 @@ mod tests {
         assert_eq!(extract_task_wakeups(&mut events, &mut wakeups), 2);
         assert_eq!(wakeups, [Some(TaskId(1)), Some(TaskId(3)), None]);
         assert!(events.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn cancellation_result_survives_comparator_failure() {
+        let report = task_cancel_report(TimerCancelReport {
+            removed: event(9, TASK_SLEEP_EVENT),
+            reprogram_error: Some(crate::drivers::api::DriverError::HardwareFault),
+        });
+        assert!(report.cancelled);
+        assert_eq!(
+            report.timer_reprogram_error,
+            Some(crate::drivers::api::DriverError::HardwareFault)
+        );
+
+        let missing = task_cancel_report(TimerCancelReport {
+            removed: None,
+            reprogram_error: None,
+        });
+        assert!(!missing.cancelled);
+        assert_eq!(missing.timer_reprogram_error, None);
     }
 
     #[test]
