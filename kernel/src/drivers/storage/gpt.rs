@@ -102,40 +102,66 @@ pub fn enumerate_gpt_partitions<D: super::block::BlockDevice>(
     }
     if !crc != header.entries_crc32 { return Err(GptError::EntryArrayCrcMismatch); }
 
+    // Second sequential pass: decode entries while reading each table block once.
+    // This avoids one device read per GPT entry, including entries crossing block edges.
     let mut count = 0usize;
-    for i in 0..header.entry_count as u64 {
-        read_entry_bytes(device, geo, header.entries_lba,
-            i.checked_mul(header.entry_size as u64).ok_or(GptError::AddressOverflow)?,
-            entry_buffer, block_buffer)?;
-        let mut type_guid = [0u8; 16];
-        type_guid.copy_from_slice(&entry_buffer[..16]);
-        if type_guid.iter().all(|b| *b == 0) { continue; }
-        let mut unique_guid = [0u8; 16];
-        unique_guid.copy_from_slice(&entry_buffer[16..32]);
-        let first_lba = u64_at(entry_buffer, 32)?;
-        let last_lba = u64_at(entry_buffer, 40)?;
-        if unique_guid.iter().all(|b| *b == 0) || first_lba > last_lba
-            || first_lba < header.first_usable_lba || last_lba > header.last_usable_lba {
-            return Err(GptError::InvalidPartitionEntry);
-        }
-        let mut name = [0u16; 36];
-        for (j, unit) in name.iter_mut().enumerate() {
-            *unit = u16::from_le_bytes([entry_buffer[56 + j * 2], entry_buffer[57 + j * 2]]);
-        }
-        for previous in output[..count].iter().flatten() {
-            if first_lba <= previous.last_lba && previous.first_lba <= last_lba {
-                return Err(GptError::OverlappingPartitions);
+    let mut entry_fill = 0usize;
+    let mut table_offset = 0u64;
+    while table_offset < bytes {
+        let block_index = table_offset / block_size;
+        let within = (table_offset % block_size) as usize;
+        let n = core::cmp::min(block_buffer.len() - within, (bytes - table_offset) as usize);
+        let lba = header.entries_lba.checked_add(block_index).ok_or(GptError::AddressOverflow)?;
+        let range = BlockRange::new(lba, 1);
+        validate_buffer(geo, range, block_buffer.len()).map_err(|_| GptError::TableOutOfBounds)?;
+        device.read_blocks(range, block_buffer).map_err(|_| GptError::DeviceReadFailed)?;
+        let mut consumed = 0usize;
+        while consumed < n {
+            let take = core::cmp::min(header.entry_size as usize - entry_fill, n - consumed);
+            entry_buffer[entry_fill..entry_fill + take]
+                .copy_from_slice(&block_buffer[within + consumed..within + consumed + take]);
+            entry_fill += take;
+            consumed += take;
+            if entry_fill == header.entry_size as usize {
+                decode_gpt_entry(entry_buffer, header, output, &mut count)?;
+                entry_fill = 0;
             }
-            if unique_guid == previous.unique_guid { return Err(GptError::DuplicatePartitionGuid); }
         }
-        if count == output.len() { return Err(GptError::PartitionOutputFull); }
-        output[count] = Some(GptPartition {
-            type_guid, unique_guid, first_lba, last_lba,
-            attributes: u64_at(entry_buffer, 48)?, name,
-        });
-        count += 1;
+        table_offset += n as u64;
     }
-    Ok(count)
+    if entry_fill != 0 { return Err(GptError::InvalidEntryGeometry); }
+
+fn decode_gpt_entry(
+    entry: &[u8], header: GptHeader, output: &mut [Option<GptPartition>], count: &mut usize,
+) -> Result<(), GptError> {
+    let mut type_guid = [0u8; 16];
+    type_guid.copy_from_slice(&entry[..16]);
+    if type_guid.iter().all(|b| *b == 0) { return Ok(()); }
+    let mut unique_guid = [0u8; 16];
+    unique_guid.copy_from_slice(&entry[16..32]);
+    let first_lba = u64_at(entry, 32)?;
+    let last_lba = u64_at(entry, 40)?;
+    if unique_guid.iter().all(|b| *b == 0) || first_lba > last_lba
+        || first_lba < header.first_usable_lba || last_lba > header.last_usable_lba {
+        return Err(GptError::InvalidPartitionEntry);
+    }
+    let mut name = [0u16; 36];
+    for (j, unit) in name.iter_mut().enumerate() {
+        *unit = u16::from_le_bytes([entry[56 + j * 2], entry[57 + j * 2]]);
+    }
+    for previous in output[..*count].iter().flatten() {
+        if first_lba <= previous.last_lba && previous.first_lba <= last_lba {
+            return Err(GptError::OverlappingPartitions);
+        }
+        if unique_guid == previous.unique_guid { return Err(GptError::DuplicatePartitionGuid); }
+    }
+    if *count == output.len() { return Err(GptError::PartitionOutputFull); }
+    output[*count] = Some(GptPartition {
+        type_guid, unique_guid, first_lba, last_lba,
+        attributes: u64_at(entry, 48)?, name,
+    });
+    *count += 1;
+    Ok(())
 }
 
 fn read_entry_bytes<D: super::block::BlockDevice>(
