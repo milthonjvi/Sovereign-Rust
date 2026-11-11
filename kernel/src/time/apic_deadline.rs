@@ -13,7 +13,7 @@ use core::marker::PhantomData;
 use super::{
     clock::ClockSource,
     deadline::Deadline,
-    service::{TimerService, TimerServiceError},
+    service::{TimerCancelReport, TimerProcessReport, TimerService, TimerServiceError},
     timer_queue::{TimerEvent, TimerId},
     tsc_clock::{monotonic_deadline_to_tsc, TscClockSource},
 };
@@ -30,28 +30,6 @@ pub enum TscDeadlineQueueError {
 pub enum BootstrapTimerInitError {
     Interrupt(super::interrupt::TimerInterruptError),
     Queue(TscDeadlineQueueError),
-}
-
-/// Outcome of draining expired timers and attempting to re-arm the comparator.
-///
-/// Expired events remain delivered in the caller's output buffer even when
-/// hardware reprogramming fails. The caller must process those events and
-/// arrange a deferred retry; the queue also reasserts its pending-work signal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TimerProcessReport {
-    pub expired: usize,
-    pub reprogram_error: Option<DriverError>,
-    pub buffer_unavailable: bool,
-}
-
-/// Outcome of cancelling a queued timer and updating the comparator.
-///
-/// `removed` is authoritative even if comparator reprogramming fails: the
-/// event has already been removed from the software queue.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TimerCancelReport {
-    pub removed: Option<TimerEvent>,
-    pub reprogram_error: Option<DriverError>,
 }
 
 /// Per-CPU timer queue driven by the local APIC TSC-deadline facility.
