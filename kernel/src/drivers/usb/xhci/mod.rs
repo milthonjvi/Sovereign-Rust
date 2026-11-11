@@ -33,19 +33,19 @@ pub struct XhciProducerRing<'a,const N:usize>{entries:&'a mut[Trb;N],physical_ba
 impl<'a,const N:usize>XhciProducerRing<'a,N>{
  pub fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
   if N<2||physical_base&0x3f!=0{return Err(XhciError::InvalidRing)}
-  for entry in entries.iter_mut(){*entry=Trb::EMPTY;}
+  for entry in entries.iter_mut(){unsafe{core::ptr::write_volatile(entry,Trb::EMPTY);}}
   let mut ring=Self{entries,physical_base,enqueue:0,cycle:true,in_flight:0};
   ring.write_link();Ok(ring)
  }
  fn write_link(&mut self){
   let control=(6u32<<10)|(1<<1)|(self.cycle as u32);
-  self.entries[N-1]=Trb{parameter:self.physical_base,status:0,control};
+  unsafe{core::ptr::write_volatile(&mut self.entries[N-1],Trb{parameter:self.physical_base,status:0,control});}
  }
  pub fn push(&mut self,mut trb:Trb)->Result<usize,XhciError>{
   if self.in_flight>=N-1{return Err(XhciError::RingFull)}
   let index=self.enqueue;
   trb=trb.with_cycle(self.cycle);
-  self.entries[index]=trb;
+  unsafe{core::ptr::write_volatile(&mut self.entries[index],trb);}
   core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
   self.in_flight+=1;self.enqueue+=1;
   if self.enqueue==N-1{
