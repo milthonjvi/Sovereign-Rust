@@ -251,12 +251,6 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         }
     }
 
-    fn reclaim_tx(&mut self) -> Result<(), DriverError> {
-        self.tx_queue
-            .reap(self.registers, self.tx_descriptors)
-            .map(|_| ())
-            .map_err(map_queue_error)
-    }
 }
 
 impl<R: E1000Registers> Driver for E1000Device<'_, '_, R> {
@@ -360,10 +354,15 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, '_, R> {
             return Err(DriverError::InvalidConfiguration);
         }
 
-        self.reclaim_tx()?;
-        let index = self.tx_queue.next_available_slot(self.registers, self.tx_descriptors)
-            .map_err(map_queue_error)?
-            .ok_or(DriverError::ResourceUnavailable)? as usize;
+        let mut available = [u16::MAX; 1];
+        if self.tx_queue.reclaim_and_available_slots(
+            self.registers,
+            self.tx_descriptors,
+            &mut available,
+        ).map_err(map_queue_error)? == 0 {
+            return Err(DriverError::ResourceUnavailable);
+        }
+        let index = available[0] as usize;
         let buffer = &mut self.tx_buffers[index];
         if frame.len() > buffer.len() {
             return Err(DriverError::InvalidConfiguration);
