@@ -291,7 +291,7 @@ fn binding(base: u16) -> Option<PortBinding> {
 ///
 /// The correct handler is registered while the PIC line is masked, UART RX
 /// interrupts are enabled, and the PIC line is unmasked last. The returned
-/// queue is consumed from normal kernel context.
+/// queue is consumed from normal kernel context. If automatic RTS is enabled,\n/// consume through receive_byte rather than calling the queue's pop directly.
 ///
 /// # Safety
 /// Call at CPL 0 with IF clear. No other subsystem may own IRQ3/IRQ4. The UART
@@ -526,7 +526,7 @@ pub fn transmit_pending(base: u16) -> Option<usize> {
     binding(base).map(|port| port.tx_queue.len())
 }
 
-/// Returns the static RX queue associated with a legacy UART base port.
+/// Returns the static RX queue associated with a legacy UART base port.\n/// Do not consume it directly while automatic RTS is enabled; use receive_byte\n/// so the low-watermark transition can reassert the peer's transmit permission.
 pub fn receive_buffer(base: u16) -> Option<&'static UartRxBuffer<RX_CAPACITY>> {
     binding(base).map(|port| port.queue)
 }
