@@ -334,3 +334,46 @@ mod controller_tests {
         assert_eq!(cq[0].status,0);
     }
 }
+
+
+/// Fixed-capacity command-ID tracker for asynchronous queues.
+pub struct NvmeCommandTracker<const N:usize>{
+    active:[Option<u16>;N], next:u16, in_flight:usize,
+}
+impl<const N:usize> NvmeCommandTracker<N>{
+    pub const fn new()->Self{Self{active:[None;N],next:0,in_flight:0}}
+    pub const fn in_flight(&self)->usize{self.in_flight}
+    pub const fn capacity(&self)->usize{N}
+    pub fn allocate(&mut self)->Result<u16,NvmeError>{
+        if self.in_flight==N{return Err(NvmeError::QueueFull);}
+        let mut candidate=self.next; let mut attempts=0u32;
+        while attempts<=u16::MAX as u32{
+            if !self.active.iter().any(|id|*id==Some(candidate)){
+                let slot=self.active.iter().position(Option::is_none).ok_or(NvmeError::QueueFull)?;
+                self.active[slot]=Some(candidate);self.in_flight+=1;self.next=candidate.wrapping_add(1);
+                return Ok(candidate);
+            }
+            candidate=candidate.wrapping_add(1);attempts+=1;
+        }
+        Err(NvmeError::QueueFull)
+    }
+    pub fn complete(&mut self,id:u16)->bool{
+        if let Some(slot)=self.active.iter().position(|v|*v==Some(id)){
+            self.active[slot]=None;self.in_flight-=1;true
+        }else{false}
+    }
+    pub fn is_active(&self,id:u16)->bool{self.active.iter().any(|v|*v==Some(id))}
+}
+impl<const N:usize> Default for NvmeCommandTracker<N>{fn default()->Self{Self::new()}}
+
+#[cfg(test)]
+mod tracker_tests{
+    use super::*;
+    #[test]fn tracks_and_reuses_command_ids(){
+        let mut tracker=NvmeCommandTracker::<2>::new();
+        let a=tracker.allocate().unwrap();let b=tracker.allocate().unwrap();
+        assert_ne!(a,b);assert_eq!(tracker.allocate(),Err(NvmeError::QueueFull));
+        assert!(tracker.complete(a));assert!(!tracker.complete(a));
+        let c=tracker.allocate().unwrap();assert_ne!(c,b);assert_eq!(tracker.in_flight(),2);
+    }
+}
