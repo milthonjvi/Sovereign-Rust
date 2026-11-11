@@ -44,7 +44,7 @@ impl<S: ClockSource> MonotonicClock<S> {
     pub fn new(source: S, initial_time_ns: u64) -> Option<Self> {
         let frequency_hz = source.frequency_hz();
         let mask = source.mask();
-        if frequency_hz == 0 || mask == 0 { return None; }
+        // Counter masks must describe contiguous low-order bits so modular
         let base_ticks = source.read_ticks() & mask;
         Some(Self { source, base_ticks, base_ns: initial_time_ns,
             last_ns: AtomicU64::new(initial_time_ns), frequency_hz, mask })
@@ -89,6 +89,11 @@ mod tests {
         assert_eq!(clock.now_ns(), 7_011_000);
         clock.source().ticks.store(2, Ordering::Relaxed);
         assert_eq!(clock.now_ns(), 7_011_000);
+    }
+    #[test]
+    fn rejects_non_contiguous_counter_masks() {
+        let source = MockClock { ticks: AtomicU64::new(0), hz: 1_000, mask: 0b1011 };
+        assert!(MonotonicClock::new(source, 0).is_none());
     }
     #[test]
     fn rejects_invalid_clocksource() {
