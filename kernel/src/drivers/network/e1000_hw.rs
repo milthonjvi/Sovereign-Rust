@@ -147,8 +147,8 @@ impl E1000QueueConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct E1000InitInfo {
     pub mac: MacAddress,
-    pub rx_descriptors: u16,
-    pub tx_descriptors: u16,
+    pub rx_descriptors: u32,
+    pub tx_descriptors: u32,
 }
 
 /// Initialize one supported legacy E1000 using preallocated DMA rings.
