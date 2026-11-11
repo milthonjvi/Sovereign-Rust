@@ -102,8 +102,10 @@ pub unsafe fn disable_msi<A: ConfigAccess>(
     if capability.id != MSI_CAPABILITY_ID {
         return Err(ConfigError::OutOfRange);
     }
-    let _ = MsiCapability::read(io, address, capability)?;
     let offset = capability.offset as u16;
+    if offset < 0x40 || offset > MAX_STANDARD_CAPABILITY_OFFSET || offset & 3 != 0 {
+        return Err(ConfigError::OutOfRange);
+    }
     let header = read_standard(io, address, offset)?;
     let control = (header >> 16) as u16;
     let disabled_control = control & !1;
@@ -128,9 +130,14 @@ pub unsafe fn disable_msix<A: ConfigAccess>(
     if capability.id != MSIX_CAPABILITY_ID {
         return Err(ConfigError::OutOfRange);
     }
-    // Validate the complete conventional capability before writing its header.
-    let _ = MsixCapability::read(io, address, capability)?;
     let offset = capability.offset as u16;
+    if offset < 0x40
+        || offset > MAX_STANDARD_CAPABILITY_OFFSET
+        || offset & 3 != 0
+        || offset + 8 >= PCI_CONFIG_SIZE
+    {
+        return Err(ConfigError::OutOfRange);
+    }
     let header = read_standard(io, address, offset)?;
     let control = (header >> 16) as u16;
     let function_masked = control | (1 << 14);
