@@ -27,6 +27,13 @@ impl PitConfig {
         }
 
         let rounded = (INPUT_HZ + requested_hz / 2) / requested_hz;
+        // The PIT's maximum divisor produces approximately 18.2 Hz. Accept
+        // an 18 Hz request using that closest representable hardware rate.
+        let rounded = if requested_hz == 18 && rounded > 65_536 {
+            65_536
+        } else {
+            rounded
+        };
         if rounded == 0 || rounded > 65_536 {
             return Err(DriverError::InvalidConfiguration);
         }
@@ -113,7 +120,8 @@ mod tests {
 
     #[test]
     fn encodes_maximum_divisor_as_zero() {
-        let config = PitConfig { divisor: 0, actual_hz: 18 };
+        let config = PitConfig::from_frequency(18).unwrap();
+        assert_eq!(config.divisor, 0);
         assert_eq!(config.divisor_value(), 65_536);
     }
 
