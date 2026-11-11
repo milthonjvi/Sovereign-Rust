@@ -298,9 +298,11 @@ pub fn issue_command<R:AhciRegisterIo>(
     if ncq{
         let sact=port_register(base,0x34)?;
         if io.read32(sact)?&bit!=0{return Err(AhciError::SlotBusy);}
-        io.write32(sact,io.read32(sact)?|bit)?;
+        let active=io.read32(sact)?;
+        io.write32(sact,active|bit)?;
     }
-    io.write32(ci,io.read32(ci)?|bit)
+    let issued=io.read32(ci)?;
+    io.write32(ci,issued|bit)
 }
 
 /// Return true only after hardware has cleared CI (and SACT for NCQ).
