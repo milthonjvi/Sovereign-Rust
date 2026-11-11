@@ -7,7 +7,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use super::e1000::{REG_IMC, REG_IMS};
+use super::e1000::{REG_ICR, REG_IMC, REG_IMS};
 use super::e1000_hw::E1000Registers;
 
 pub const E1000_ICR_TXDW: u32 = 1 << 0;
@@ -39,6 +39,7 @@ pub enum E1000InterruptError<E> {
     Register(E),
     VectorRegistration,
     VectorRemoval,
+    StillEnabled,
 }
 
 impl E1000Interrupt {
@@ -89,6 +90,18 @@ impl E1000Interrupt {
         PENDING_VECTORS[word].fetch_and(!bit, Ordering::AcqRel) & bit != 0
     }
 
+    /// Read and clear the hardware cause register after consuming a pending
+    /// APIC notification. This is deferred-context work, never IRQ-callback work.
+    pub fn take_causes<R: E1000Registers>(
+        &self,
+        registers: &mut R,
+    ) -> Result<Option<u32>, E1000InterruptError<R::Error>> {
+        if !self.take_pending() {
+            return Ok(None);
+        }
+        registers.read32(REG_ICR).map(Some).map_err(E1000InterruptError::Register)
+    }
+
     /// Remove the callback after the device is masked and in-flight IRQs drained.
     ///
     /// # Safety
@@ -97,6 +110,9 @@ impl E1000Interrupt {
     pub unsafe fn uninstall(self)
         -> Result<(), E1000InterruptError<core::convert::Infallible>>
     {
+        if self.enabled {
+            return Err(E1000InterruptError::StillEnabled);
+        }
         // SAFETY: caller guarantees source masking and drained in-flight delivery.
         unsafe {
             crate::interrupts::apic::unregister_vector(self.vector, e1000_interrupt_handler)
