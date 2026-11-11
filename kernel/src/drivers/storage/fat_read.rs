@@ -194,3 +194,43 @@ pub fn verify_fat_mirrors<D: BlockDevice>(
     }
     Ok(primary)
 }
+
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FatFsInfo {
+    pub free_clusters: Option<u32>,
+    pub next_free_cluster: Option<u32>,
+}
+
+/// Validate and decode the FAT32 FSInfo sector. Unknown (0xFFFFFFFF) counters
+/// are represented as None rather than trusted or guessed.
+pub fn read_fs_info<D: BlockDevice>(
+    device: &mut D,
+    volume: &FatVolume,
+    sector_buffer: &mut [u8],
+) -> Result<FatFsInfo, FatError> {
+    if volume.bpb.kind != FatKind::Fat32 { return Err(FatError::InvalidFat32Metadata); }
+    let sector = volume.bpb.fs_info_sector.ok_or(FatError::InvalidFat32Metadata)?;
+    if sector_buffer.len() != volume.bpb.bytes_per_sector as usize {
+        return Err(FatError::FsInfoBufferTooSmall);
+    }
+    if sector >= volume.bpb.reserved_sectors {
+        return Err(FatError::InvalidFat32Metadata);
+    }
+    device.read_blocks(BlockRange::new(sector as u64, 1), sector_buffer).map_err(FatError::Block)?;
+    if u32::from_le_bytes([sector_buffer[0],sector_buffer[1],sector_buffer[2],sector_buffer[3]]) != 0x4161_5252
+        || u32::from_le_bytes([sector_buffer[484],sector_buffer[485],sector_buffer[486],sector_buffer[487]]) != 0x6141_7272
+        || u32::from_le_bytes([sector_buffer[508],sector_buffer[509],sector_buffer[510],sector_buffer[511]]) != 0xAA55_0000 {
+        return Err(FatError::InvalidFsInfo);
+    }
+    let free = u32::from_le_bytes([sector_buffer[488],sector_buffer[489],sector_buffer[490],sector_buffer[491]]);
+    let next = u32::from_le_bytes([sector_buffer[492],sector_buffer[493],sector_buffer[494],sector_buffer[495]]);
+    if (free != u32::MAX && free > volume.bpb.cluster_count)
+        || (next != u32::MAX && (next < 2 || next >= volume.bpb.cluster_count + 2)) {
+        return Err(FatError::InvalidFsInfo);
+    }
+    Ok(FatFsInfo {
+        free_clusters: if free == u32::MAX { None } else { Some(free) },
+        next_free_cluster: if next == u32::MAX { None } else { Some(next) },
+    })
+}
