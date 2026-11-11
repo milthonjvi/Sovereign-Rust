@@ -313,7 +313,9 @@ impl X2ApicTimer {
         apic.stop_one_shot_timer();
 
         let elapsed_apic = u32::MAX.saturating_sub(current_count);
-        if elapsed_apic == 0 || (elapsed_hpet as u128) < target_ticks {
+        // A zero current count means the 32-bit one-shot counter exhausted;
+        // the measured interval can no longer be trusted as a single sample.
+        if current_count == 0 || elapsed_apic == 0 || (elapsed_hpet as u128) < target_ticks {
             return Err(DriverError::InvalidConfiguration);
         }
         let bus_frequency = calibrate_bus_clock_hz(
