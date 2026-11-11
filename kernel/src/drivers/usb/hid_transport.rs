@@ -16,10 +16,11 @@ pub fn read_interrupt_report<C:HostController>(
  controller:&mut C,address:DeviceAddress,endpoint:Endpoint,buffer:&mut[u8],
 )->Result<usize,UsbError>{
  if endpoint.transfer_type!=TransferType::Interrupt||!endpoint.address.is_in()
-  ||endpoint.address.number()==0||endpoint.max_packet_size==0
-  ||buffer.is_empty()||buffer.len()>endpoint.max_packet_size as usize{
-  return Err(UsbError::InvalidAddress)
+  ||endpoint.address.number()==0||endpoint.max_packet_size==0{
+  return Err(UsbError::MalformedDescriptor)
  }
+ if buffer.is_empty(){return Err(UsbError::BufferTooShort)}
+ if buffer.len()>endpoint.max_packet_size as usize{return Err(UsbError::NoResources)}
  let result=controller.interrupt_transfer(address,endpoint,buffer)?;
  match result.status{
   TransferStatus::Success=>{},
@@ -152,5 +153,38 @@ mod tests{
   let config=fixture();
   assert_eq!(find_interface(&config,7,0).unwrap(),None);
   assert_eq!(find_interface(&config,4,1).unwrap(),None);
+ }
+
+ struct MockHost{status:TransferStatus,bytes:usize}
+ impl HostController for MockHost{
+  fn kind(&self)->super::super::controller::ControllerKind{super::super::controller::ControllerKind::Xhci}
+  fn port_count(&self)->u8{1}
+  fn port_status(&self,_:u8)->Result<super::super::controller::PortStatus,UsbError>{
+   Ok(super::super::controller::PortStatus{connected:true,enabled:true,suspended:false,over_current:false,speed:Some(super::super::transfer::UsbSpeed::High)})
+  }
+  fn control_transfer(&mut self,_:DeviceAddress,_:super::super::transfer::SetupPacket,_:&mut[u8])->Result<super::super::controller::TransferResult,UsbError>{Err(UsbError::Unsupported)}
+  fn bulk_transfer(&mut self,_:DeviceAddress,_:Endpoint,_:&mut[u8])->Result<super::super::controller::TransferResult,UsbError>{Err(UsbError::Unsupported)}
+  fn interrupt_transfer(&mut self,_:DeviceAddress,_:Endpoint,data:&mut[u8])->Result<super::super::controller::TransferResult,UsbError>{
+   if !data.is_empty(){data[0]=0xa5}
+   Ok(super::super::controller::TransferResult{status:self.status,bytes_transferred:self.bytes})
+  }
+  fn reset_port(&mut self,_:u8)->Result<(),UsbError>{Ok(())}
+ }
+ #[test]fn raw_report_reader_validates_transfer_status_and_length(){
+  let endpoint=Endpoint{address:EndpointAddress::from_raw(0x81),transfer_type:TransferType::Interrupt,max_packet_size:8,interval:1};
+  let mut host=MockHost{status:TransferStatus::Success,bytes:2};let mut buffer=[0u8;8];
+  assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),endpoint,&mut buffer),Ok(2));
+  assert_eq!(buffer[0],0xa5);
+  host.status=TransferStatus::TimedOut;
+  assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),endpoint,&mut buffer),Err(UsbError::Timeout));
+  host.status=TransferStatus::Success;host.bytes=9;
+  assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),endpoint,&mut buffer),Err(UsbError::TransferFailed));
+ }
+ #[test]fn raw_report_reader_rejects_invalid_endpoint_and_oversized_buffer(){
+  let mut host=MockHost{status:TransferStatus::Success,bytes:0};
+  let out=Endpoint{address:EndpointAddress::from_raw(0x01),transfer_type:TransferType::Interrupt,max_packet_size:8,interval:1};
+  assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),out,&mut[0;8]),Err(UsbError::MalformedDescriptor));
+  let input=Endpoint{address:EndpointAddress::from_raw(0x81),..out};
+  assert_eq!(read_interrupt_report(&mut host,DeviceAddress::new(2).unwrap(),input,&mut[0;9]),Err(UsbError::NoResources));
  }
 }
