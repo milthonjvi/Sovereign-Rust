@@ -13,6 +13,7 @@ use super::e1000::{
 };
 use super::e1000_descriptor::mac_address_from_registers;
 use super::ethernet::MacAddress;
+use super::dma::DmaBuffer;
 
 const RESET_POLL_LIMIT: usize = 1_000_000;
 const RING_LENGTH_ALIGNMENT: u32 = 128;
@@ -91,11 +92,17 @@ pub struct E1000InitInfo {
 /// must alias the physical ring bases supplied in queues, and PCI bus mastering
 /// must already be enabled. The platform must provide coherent DMA or implement
 /// cache maintenance in its barrier methods.
-pub fn initialize<R: E1000Registers>(
+///
+/// # Safety
+/// The MMIO accessor must target this NIC. Both descriptor slices must alias
+/// the pinned DMA ring mappings at the physical bases in `queues`; every RX
+/// DmaBuffer must refer to a pinned, writable device-visible mapping for its
+/// entire lifetime. No other CPU or device may mutate these rings during setup.
+pub unsafe fn initialize<R: E1000Registers>(
     registers: &mut R,
     queues: E1000QueueConfig,
     rx_descriptors: &mut [RxDescriptor],
-    rx_buffer_dma: &[u64],
+    rx_buffers: &[DmaBuffer<'_>],
     tx_descriptors: &mut [TxDescriptor],
     bus_master_enabled: bool,
 ) -> Result<E1000InitInfo, E1000InitError<R::Error>> {
@@ -104,9 +111,9 @@ pub fn initialize<R: E1000Registers>(
     }
     validate_queue(&queues).map_err(|_| E1000InitError::InvalidRingConfiguration)?;
     if rx_descriptors.len() != queues.rx.descriptor_count as usize
-        || rx_buffer_dma.len() != rx_descriptors.len()
+        || rx_buffers.len() != rx_descriptors.len()
         || tx_descriptors.len() != queues.tx.descriptor_count as usize
-        || rx_buffer_dma.iter().any(|address| *address == 0 || *address & 0xf != 0)
+        || DmaBuffer::validate_rx_pool(rx_buffers).is_err()
     {
         return Err(E1000InitError::InvalidDescriptorBuffers);
     }
@@ -132,8 +139,8 @@ pub fn initialize<R: E1000Registers>(
     }
 
     // Hardware queues are stopped and reset; now initialize the DMA-visible rings.
-    for (descriptor, &buffer_dma) in rx_descriptors.iter_mut().zip(rx_buffer_dma.iter()) {
-        *descriptor = RxDescriptor::for_buffer(buffer_dma);
+    for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
+        *descriptor = RxDescriptor::for_buffer(buffer.dma_address());
     }
     for descriptor in tx_descriptors.iter_mut() {
         *descriptor = TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() };
@@ -203,14 +210,14 @@ pub enum E1000QueueError<E> {
 /// Single-producer/single-consumer software state for a legacy TX ring.
 /// Keep one instance per hardware queue and serialize access to it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct E1000TxQueue {
+pub(crate) struct E1000TxQueue {
     cursor: RingCursor,
     clean: RingCursor,
     pending: u16,
 }
 
 impl E1000TxQueue {
-    pub fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
+    pub(crate) fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
         Ok(Self { cursor: RingCursor::new(descriptor_count)?, clean: RingCursor::new(descriptor_count)?, pending: 0 })
     }
 
@@ -418,14 +425,14 @@ impl E1000TxQueue {
 
 /// Consumer cursor for the device's legacy RX descriptor ring.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct E1000RxQueue {
+pub(crate) struct E1000RxQueue {
     cursor: RingCursor,
     recycle: RingCursor,
     outstanding: u16,
 }
 
 impl E1000RxQueue {
-    pub fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
+    pub(crate) fn new(descriptor_count: u16) -> Result<Self, E1000Error> {
         Ok(Self { cursor: RingCursor::new(descriptor_count)?, recycle: RingCursor::new(descriptor_count)?, outstanding: 0 })
     }
 
