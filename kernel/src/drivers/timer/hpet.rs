@@ -140,6 +140,40 @@ impl Hpet {
         Ok(())
     }
 
+    /// Configure a periodic HPET timer and arm its first deadline.
+    ///
+    /// The timer must advertise periodic capability. The comparator receives
+    /// the first absolute deadline followed by the period, as required by the
+    /// HPET periodic programming sequence. Interrupt routing and handler
+    /// installation remain the caller's responsibility.
+    pub fn configure_periodic(
+        &mut self,
+        timer: u8,
+        route: u8,
+        first_deadline: u64,
+        period_ticks: u64,
+    ) -> Result<(), DriverError> {
+        if timer >= self.capabilities.timer_count || route > 31 || period_ticks == 0 {
+            return Err(DriverError::InvalidConfiguration);
+        }
+        let config_offset = TIMER_CONFIGURATION_BASE + timer as usize * TIMER_STRIDE;
+        let current = self.read_register(config_offset);
+        const PERIODIC_CAPABLE: u64 = 1 << 4;
+        if current & PERIODIC_CAPABLE == 0 {
+            return Err(DriverError::UnsupportedDevice);
+        }
+        let config = (current & !TIMER_WRITABLE_CONTROL)
+            | TIMER_INTERRUPT_ENABLE
+            | TIMER_PERIODIC_MODE
+            | ((route as u64) << 9);
+        self.write_register(config_offset, config);
+
+        let comparator_offset = TIMER_COMPARATOR_BASE + timer as usize * TIMER_STRIDE;
+        self.write_register(comparator_offset, first_deadline);
+        self.write_register(comparator_offset, period_ticks);
+        Ok(())
+    }
+
     /// Set an absolute main-counter comparator value for a configured timer.
     pub fn set_comparator(&mut self, timer: u8, value: u64) -> Result<(), DriverError> {
         if timer >= self.capabilities.timer_count {
