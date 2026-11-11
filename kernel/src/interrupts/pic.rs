@@ -28,6 +28,39 @@ pub enum PicError {
     NotInitialized,
 }
 
+
+/// Check for a spurious legacy PIC IRQ without requiring a controller handle.
+///
+/// # Safety
+/// The caller must own the legacy PIC command ports, have initialized the
+/// dual PIC, and execute this from the serialized IRQ dispatch path with the
+/// expected PIC remapping active. For spurious IRQ15 this sends the required
+/// master-only EOI. A spurious IRQ7 requires no EOI.
+pub unsafe fn acknowledge_spurious_irq(irq: u8) -> Result<bool, PicError> {
+    match irq {
+        7 => {
+            // SAFETY: Guaranteed by the caller's PIC ownership contract.
+            unsafe {
+                io::out8(MASTER_COMMAND, ISR_READ);
+                Ok(io::in8(MASTER_COMMAND) & (1 << 7) == 0)
+            }
+        }
+        15 => {
+            // SAFETY: Guaranteed by the caller's PIC ownership contract.
+            unsafe {
+                io::out8(SLAVE_COMMAND, ISR_READ);
+                let spurious = io::in8(SLAVE_COMMAND) & (1 << 7) == 0;
+                if spurious {
+                    io::out8(MASTER_COMMAND, PIC_EOI);
+                }
+                Ok(spurious)
+            }
+        }
+        0..=6 | 8..=14 => Ok(false),
+        _ => Err(PicError::InvalidIrq),
+    }
+}
+
 /// Cached mask state for the legacy master/slave PIC pair.
 pub struct Pic8259 {
     master_mask: u8,
