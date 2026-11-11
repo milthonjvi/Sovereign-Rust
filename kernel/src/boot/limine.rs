@@ -128,7 +128,8 @@ pub static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [
 #[derive(Clone, Copy)]
 pub struct LimineBootInfo {
     pub hhdm_offset: u64,
-    pub memory_map: *mut MemoryMapResponse,
+    pub memory_map_entries: *mut *mut MemoryMapEntry,
+    pub memory_map_count: usize,
     pub framebuffer: *mut FramebufferResponse,
 }
 
@@ -150,15 +151,29 @@ impl LimineBootInfo {
             return None;
         }
 
-        // SAFETY: Non-null response pointers are supplied by the bootloader.
-        let hhdm = unsafe { ptr::read(hhdm_request) };
-        if hhdm.offset == 0 {
+        // A supported base revision is acknowledged by the bootloader by
+        // clearing the third word of the revision tag.
+        // SAFETY: The bootloader has completed handoff and the tag is retained.
+        let base_revision_ack = unsafe {
+            ptr::read_volatile(ptr::addr_of!(LIMINE_BASE_REVISION[2]))
+        };
+        if base_revision_ack != 0 {
             return None;
         }
 
+        // SAFETY: Non-null response pointers are supplied by the bootloader.
+        let hhdm = unsafe { ptr::read(hhdm_request) };
+        // SAFETY: Same response contract applies to the memory-map response.
+        let memory_map = unsafe { ptr::read(memory_request) };
+        if hhdm.offset == 0 || memory_map.entry_count == 0 || memory_map.entries.is_null() {
+            return None;
+        }
+        let memory_map_count = usize::try_from(memory_map.entry_count).ok()?;
+
         Some(Self {
             hhdm_offset: hhdm.offset,
-            memory_map: memory_request,
+            memory_map_entries: memory_map.entries,
+            memory_map_count,
             framebuffer: framebuffer_request,
         })
     }
