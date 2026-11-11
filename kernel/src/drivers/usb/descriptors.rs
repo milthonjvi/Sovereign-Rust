@@ -103,9 +103,9 @@ impl ParsedEndpoint{
   let attributes=b[3];
   let bytes_per_interval=u16::from_le_bytes([b[4],b[5]]);
   match transfer{
-   2=>{if attributes&0xe0!=0||bytes_per_interval!=0{return Err(UsbError::MalformedDescriptor)}},
-   1=>{if attributes&0xfc!=0||attributes&3>2||bytes_per_interval==0{return Err(UsbError::MalformedDescriptor)}},
-   3=>{if attributes!=0||bytes_per_interval==0{return Err(UsbError::MalformedDescriptor)}},
+   2=>{if attributes&0xe0!=0||attributes&0x1f>16||bytes_per_interval!=0{return Err(UsbError::MalformedDescriptor)}},
+   1=>{if attributes&0xfc!=0||attributes&3>2||bytes_per_interval==0||self.transactions_per_microframe!=1{return Err(UsbError::MalformedDescriptor)}\n    let maximum=self.max_packet_size as u32*(b[2] as u32+1)*((attributes&3)as u32+1);\n    if bytes_per_interval as u32>maximum{return Err(UsbError::MalformedDescriptor)}},
+   3=>{if attributes!=0||bytes_per_interval==0||self.transactions_per_microframe!=1{return Err(UsbError::MalformedDescriptor)}\n    let maximum=self.max_packet_size as u32*(b[2] as u32+1);\n    if bytes_per_interval as u32>maximum{return Err(UsbError::MalformedDescriptor)}},
    _=>return Err(UsbError::MalformedDescriptor),
   }
   self.max_burst=b[2];self.companion_attributes=attributes;
