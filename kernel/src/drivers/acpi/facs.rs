@@ -184,8 +184,13 @@ impl Facs {
         self.supports_64bit_wake() && self.requests_64bit_wake()
     }
 
+    /// Whether this FACS version defines the extended waking-vector field.
+    pub const fn has_extended_waking_vector_field(&self) -> bool {
+        self.length > 32 && self.version >= 1
+    }
+
     pub const fn has_64bit_waking_vector(&self) -> bool {
-        self.x_firmware_waking_vector != 0
+        self.has_extended_waking_vector_field() && self.x_firmware_waking_vector != 0
     }
 
     /// Select the waking vector using the firmware-defined precedence.
@@ -195,7 +200,7 @@ impl Facs {
     /// the extended address field takes precedence over the legacy field.
     /// This only selects metadata; it does not install a trampoline or sleep.
     pub const fn waking_vector(&self) -> Option<WakingVector> {
-        if self.x_firmware_waking_vector != 0 {
+        if self.has_64bit_waking_vector() {
             Some(WakingVector::Extended64(self.x_firmware_waking_vector))
         } else if self.firmware_waking_vector != 0 {
             Some(WakingVector::Legacy32(self.firmware_waking_vector))
@@ -271,6 +276,16 @@ mod tests {
         // Without an X vector, firmware falls back to the legacy field.
         bytes[24..32].copy_from_slice(&0u64.to_le_bytes());
         let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(facs.waking_vector(), Some(WakingVector::Legacy32(0x1000)));
+    }
+
+    #[test]
+    fn ignores_extended_waking_vector_when_facs_version_does_not_define_it() {
+        let mut bytes = fixture();
+        bytes[32] = 0;
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert!(!facs.has_extended_waking_vector_field());
+        assert!(!facs.has_64bit_waking_vector());
         assert_eq!(facs.waking_vector(), Some(WakingVector::Legacy32(0x1000)));
     }
 
