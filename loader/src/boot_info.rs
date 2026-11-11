@@ -12,6 +12,7 @@ pub const BOOT_INFO_VERSION: u32 = 1;
 
 /// The memory map uses the firmware EFI_MEMORY_DESCRIPTOR layout.
 pub const MEMORY_MAP_FORMAT_UEFI: u32 = 1;
+pub const MEMORY_DESCRIPTOR_VERSION_UEFI: u32 = 1;
 
 /// No framebuffer information is currently provided.
 pub const BOOT_INFO_FLAG_FRAMEBUFFER_VALID: u64 = 1 << 0;
@@ -74,7 +75,7 @@ impl SovereignBootInfo {
             && self.flags & !(BOOT_INFO_FLAG_FRAMEBUFFER_VALID | BOOT_INFO_FLAG_ACPI_VALID) == 0
             && self.memory_map_format == MEMORY_MAP_FORMAT_UEFI
             && self.memory_descriptor_size >= 40
-            && self.memory_descriptor_version != 0
+            && self.memory_descriptor_version == MEMORY_DESCRIPTOR_VERSION_UEFI
             && self.memory_map_size != 0
             && self.memory_map_size % self.memory_descriptor_size == 0
             && self.memory_map_physical != 0
