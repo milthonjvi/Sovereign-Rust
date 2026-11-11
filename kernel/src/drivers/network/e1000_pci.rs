@@ -59,10 +59,13 @@ impl E1000PciDevice {
     /// Select the E1000's MMIO register BAR from caller-supplied decoded BARs.
     /// The PCI workstream remains responsible for reading/decoding BARs.
     pub fn mmio_bar(&self, bars: &[Bar]) -> Result<Bar, E1000PciError> {
-        bars.iter()
-            .copied()
-            .find(|bar| bar.kind != BarKind::Io && bar.base != 0)
-            .ok_or(E1000PciError::MissingMmioBar)
+        let bar0 = bars.iter().copied()
+            .find(|bar| bar.index == 0)
+            .ok_or(E1000PciError::MissingMmioBar)?;
+        if bar0.kind == BarKind::Io || bar0.base == 0 {
+            return Err(E1000PciError::InvalidMmioBar);
+        }
+        Ok(bar0)
     }
 }
 
@@ -105,6 +108,13 @@ mod tests {
             Bar { index: 0, kind: BarKind::Memory32, prefetchable: false, base: 0xfebc0000, raw_low: 0xfebc0000, raw_high: None },
         ];
         assert_eq!(nic.mmio_bar(&bars).unwrap().index, 0);
+    }
+
+    #[test]
+    fn does_not_accept_a_nonzero_memory_bar_instead_of_bar0() {
+        let nic = E1000PciDevice::from_function(&function(0x8086, DEVICE_82540EM, 0)).unwrap();
+        let bars = [Bar { index: 1, kind: BarKind::Memory32, prefetchable: false, base: 0xfebc0000, raw_low: 0xfebc0000, raw_high: None }];
+        assert_eq!(nic.mmio_bar(&bars), Err(E1000PciError::MissingMmioBar));
     }
 
     #[test]
