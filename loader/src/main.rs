@@ -149,6 +149,13 @@ pub extern "efiapi" fn efi_main(
     // SAFETY: AllocatePages returned one writable page for 256 IDT gates.
     unsafe { build_emergency_idt(emergency_idt_physical) };
 
+    // Snapshot the map before page-table allocations. ACPI reclaimable and
+    // NVS ranges are stable across those later LoaderData allocations.
+    let initial_map = match memory_map_buffer.capture() {
+        Ok(map) => map,
+        Err(status) => return status,
+    };
+
     // NX must be enabled before any PTE with the NX bit is installed.
     // SAFETY: UEFI x86_64 applications execute at CPL 0; CPUID/MSR support is
     // checked by enable_nxe before the EFER bit is changed.
@@ -236,6 +243,83 @@ pub extern "efiapi" fn efi_main(
         PagePermissions::KERNEL_READ_ONLY,
     ) {
         return page_table_error_status(error);
+    }
+
+    // Map firmware ACPI memory so the kernel can safely follow RSDP ->
+    // XSDT/RSDT -> FADT/DSDT/MADT/HPET and the NVS FACS. ACPI reclaimable
+    // tables are RO/NX; ACPI NVS remains RW/NX for the FACS global lock.
+    let descriptor_count = initial_map.size_bytes / initial_map.descriptor_size;
+    let mut rsdp_in_acpi_memory = false;
+    let mut rsdp_in_reserved_memory = false;
+    let rsdp_range = match acpi_rsdp {
+        Some((base, length)) => Some((
+            base,
+            match base.checked_add(length) {
+                Some(end) => end,
+                None => return EFI_COMPROMISED_DATA,
+            },
+        )),
+        None => None,
+    };
+    for index in 0..descriptor_count {
+        let descriptor = match memory_map_buffer.descriptor(initial_map, index) {
+            Ok(descriptor) => descriptor,
+            Err(status) => return status,
+        };
+        let descriptor_size = match descriptor.number_of_pages.checked_mul(4096) {
+            Some(size) if size != 0 => size,
+            _ => return EFI_COMPROMISED_DATA,
+        };
+        let descriptor_end = match descriptor.physical_start.checked_add(descriptor_size) {
+            Some(end) => end,
+            None => return EFI_COMPROMISED_DATA,
+        };
+        if let Some((rsdp_start, rsdp_end)) = rsdp_range {
+            if rsdp_start >= descriptor.physical_start && rsdp_end <= descriptor_end {
+                if descriptor.memory_type == 9 || descriptor.memory_type == 10 {
+                    rsdp_in_acpi_memory = true;
+                } else if descriptor.memory_type == 0 {
+                    rsdp_in_reserved_memory = true;
+                }
+            }
+        }
+        if descriptor.memory_type != 9 && descriptor.memory_type != 10 {
+            continue;
+        }
+        let mut page = descriptor.physical_start;
+        while page < descriptor_end {
+            let page_end = match page.checked_add(4096) {
+                Some(end) => end,
+                None => return EFI_COMPROMISED_DATA,
+            };
+            let contains_rsdp = rsdp_range
+                .map(|(start, end)| start < page_end && page < end)
+                .unwrap_or(false);
+            let permissions = if contains_rsdp || descriptor.memory_type == 9 {
+                PagePermissions::KERNEL_READ_ONLY
+            } else {
+                PagePermissions::KERNEL_READ_WRITE
+            };
+            if let Err(error) = page_tables.map_4k(page, page, permissions) {
+                return page_table_error_status(error);
+            }
+            page = page_end;
+        }
+    }
+    if let Some((rsdp_physical, rsdp_length)) = acpi_rsdp {
+        if !rsdp_in_acpi_memory && !rsdp_in_reserved_memory {
+            return EFI_COMPROMISED_DATA;
+        }
+        if rsdp_in_reserved_memory {
+            if let Err(error) = map_identity_range(
+                &mut page_tables,
+                rsdp_physical,
+                rsdp_length,
+                PagePermissions::KERNEL_READ_ONLY,
+            ) {
+                return page_table_error_status(error);
+            }
+        }
     }
 
     // Leave one unmapped guard page on both sides of the bootstrap stack.
