@@ -91,12 +91,12 @@ pub struct E1000QueueConfig {
 }
 
 impl E1000QueueConfig {
-    pub fn new(rx_base: u64, tx_base: u64, rx_count: usize, tx_count: usize)
+    pub fn new(rx_dma_base: u64, tx_dma_base: u64, rx_count: usize, tx_count: usize)
         -> Result<Self, super::e1000::E1000Error>
     {
         let config = Self {
-            rx: RingConfig::new(rx_base, rx_count)?,
-            tx: RingConfig::new(tx_base, tx_count)?,
+            rx: RingConfig::new(rx_dma_base, rx_count)?,
+            tx: RingConfig::new(tx_dma_base, tx_count)?,
         };
         config.validate()?;
         Ok(config)
@@ -120,8 +120,8 @@ impl E1000QueueConfig {
         Ok(())
     }
 
-    pub fn defaults(rx_base: u64, tx_base: u64) -> Result<Self, super::e1000::E1000Error> {
-        Self::new(rx_base, tx_base, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE)
+    pub fn defaults(rx_dma_base: u64, tx_dma_base: u64) -> Result<Self, super::e1000::E1000Error> {
+        Self::new(rx_dma_base, tx_dma_base, DEFAULT_RX_RING_SIZE, DEFAULT_TX_RING_SIZE)
     }
 }
 
