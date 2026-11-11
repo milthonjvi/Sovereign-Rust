@@ -255,7 +255,7 @@ pub fn stroke_triangle(
 
 #[cfg(test)]
 mod tests {
-    use super::{fill_polygon, fill_triangle, stroke_polygon, stroke_triangle, ScanlineIntersection};
+    use super::{fill_triangle, stroke_polygon, stroke_triangle};
     use crate::drivers::framebuffer::color::{Color, PixelFormat};
     use crate::drivers::framebuffer::info::FramebufferInfo;
     use crate::drivers::framebuffer::surface::FramebufferSurface;
