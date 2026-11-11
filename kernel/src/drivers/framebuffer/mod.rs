@@ -10,4 +10,5 @@ pub mod surface;
 pub use color::{Color, PixelFormat};
 pub use console::FramebufferConsole;
 pub use info::{FramebufferError, FramebufferInfo};
+pub use image::{ImageView, ImageViewError};
 pub use surface::FramebufferSurface;
