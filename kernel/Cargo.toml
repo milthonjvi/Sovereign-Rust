@@ -9,3 +9,7 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
+
+[[bin]]
+name = "sovereign-kernel-uefi"
+path = "src/sovereign_main.rs"
