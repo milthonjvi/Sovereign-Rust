@@ -61,7 +61,15 @@ pub unsafe fn install_exception_gates(idt: &mut Idt) -> Result<(), IdtError> {
     for vector in 0..32 {
         // SAFETY: The assembly object exports exactly 32 pointers in this table.
         let handler = unsafe { sovereign_exception_stub_table[vector] };
-        let entry = IdtEntry::new(handler, selector, 0, INTERRUPT_GATE, 0)?;
+        // Dedicated IST stacks prevent catastrophic faults from reusing a
+        // potentially corrupted or exhausted kernel stack.
+        let ist = match vector {
+            2 => 2,  // NMI
+            8 => 1,  // Double fault
+            18 => 3, // Machine check
+            _ => 0,
+        };
+        let entry = IdtEntry::new(handler, selector, ist, INTERRUPT_GATE, 0)?;
         idt.set_gate(vector as u8, entry);
     }
     Ok(())
