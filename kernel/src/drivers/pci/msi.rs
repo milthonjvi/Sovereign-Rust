@@ -182,6 +182,12 @@ impl MsixCapability {
         if table_end as u64 > table.size || pba_end as u64 > pba.size {
             return Err(ConfigError::InvalidBar);
         }
+        if table.index == pba.index
+            && self.table_offset < pba_end
+            && self.pending_bit_array_offset < table_end
+        {
+            return Err(ConfigError::InvalidBar);
+        }
         Ok(())
     }
 
