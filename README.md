@@ -23,13 +23,14 @@ to privileged CPU operations and transitions that require it.
 - Higher-half ELF linker script and a freestanding kernel entry point.
 - Sovereign Boot UEFI entry point and allocation-free firmware console.
 - UEFI Loaded Image and Simple File System protocol access.
-- Kernel lookup at `\\EFI\\BOOT\\sovereign-kernel.elf` and initial ELF64
-  header validation for x86_64 executable/shared-object images.
+- Kernel lookup at `\\EFI\\BOOT\\sovereign-kernel.elf` and bounded ELF64 validation
+  for x86_64 `ET_EXEC` images, including file length, program-header bounds,
+  `PT_LOAD` file/memory ranges, alignment, canonical virtual ranges, and executable entry point.
 
-The loader currently reads and validates only the fixed 64-byte ELF header.
-It does not yet load program segments, acquire the final memory map, call
-ExitBootServices, or transfer control to the kernel. The kernel still consumes
-its existing Limine handoff during this transition; Limine has not been removed.
+The loader validates segments but does not yet allocate pages, copy segment data,
+zero BSS, acquire the final memory map, call ExitBootServices, or transfer control
+to the kernel. The kernel still consumes its existing Limine handoff during this
+transition; Limine has not been removed.
 
 ## Build
 
