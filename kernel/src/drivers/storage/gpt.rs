@@ -204,6 +204,8 @@ pub fn enumerate_gpt_partitions<D: super::block::BlockDevice>(
         table_offset += n as u64;
     }
     if entry_fill != 0 { return Err(GptError::InvalidEntryGeometry); }
+    Ok(count)
+}
 
 fn decode_gpt_entry(
     entry: &[u8], header: GptHeader, output: &mut [Option<GptPartition>], count: &mut usize,
