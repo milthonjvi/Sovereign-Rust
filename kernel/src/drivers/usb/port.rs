@@ -1,7 +1,7 @@
 //! Non-blocking USB downstream-port power, debounce, reset and enumeration policy.
 //! The caller performs returned actions through a root-hub or external-hub
 //! controller and supplies elapsed time; this module never busy-waits.
-use super::UsbError;
+use super::{UsbError,hub::{HubPortAction,port_action},transfer::SetupPacket};
 
 pub const USB_CONNECT_DEBOUNCE_MS:u16=100;
 pub const USB_RESET_RECOVERY_MS:u16=10;
@@ -15,6 +15,21 @@ pub struct PortObservation{
 pub enum PortPhase{Unpowered,Powering,Debouncing,Resetting,ResetRecovery,Enumerating,Active,Disconnected,Failed}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum PortAction{PowerOn,PowerOff,ClearConnectionChange,Reset,ClearResetChange,BeginEnumeration,DisconnectDevice}
+impl PortAction{
+ /// Converts an actionable state-machine output into an external-hub class
+ /// request. Root-hub actions must instead use the host-controller interface.
+ pub fn hub_request(self,port:u8)->Option<SetupPacket>{
+  let action=match self{
+   Self::PowerOn=>HubPortAction::PowerOn,
+   Self::PowerOff=>HubPortAction::PowerOff,
+   Self::Reset=>HubPortAction::Reset,
+   Self::ClearConnectionChange=>HubPortAction::ClearConnectionChange,
+   Self::ClearResetChange=>HubPortAction::ClearResetChange,
+   Self::BeginEnumeration|Self::DisconnectDevice=>return None,
+  };
+  Some(port_action(port,action))
+ }
+}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct UsbPortMachine{
  pub port:u8,pub phase:PortPhase,power_good_ms:u16,elapsed_ms:u16,stable_ms:u16,
