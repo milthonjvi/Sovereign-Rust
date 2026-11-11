@@ -2,6 +2,7 @@
 #![no_main]
 
 pub mod boot_info;
+pub mod page_tables;
 mod uefi;
 
 use core::{mem, panic::PanicInfo};
