@@ -130,7 +130,7 @@ pub enum ImageViewError {
 #[cfg(test)]
 mod tests {
     use super::{ImageView, ImageViewError};
-    use crate::drivers::framebuffer::color::Color;
+    use super::super::color::Color;
 
     #[test]
     fn rejects_empty_images() {
