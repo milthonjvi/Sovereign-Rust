@@ -426,7 +426,7 @@ unsafe fn build_emergency_idt(physical_base: u64) {
             options(nomem, nostack, preserves_flags)
         );
     }
-    let handler = sovereign_emergency_fault as usize as u64;
+    let handler = sovereign_emergency_fault as *const () as usize as u64;
     let gate = IdtEntry {
         offset_low: handler as u16,
         selector,
