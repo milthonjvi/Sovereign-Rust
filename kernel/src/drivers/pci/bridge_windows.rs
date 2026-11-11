@@ -6,6 +6,7 @@
 use super::config::{ConfigAccess, ConfigError, PciFunction};
 use super::resource_allocator::{AllocationError, ResourceSpace, ResourceWindow};
 
+const COMMAND_STATUS: u16 = 0x04;
 const IO_BASE_LIMIT: u16 = 0x1c;
 const MEMORY_BASE_LIMIT: u16 = 0x20;
 const PREFETCH_BASE_LIMIT: u16 = 0x24;
@@ -41,6 +42,10 @@ impl PciBridgeWindows {
             return Err(BridgeWindowError::NotPciBridge);
         }
 
+        // PciFunction carries an enumeration-time snapshot. Read Command
+        // again so window enablement reflects the device's current decode state.
+        let command = io.read_u32(function.address, COMMAND_STATUS)
+            .map_err(BridgeWindowError::Access)? as u16;
         let io_base_limit = io.read_u32(function.address, IO_BASE_LIMIT)
             .map_err(BridgeWindowError::Access)?;
         let io_upper = io.read_u32(function.address, IO_BASE_UPPER_LIMIT)
@@ -56,7 +61,7 @@ impl PciBridgeWindows {
         let io_limit = (io_limit_upper << 16)
             | ((((io_base_limit >> 8) & 0x00f0) as u64) << 8)
             | 0x0fff;
-        let io_window = if identity.command & 1 != 0 && io_base <= io_limit {
+        let io_window = if command & 1 != 0 && io_base <= io_limit {
             Some(make_window(ResourceSpace::Io, false, io_base, io_limit)?)
         } else { None };
 
@@ -67,7 +72,7 @@ impl PciBridgeWindows {
         }
         let memory_base = ((memory & 0x0000_fff0) as u64) << 16;
         let memory_limit = (((memory >> 16) & 0x0000_fff0) as u64) << 16 | 0x000f_ffff;
-        let memory_window = if identity.command & 2 != 0 && memory_base <= memory_limit {
+        let memory_window = if command & 2 != 0 && memory_base <= memory_limit {
             Some(make_window(ResourceSpace::Memory, false, memory_base, memory_limit)?)
         } else { None };
 
@@ -139,6 +144,7 @@ mod tests {
     #[test]
     fn decodes_32_bit_memory_and_io_bridge_windows() {
         let mut registers = [0u32; 64];
+        registers[(COMMAND_STATUS / 4) as usize] = 3;
         // I/O: 0x1000..=0x1fff, 16-bit I/O window.
         registers[(IO_BASE_LIMIT / 4) as usize] = 0x0000_1010;
         // Memory: 0x8000_0000..=0x80ff_ffff.
@@ -158,6 +164,7 @@ mod tests {
     #[test]
     fn decodes_64_bit_prefetchable_bridge_window() {
         let mut registers = [0u32; 64];
+        registers[(COMMAND_STATUS / 4) as usize] = 2;
         registers[(PREFETCH_BASE_LIMIT / 4) as usize] = 0x0001_0001;
         registers[(PREFETCH_BASE_UPPER / 4) as usize] = 1;
         registers[(PREFETCH_LIMIT_UPPER / 4) as usize] = 1;
@@ -166,4 +173,23 @@ mod tests {
         assert_eq!(prefetch.base(), 0x1_0000_0000);
         assert_eq!(prefetch.end(), 0x1_0010_0000);
     }
+
+    #[test]
+    fn uses_live_command_register_instead_of_enumeration_snapshot() {
+        let mut registers = [0u32; 64];
+        registers[(COMMAND_STATUS / 4) as usize] = 2;
+        registers[(MEMORY_BASE_LIMIT / 4) as usize] = 0x80f0_8000;
+        let mut stale = bridge();
+        stale.identity.command = 0;
+        let windows = PciBridgeWindows::read(stale, &MockConfig(registers)).unwrap();
+        assert!(windows.memory.is_some());
+        assert!(windows.io.is_none());
+
+        registers[(COMMAND_STATUS / 4) as usize] = 0;
+        stale.identity.command = 3;
+        let windows = PciBridgeWindows::read(stale, &MockConfig(registers)).unwrap();
+        assert!(windows.memory.is_none());
+        assert!(windows.io.is_none());
+    }
+
 }
