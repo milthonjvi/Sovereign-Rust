@@ -78,7 +78,7 @@ impl EfiMemoryMapBuffer {
             return Err(if status == EFI_BUFFER_TOO_SMALL { EFI_BUFFER_TOO_SMALL } else { status });
         }
         if descriptor_size < mem::size_of::<EfiMemoryDescriptor>()
-            || descriptor_size == 0 || size > capacity || size % descriptor_size != 0
+            || descriptor_size & 7 != 0 || size > capacity || size % descriptor_size != 0
             || descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
         {
             return Err(EFI_COMPROMISED_DATA);
