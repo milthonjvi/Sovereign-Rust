@@ -97,8 +97,10 @@ impl<'a> FramebufferConsole<'a> {
     ///
     /// Existing framebuffer contents are not repainted.
     pub fn set_colors(&mut self, foreground: Color, background: Color) {
+        self.erase_cursor_if_visible();
         self.foreground = foreground;
         self.background = background;
+        self.draw_cursor_if_visible();
     }
 
     /// Write a string using temporary colors, then restore the previous colors.
