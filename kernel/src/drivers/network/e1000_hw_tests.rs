@@ -42,6 +42,9 @@ use super::*;
             self.read_barriers += 1;
             core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
         }
+        fn post_reset_delay(&mut self) {
+            self.post_reset_delays += 1;
+        }
     }
 
     #[test]
@@ -112,6 +115,7 @@ use super::*;
         // pinned mappings supplied by the platform in a real initialization.
         let info = unsafe { initialize(&mut regs, queues, &mut rx, &rx_buffers, &mut tx, true) }.unwrap();
         assert_eq!(info.mac, MacAddress([0x02, 0x22, 0x33, 0x44, 0x55, 0x66]));
+        assert_eq!(regs.post_reset_delays, 1);
         assert_eq!(
             regs.writes.iter().filter(|(reg, _)| {
                 *reg >= REG_MTA_BASE
