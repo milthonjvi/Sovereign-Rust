@@ -40,7 +40,7 @@ impl Default for UartConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UartError {
-    InvalidBasePort, InvalidBaudRate, InvalidFrameFormat, NotInitialized, Timeout,
+    InvalidBasePort, InvalidBaudRate, InvalidFrameFormat, NotInitialized, Timeout, InterruptsActive,
 }
 
 
@@ -252,6 +252,9 @@ impl Uart16550 {
 
     pub fn shutdown(&mut self) -> Result<(), UartError> {
         self.ensure_initialized()?;
+        if irq::is_attached(self.base) {
+            return Err(UartError::InterruptsActive);
+        }
         self.flush()?;
         // SAFETY: This instance owns the UART.
         unsafe { io::out8(self.port(IER), 0); io::out8(self.port(MCR), 0); }
@@ -273,6 +276,7 @@ impl Driver for Uart16550 {
             UartError::InvalidBasePort | UartError::InvalidBaudRate | UartError::InvalidFrameFormat =>
                 DriverError::InvalidConfiguration,
             UartError::NotInitialized | UartError::Timeout => DriverError::NotReady,
+            UartError::InterruptsActive => DriverError::HardwareFault,
         })
     }
     fn shutdown(&mut self) -> Result<(), DriverError> {
