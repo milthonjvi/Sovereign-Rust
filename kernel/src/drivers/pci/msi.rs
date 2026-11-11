@@ -572,6 +572,20 @@ mod tests {
     }
 
     #[test]
+    fn enables_msix_while_masked_then_allows_unmasking() {
+        let mut registers = [0u32; 1024];
+        registers[0x60 / 4] = 0x0007_0011;
+        registers[0x64 / 4] = 0x0000_2002;
+        registers[0x68 / 4] = 0x0000_3004;
+        let io = WritableConfig { registers: RefCell::new(registers) };
+        let capability = Capability { id: MSIX_CAPABILITY_ID, offset: 0x60 };
+        unsafe { enable_msix_masked(&io, address(), capability).unwrap(); }
+        assert_eq!(io.registers.borrow()[0x60 / 4], 0xc007_0011);
+        unsafe { set_msix_function_mask(&io, address(), capability, false).unwrap(); }
+        assert_eq!(io.registers.borrow()[0x60 / 4], 0x8007_0011);
+    }
+
+    #[test]
     fn validates_msix_structures_against_bar_aperture_sizes() {
         let msix = MsixCapability {
             offset: 0x60, enabled: false, function_masked: true, table_size: 8,
