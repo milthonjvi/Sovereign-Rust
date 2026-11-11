@@ -122,7 +122,7 @@ pub fn configure_gsi_masked(
     controllers: &mut [super::ioapic::IoApicController],
     gsi: u32,
     vector: u8,
-    destination_apic_id: u8,
+    destination_apic_id: u32,
     mode: super::ioapic::InterruptMode,
 ) -> Result<GsiRoute, TopologyError> {
     validate_controller_topology(controllers)?;
@@ -159,7 +159,7 @@ pub fn configure_isa_irq_masked(
     irq: u8,
     overrides: &[crate::drivers::acpi::madt::InterruptSourceOverride],
     vector: u8,
-    destination_apic_id: u8,
+    destination_apic_id: u32,
 ) -> Result<IsaGsiRoute, IsaRouteError> {
     let (gsi, mode) = super::ioapic::resolve_isa_irq(irq, overrides)
         .map_err(IsaRouteError::Interrupt)?;
