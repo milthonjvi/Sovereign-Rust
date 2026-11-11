@@ -166,7 +166,7 @@ impl UhciController{
   let offset=match port{1=>PORTSC1,2=>PORTSC2,_=>return Err(super::UsbError::InvalidAddress)};
   if changes&!(PORT_CONNECT_CHANGE|PORT_ENABLE_CHANGE)!=0{return Err(super::UsbError::InvalidAddress)}
   let current=io.read16(self.reg(offset))?;
-  let preserve=current&(PORT_ENABLE|PORT_RESET|PORT_SUSPEND);
+  let preserve=current&(PORT_ENABLE|PORT_SUSPEND);
   io.write16(self.reg(offset),preserve|changes)
  }
 }
