@@ -126,6 +126,11 @@ impl AcpiTables {
         if let Some(fadt_address) = found.fadt {
             let fadt_bytes = map_table(fadt_address).ok_or(AcpiError::UnsupportedAddress)?;
             let fadt = Fadt::parse(fadt_bytes)?;
+            // Reject malformed fixed FADT metadata before trusting its firmware
+            // pointers. PM-register usability is validated separately by the
+            // power-management consumer, not required for table discovery.
+            fadt.validate_firmware_metadata()?;
+            fadt.validate_fixed_feature_flags()?;
 
             // FACS is referenced by FADT.FIRMWARE_CTRL / X_FIRMWARE_CTRL,
             // not listed in the RSDT/XSDT. It has no SDT checksum. Prefer a
@@ -439,4 +444,42 @@ mod tests {
 
         assert_eq!(result, Err(AcpiError::InvalidSignature));
     }
+
+    #[test]
+    fn rejects_invalid_fadt_metadata_during_discovery() {
+        let root = make_xsdt(0x2000);
+        let rsdp = Rsdp {
+            revision: 2,
+            rsdt_address: 0,
+            xsdt_address: Some(0x1000),
+            length: 36,
+        };
+
+        let mut invalid_profile = make_fadt(0, 0);
+        invalid_profile[45] = 9;
+        invalid_profile[9] = 0;
+        invalid_profile[9] = 0u8.wrapping_sub(
+            invalid_profile.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+        );
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(invalid_profile.as_slice()),
+            _ => None,
+        });
+        assert_eq!(result, Err(AcpiError::MalformedTable));
+
+        let mut reserved_flags = make_fadt(0, 0);
+        reserved_flags[112..116].copy_from_slice(&(1u32 << 31).to_le_bytes());
+        reserved_flags[9] = 0;
+        reserved_flags[9] = 0u8.wrapping_sub(
+            reserved_flags.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+        );
+        let result = AcpiTables::discover(&rsdp, |address| match address {
+            0x1000 => Some(root.as_slice()),
+            0x2000 => Some(reserved_flags.as_slice()),
+            _ => None,
+        });
+        assert_eq!(result, Err(AcpiError::MalformedTable));
+    }
+
 }
