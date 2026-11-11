@@ -75,13 +75,15 @@ impl BulkOnlyTransport{
   Ok(())
  }
  pub fn read_blocks<C:HostController>(&mut self,controller:&mut C,lba:u32,blocks:u16,block_size:u32,data:&mut[u8])->Result<BotResult,UsbError>{
+  if block_size==0||blocks==0{return Err(UsbError::MalformedDescriptor)}
   let expected=(blocks as usize).checked_mul(block_size as usize).ok_or(UsbError::NoResources)?;
-  if expected!=data.len()||blocks==0{return Err(UsbError::BufferTooShort)}
+  if expected!=data.len(){return Err(UsbError::BufferTooShort)}
   self.execute(controller,ScsiCommand::read_10(lba,blocks),DataDirection::In,data)
  }
  pub fn write_blocks<C:HostController>(&mut self,controller:&mut C,lba:u32,blocks:u16,block_size:u32,data:&mut[u8])->Result<BotResult,UsbError>{
+  if block_size==0||blocks==0{return Err(UsbError::MalformedDescriptor)}
   let expected=(blocks as usize).checked_mul(block_size as usize).ok_or(UsbError::NoResources)?;
-  if expected!=data.len()||blocks==0{return Err(UsbError::BufferTooShort)}
+  if expected!=data.len(){return Err(UsbError::BufferTooShort)}
   self.execute(controller,ScsiCommand::write_10(lba,blocks),DataDirection::Out,data)
  }
  pub fn execute<C:HostController>(&mut self,controller:&mut C,command:ScsiCommand,direction:DataDirection,data:&mut[u8])->Result<BotResult,UsbError>{
