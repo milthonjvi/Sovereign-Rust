@@ -6,6 +6,8 @@
 
 pub mod device;
 pub mod e1000;
+pub mod e1000_descriptor;
+pub mod e1000_pci;
 pub mod ethernet;
 
 pub use device::{LinkState, NetworkDevice, NetworkInterfaceInfo};
