@@ -10,8 +10,14 @@ impl Deadline {
         Self(now_ns.saturating_add(duration_ns))
     }
     pub const fn timestamp_ns(self) -> u64 { self.0 }
-    pub const fn is_expired(self, now_ns: u64) -> bool { now_ns >= self.0 }
-    pub const fn remaining_ns(self, now_ns: u64) -> u64 { self.0.saturating_sub(now_ns) }
+    /// Infinite deadlines never expire, even if the clock saturates.
+    pub const fn is_expired(self, now_ns: u64) -> bool {
+        self.0 != u64::MAX && now_ns >= self.0
+    }
+    /// Infinite deadlines retain the maximum representable remaining duration.
+    pub const fn remaining_ns(self, now_ns: u64) -> u64 {
+        if self.0 == u64::MAX { u64::MAX } else { self.0.saturating_sub(now_ns) }
+    }
 }
 /// Select the earlier of two deadlines.
 pub const fn earlier(a: Deadline, b: Deadline) -> Deadline { if a.0 <= b.0 { a } else { b } }
@@ -31,6 +37,11 @@ mod tests {
     #[test]
     fn saturates_deadline_overflow() {
         assert_eq!(Deadline::after_ns(u64::MAX - 2, 10), Deadline::INFINITE);
+    }
+    #[test]
+    fn infinite_deadline_never_expires() {
+        assert!(!Deadline::INFINITE.is_expired(u64::MAX));
+        assert_eq!(Deadline::INFINITE.remaining_ns(u64::MAX), u64::MAX);
     }
     #[test]
     fn selects_earliest_deadline() {
