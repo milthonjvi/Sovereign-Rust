@@ -184,6 +184,15 @@ impl<S: ClockSource, const N: usize> TaskTimeouts<S, N> {
         Some(unsafe { self.collect_wakeups(events, wakeups) })
     }
 
+    /// Stop the TSC-deadline timer and unregister its IRQ handler.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, no handler in flight, and no remaining users.
+    pub unsafe fn shutdown(&mut self) -> Result<(), crate::time::TimerInterruptError> {
+        // SAFETY: Forwarded from the timer queue teardown contract.
+        unsafe { self.timers.shutdown() }
+    }
+
     /// Next monotonic deadline for the current CPU's hardware timer.
     pub fn next_deadline(&self) -> Option<Deadline> {
         self.timers.next_deadline()
