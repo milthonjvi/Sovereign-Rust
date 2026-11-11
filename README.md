@@ -30,7 +30,8 @@ to privileged CPU operations and transitions that require it.
 Sovereign Boot now loads the ELF image, zeroes BSS, builds four-/five-level
 page tables with NX/W^X permissions, maps its PE32+ runtime sections, GDT,
 emergency IDT, dedicated 256 KiB kernel stack, boot-info page, and UEFI memory
-map. It populates SovereignBootInfo v1, refreshes the memory map, calls
+map. It discovers and validates the UEFI ACPI RSDP when available, then populates
+SovereignBootInfo v1, refreshes the memory map, calls
 ExitBootServices with stale-key retries, switches CR3, and transfers control
 to a separate `sovereign-kernel-uefi` entry point. The kernel validates the
 handoff and memory descriptors before installing its bootstrap descriptor
