@@ -127,18 +127,21 @@ impl LocalApic {
         self.write(REG_ESR, 0);
         let _ = self.read(REG_ESR);
 
-        // Mask legacy and optional LVT entries according to the APIC version.
+        // LVT entries are only architecturally implemented up to the maximum
+        // entry reported by the local APIC version register.
+        let max_lvt = self.max_lvt_entry();
         self.write(REG_LVT_TIMER, LVT_MASKED);
-        self.write(REG_LVT_THERMAL, LVT_MASKED);
-        self.write(REG_LVT_PERFORMANCE, LVT_MASKED);
-        self.write(REG_LVT_LINT0, LVT_MASKED);
-        self.write(REG_LVT_LINT1, LVT_MASKED);
-        self.write(REG_LVT_ERROR, LVT_MASKED);
-        if self.max_lvt_entry() >= 6 {
-            self.write(REG_LVT_CMCI, LVT_MASKED);
-        }
+        if max_lvt >= 1 { self.write(REG_LVT_THERMAL, LVT_MASKED); }
+        if max_lvt >= 2 { self.write(REG_LVT_PERFORMANCE, LVT_MASKED); }
+        if max_lvt >= 3 { self.write(REG_LVT_LINT0, LVT_MASKED); }
+        if max_lvt >= 4 { self.write(REG_LVT_LINT1, LVT_MASKED); }
+        if max_lvt >= 5 { self.write(REG_LVT_ERROR, LVT_MASKED); }
+        if max_lvt >= 6 { self.write(REG_LVT_CMCI, LVT_MASKED); }
 
-        self.write(REG_SVR, (spurious_vector as u32) | SVR_SOFTWARE_ENABLE);
+        // Preserve SVR policy bits (e.g. focus processor checking / EOI
+        // broadcast suppression) while replacing only vector and enable.
+        let svr = self.read(REG_SVR);
+        self.write(REG_SVR, (svr & !0x1FF) | (spurious_vector as u32) | SVR_SOFTWARE_ENABLE);
         Ok(())
     }
 
@@ -149,15 +152,14 @@ impl LocalApic {
 
     /// Mask all implemented local-vector sources without disabling the APIC.
     pub fn mask_local_vectors(&mut self) {
+        let max_lvt = self.max_lvt_entry();
         self.write(REG_LVT_TIMER, self.read(REG_LVT_TIMER) | LVT_MASKED);
-        self.write(REG_LVT_THERMAL, self.read(REG_LVT_THERMAL) | LVT_MASKED);
-        self.write(REG_LVT_PERFORMANCE, self.read(REG_LVT_PERFORMANCE) | LVT_MASKED);
-        self.write(REG_LVT_LINT0, self.read(REG_LVT_LINT0) | LVT_MASKED);
-        self.write(REG_LVT_LINT1, self.read(REG_LVT_LINT1) | LVT_MASKED);
-        self.write(REG_LVT_ERROR, self.read(REG_LVT_ERROR) | LVT_MASKED);
-        if self.max_lvt_entry() >= 6 {
-            self.write(REG_LVT_CMCI, self.read(REG_LVT_CMCI) | LVT_MASKED);
-        }
+        if max_lvt >= 1 { self.write(REG_LVT_THERMAL, self.read(REG_LVT_THERMAL) | LVT_MASKED); }
+        if max_lvt >= 2 { self.write(REG_LVT_PERFORMANCE, self.read(REG_LVT_PERFORMANCE) | LVT_MASKED); }
+        if max_lvt >= 3 { self.write(REG_LVT_LINT0, self.read(REG_LVT_LINT0) | LVT_MASKED); }
+        if max_lvt >= 4 { self.write(REG_LVT_LINT1, self.read(REG_LVT_LINT1) | LVT_MASKED); }
+        if max_lvt >= 5 { self.write(REG_LVT_ERROR, self.read(REG_LVT_ERROR) | LVT_MASKED); }
+        if max_lvt >= 6 { self.write(REG_LVT_CMCI, self.read(REG_LVT_CMCI) | LVT_MASKED); }
     }
 
     pub fn is_software_enabled(&self) -> bool {
