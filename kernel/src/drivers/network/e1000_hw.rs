@@ -28,7 +28,12 @@ const STATUS_SPEED_SHIFT: u32 = 6;
 ///
 /// Implementations must perform volatile 32-bit accesses, enforce bounds, and
 /// provide the architecture-required device-memory ordering.
-pub trait E1000Registers {
+///
+/// # Safety
+/// Implementors must ensure accesses target a live E1000 MMIO window, never
+/// access outside the mapped region, and provide barriers that correctly order
+/// CPU access to coherent DMA memory with device ownership transitions.
+pub unsafe trait E1000Registers {
     type Error;
 
     fn read32(&mut self, offset: u32) -> Result<u32, Self::Error>;
@@ -641,7 +646,7 @@ mod tests {
         fail_register: Option<u32>,
     }
 
-    impl E1000Registers for MockRegisters {
+    unsafe impl E1000Registers for MockRegisters {
         type Error = ();
 
         fn read32(&mut self, offset: u32) -> Result<u32, Self::Error> {
