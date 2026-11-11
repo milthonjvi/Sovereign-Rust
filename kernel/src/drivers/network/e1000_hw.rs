@@ -879,6 +879,7 @@ mod tests {
         assert!(regs.writes.contains(&(REG_RDT, 31)));
         assert!(regs.writes.contains(&(REG_TDT, 0)));
         assert!(regs.writes.contains(&(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)));
+        assert!(!regs.writes.contains(&(REG_RCTL, 0)));
         assert!(regs.writes.iter().any(|(reg, value)| *reg == REG_TCTL && value & TCTL_EN != 0));
     }
 
