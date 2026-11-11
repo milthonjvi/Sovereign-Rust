@@ -107,6 +107,28 @@ impl EnumerationSession{
   if result.is_err(){if let Some(address)=self.address.take(){let _=pool.release(address);}self.stage=EnumerationStage::Failed;}
   result
  }
+ /// Executes one enumeration operation through the supplied host controller.
+ /// The caller must provide a DMA-safe transfer buffer according to the controller's
+ /// contract and call again after the required address-settle interval.
+ pub fn step<C:super::controller::HostController>(
+  &mut self,controller:&mut C,pool:&mut DeviceAddressPool,
+  elapsed_ms:u16,buffer:&mut[u8],
+ )->Result<EnumerationStage,UsbError>{
+  if self.stage==EnumerationStage::AddressSettle{
+   self.elapse_ms(elapsed_ms)?;return Ok(self.stage)
+  }
+  let Some(setup)=self.request() else{return Ok(self.stage)};
+  let target=if self.stage==EnumerationStage::SetAddress{
+   DeviceAddress::DEFAULT
+  }else{self.address.unwrap_or(DeviceAddress::DEFAULT)};
+  let report=match super::control::execute_control(controller,target,setup,buffer){
+   Ok(report)=>report,
+   Err(UsbError::BufferTooShort)=>return Err(UsbError::BufferTooShort),
+   Err(error)=>{let _=self.release_address(pool);return Err(error);}
+  };
+  self.complete(&buffer[..report.bytes_transferred],pool)?;
+  Ok(self.stage)
+ }
  /// Advances the mandatory USB address-settle delay after SET_ADDRESS.
  /// The USB specification requires at least 2 ms before the next request.
  pub fn elapse_ms(&mut self,elapsed_ms:u16)->Result<(),UsbError>{
