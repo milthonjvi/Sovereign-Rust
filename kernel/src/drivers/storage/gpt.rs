@@ -240,26 +240,6 @@ fn decode_gpt_entry(
     Ok(())
 }
 
-fn read_entry_bytes<D: super::block::BlockDevice>(
-    device: &mut D, geo: BlockGeometry, table_lba: u64, offset: u64,
-    dst: &mut [u8], scratch: &mut [u8],
-) -> Result<(), GptError> {
-    use super::block::{BlockRange, validate_buffer};
-    let mut copied = 0usize;
-    while copied < dst.len() {
-        let pos = offset.checked_add(copied as u64).ok_or(GptError::AddressOverflow)?;
-        let block = pos / geo.block_size as u64;
-        let within = (pos % geo.block_size as u64) as usize;
-        let n = core::cmp::min(scratch.len() - within, dst.len() - copied);
-        let range = BlockRange::new(table_lba.checked_add(block).ok_or(GptError::AddressOverflow)?, 1);
-        validate_buffer(geo, range, scratch.len()).map_err(|_| GptError::TableOutOfBounds)?;
-        device.read_blocks(range, scratch).map_err(|_| GptError::DeviceReadFailed)?;
-        dst[copied..copied+n].copy_from_slice(&scratch[within..within+n]);
-        copied += n;
-    }
-    Ok(())
-}
-
 fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
     for byte in data {
         crc ^= *byte as u32;
