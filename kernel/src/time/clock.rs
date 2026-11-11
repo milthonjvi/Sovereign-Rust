@@ -44,7 +44,9 @@ impl<S: ClockSource> MonotonicClock<S> {
     pub fn new(source: S, initial_time_ns: u64) -> Option<Self> {
         let frequency_hz = source.frequency_hz();
         let mask = source.mask();
-        // Counter masks must describe contiguous low-order bits so modular
+        // Modular subtraction is valid only for contiguous low-order masks.
+        let contiguous_mask = mask == u64::MAX || (mask != 0 && (mask & mask.wrapping_add(1)) == 0);
+        if frequency_hz == 0 || !contiguous_mask { return None; }
         let base_ticks = source.read_ticks() & mask;
         Some(Self { source, base_ticks, base_ns: initial_time_ns,
             last_ns: AtomicU64::new(initial_time_ns), frequency_hz, mask })
