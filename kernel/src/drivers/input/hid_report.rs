@@ -18,6 +18,7 @@ pub enum HidReportError {
     CollectionOverflow,
     TooManyFields,
     TooManyValues,
+    TooManyUsages,
     ArithmeticOverflow,
     MissingReport,
     ReportIdMismatch,
@@ -181,10 +182,11 @@ impl HidReportMap {
                     match tag {
                         0 => {
                             if local.first_usage.is_none() { local.first_usage = Some(usage); }
-                            if (local.usage_count as usize) < local.usages.len() {
-                                local.usages[local.usage_count as usize] = usage;
-                                local.usage_count += 1;
+                            if local.usage_count as usize == local.usages.len() {
+                                return Err(HidReportError::TooManyUsages);
                             }
+                            local.usages[local.usage_count as usize] = usage;
+                            local.usage_count += 1;
                         },
                         1 => local.usage_min = Some(usage),
                         2 => local.usage_max = Some(usage),
@@ -195,7 +197,11 @@ impl HidReportMap {
                     match tag {
                         8 => {
                             if global.report_size == 0 || global.report_size > 32
-                                || global.report_count == 0 || global.report_count > 128 {
+                                || global.report_count == 0 || global.report_count > 128
+                                || global.logical_max < global.logical_min {
+                                return Err(HidReportError::InvalidField);
+                            }
+                            if local.usage_min.zip(local.usage_max).is_some_and(|(min, max)| max < min) {
                                 return Err(HidReportError::InvalidField);
                             }
                             let count = global.report_count as usize;
