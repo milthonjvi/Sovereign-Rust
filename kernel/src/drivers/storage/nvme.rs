@@ -29,7 +29,7 @@ impl NvmeCapabilities {
     }
 }
 
-#[repr(C)]
+#[repr(C, align(64))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct NvmeCommand {
     pub opcode:u8, pub flags:u8, pub command_id:u16, pub namespace_id:u32,
@@ -38,7 +38,7 @@ pub struct NvmeCommand {
 }
 const _: [();64] = [(); core::mem::size_of::<NvmeCommand>()];
 
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct NvmeCompletion {
     pub result:u32, pub reserved:u32, pub submission_queue_head:u16,
