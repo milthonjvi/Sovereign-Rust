@@ -20,6 +20,11 @@ pub mod ethernet;
 pub use device::{LinkState, NetworkDevice, NetworkInterfaceInfo};
 pub use dma::{DmaBuffer, DmaBufferError, DMA_BUFFER_ALIGNMENT, E1000_RX_BUFFER_MIN_SIZE};
 pub use e1000_device::{E1000Device, E1000DeviceError, E1000_MAX_FRAME_SIZE};
+pub use e1000_hw::{
+    reset as reset_e1000, E1000InitError, E1000InitInfo, E1000QueueConfig,
+    E1000Registers, E1000ResetError,
+};
+pub use e1000_pci::{E1000Model, E1000PciDevice, E1000PciError};
 pub use e1000_irq::{E1000Interrupt, E1000InterruptError, E1000_DEFAULT_INTERRUPT_MASK};
 pub use e1000_mmio::{E1000MmioError, VolatileE1000Registers, E1000_MMIO_MIN_LENGTH};
 pub use ethernet::{EthernetFrame, EthernetFrameError, MacAddress};
