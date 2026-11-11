@@ -218,6 +218,21 @@ mod tests {
     }
 
     #[test]
+    fn refuses_to_read_past_conventional_configuration_space() {
+        let mut registers = [0u32; 1024];
+        registers[0xfc / 4] = 0x0081_0005;
+        let io = MockConfig { registers };
+        assert_eq!(
+            MsiCapability::read(&io, address(), Capability { id: MSI_CAPABILITY_ID, offset: 0xfc }),
+            Err(ConfigError::OutOfRange)
+        );
+        assert_eq!(
+            MsixCapability::read(&io, address(), Capability { id: MSIX_CAPABILITY_ID, offset: 0xfc }),
+            Err(ConfigError::OutOfRange)
+        );
+    }
+
+    #[test]
     fn rejects_wrong_capability_and_invalid_bar_index() {
         let io = MockConfig { registers: [0; 1024] };
         assert_eq!(
