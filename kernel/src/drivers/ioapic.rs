@@ -314,6 +314,8 @@ impl IoApicController {
         let previous_low = self.read_register(low_reg);
         self.write_register(low_reg, previous_low | REDIRECTION_MASK);
         if self.read_register(low_reg) & REDIRECTION_MASK == 0 {
+            // Retry the safety-critical mask once before abandoning the route.
+            self.write_register(low_reg, previous_low | REDIRECTION_MASK);
             return Err(IoApicError::HardwareRejectedWrite);
         }
 
@@ -335,6 +337,7 @@ impl IoApicController {
             // Best-effort fail-safe: leave the source masked and never publish
             // it in the configured-route bitmap.
             self.write_register(low_reg, actual_low | REDIRECTION_MASK);
+            let _ = self.read_register(low_reg);
             return Err(IoApicError::HardwareRejectedWrite);
         }
 
@@ -358,9 +361,8 @@ impl IoApicController {
         if (actual & REDIRECTION_MASK != 0) != masked {
             // If an unmask operation failed, make a best-effort attempt to
             // restore the safe state before reporting the hardware fault.
-            if !masked {
-                self.write_register(low_reg, actual | REDIRECTION_MASK);
-            }
+            self.write_register(low_reg, actual | REDIRECTION_MASK);
+            let _ = self.read_register(low_reg);
             return Err(IoApicError::HardwareRejectedWrite);
         }
         Ok(())
@@ -391,6 +393,8 @@ impl IoApicController {
             let low = self.read_register(register);
             self.write_register(register, low | REDIRECTION_MASK);
             if self.read_register(register) & REDIRECTION_MASK == 0 {
+                self.write_register(register, low | REDIRECTION_MASK);
+                let _ = self.read_register(register);
                 return Err(IoApicError::HardwareRejectedWrite);
             }
         }
