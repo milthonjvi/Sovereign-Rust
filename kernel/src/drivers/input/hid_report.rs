@@ -824,6 +824,9 @@ impl HidReportDecoder {
         &mut self, event: InputEvent, producer: &mut SpscProducer<'_, InputEvent, N>,
         stats: &mut HidPublishStats,
     ) {
+        // Once an edge is lost, do not publish later edges from this report
+        // ahead of the DeviceStateReset emitted before the next snapshot.
+        if self.resync_required { return; }
         if producer.push(event).is_ok() {
             stats.published = stats.published.saturating_add(1);
         } else {
