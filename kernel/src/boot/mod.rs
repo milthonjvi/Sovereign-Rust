@@ -8,3 +8,4 @@
 //! owns the kernel-side representation and validation boundary.
 
 pub mod limine;
+pub mod sovereign;
