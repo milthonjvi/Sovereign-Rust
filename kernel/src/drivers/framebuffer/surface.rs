@@ -51,6 +51,10 @@ impl<'a> FramebufferSurface<'a> {
     /// The four bytes beginning at offset must be inside the mapped framebuffer.
     #[inline]
     pub(crate) unsafe fn write_pixel_unchecked(&mut self, offset: usize, color: Color) {
+        // This backend exposes RGB/BGR, not an alpha framebuffer format.
+        // Keep the fourth byte reserved and deterministic regardless of the
+        // source image's compositing alpha.
+        let color = Color::new(color.red, color.green, color.blue);
         let bytes = color.memory_bytes(self.info.pixel_format);
         // SAFETY: guaranteed by the caller. Use one native 32-bit store when
         // the framebuffer address is aligned; retain byte stores for unusual
