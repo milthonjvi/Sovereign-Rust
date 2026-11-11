@@ -9,6 +9,7 @@ use super::*;
         writes: Vec<(u32, u32)>,
         fail_register: Option<u32>,
         write_barriers: usize,
+        read_barriers: usize,
     }
 
     unsafe impl E1000Registers for MockRegisters {
@@ -37,6 +38,7 @@ use super::*;
         }
 
         fn dma_read_barrier(&mut self) {
+            self.read_barriers += 1;
             core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
         }
     }
