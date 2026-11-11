@@ -160,7 +160,9 @@ impl LocalApicTimer {
             ApicTimerMode::TscDeadline => LVT_MODE_TSC_DEADLINE,
         };
         let mut lvt = vector as u32 | mode_bits;
-        if masked { lvt |= LVT_MASKED; }
+        // Deadline mode must remain masked until IA32_TSC_DEADLINE is
+        // programmed by the architecture/MSR layer.
+        if masked || mode == ApicTimerMode::TscDeadline { lvt |= LVT_MASKED; }
 
         // Quiesce the previous configuration before changing divider/count.
         // Keep the new mode masked until every register is programmed.
