@@ -35,13 +35,15 @@ bounded ELF64 x86_64 `ET_EXEC` images. Its loader currently performs:
    256 KiB kernel stack, boot-info page, and 1 MiB memory-map buffer. Kernel
    segments are mapped at their linked higher-half virtual addresses with
    ELF-derived permissions.
-7. Population and validation of SovereignBootInfo v1, including the physical
+7. Discovery and checksum validation of the UEFI ACPI 2.0/1.0 RSDP, followed
+   by read-only identity mapping of its complete structure when present.
+8. Population and validation of SovereignBootInfo v1, including the physical
    memory-map address, actual descriptor byte size and stride, descriptor
-   version, kernel physical/virtual range, and entry point.
-8. A final GetMemoryMap refresh and bounded ExitBootServices retry sequence.
+   version, optional ACPI RSDP, kernel physical/virtual range, and entry point.
+9. A final GetMemoryMap refresh and bounded ExitBootServices retry sequence.
    The preallocated boot-info page is refreshed between each map capture and
    exit attempt without allocating or calling another firmware service.
-9. Installation of a minimal emergency IDT, dedicated stack switch, CR0.WP
+10. Installation of a minimal emergency IDT, dedicated stack switch, CR0.WP
    activation, CR3 switch, global-TLB invalidation when PGE is active, and
    transfer to the kernel entry point. No firmware service is called after
    ExitBootServices succeeds.
