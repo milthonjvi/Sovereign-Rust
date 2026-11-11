@@ -225,7 +225,7 @@ impl TscDeadline {
     pub unsafe fn new() -> Result<Self, DriverError> {
         let features = crate::arch::x86_64::cpuid::cpuid(1, 0).ecx;
         if features & (1 << 24) == 0 {
-            return Err(DriverError::Unsupported);
+            return Err(DriverError::UnsupportedDevice);
         }
         Ok(Self { configured: true })
     }
