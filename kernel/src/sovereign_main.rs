@@ -6,7 +6,7 @@
 use core::panic::PanicInfo;
 use sovereign_kernel::arch::x86_64::control::{disable_interrupts, halt};
 use sovereign_kernel::arch::x86_64::init::initialize_baseline;
-use sovereign_kernel::boot::sovereign::{SovereignBootInfo, SovereignBootError};
+use sovereign_kernel::boot::sovereign::SovereignBootInfo;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
