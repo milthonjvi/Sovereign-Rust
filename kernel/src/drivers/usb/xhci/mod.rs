@@ -134,7 +134,7 @@ mod ring_tests{
    core::ptr::write_volatile(&mut ring.entries[0],Trb{parameter:7,status:0,control:1});
    core::ptr::write_volatile(&mut ring.entries[1],Trb{parameter:8,status:0,control:1});
   }
-  assert_eq!(ring.pop().unwrap().parameter,7);assert_eq!(ring.pop().unwrap().parameter,8);
+  assert_eq!(ring.pop().unwrap().parameter,7);assert_eq!(ring.dequeue_physical(),0x6010);assert_eq!(ring.pop().unwrap().parameter,8);
   assert_eq!(ring.pop(),None);assert_eq!(ring.dequeue_index(),0);assert!(!ring.consumer_cycle());
  }
 }
@@ -296,6 +296,13 @@ impl XhciController{
   io.write32(interrupter+0x14,event_ring_physical as u32)?;
   io.write32(interrupter,1<<1)?;
   self.event_ring_configured=true;Ok(())
+ }
+ pub fn dequeue_event<I:RegisterIo,const N:usize>(&self,io:&mut I,ring:&mut XhciEventRing<'_,N>)->Result<Option<Trb>,XhciError>{
+  if self.state!=ControllerState::Running{return Err(XhciError::NotReady)}
+  match ring.pop(){
+   Some(event)=>{self.update_event_ring_dequeue(io,ring.dequeue_physical())?;Ok(Some(event))},
+   None=>Ok(None),
+  }
  }
  pub fn update_event_ring_dequeue<I:RegisterIo>(&self,io:&mut I,dequeue_physical:u64)->Result<(),XhciError>{
   if self.state!=ControllerState::Running||dequeue_physical&0x0f!=0{return Err(XhciError::InvalidState)}
