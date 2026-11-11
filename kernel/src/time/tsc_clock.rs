@@ -90,7 +90,7 @@ impl TscClockSource {
         elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
         let tsc_after_end = Self::read_tsc();
         let tsc_end = midpoint(tsc_before_end, tsc_after_end);
-        if elapsed_hpet as u128 < target_ticks {
+        if (elapsed_hpet as u128) < target_ticks {
             return None;
         }
         let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
