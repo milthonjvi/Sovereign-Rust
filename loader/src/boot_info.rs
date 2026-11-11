@@ -71,13 +71,31 @@ impl SovereignBootInfo {
         self.magic == BOOT_INFO_MAGIC
             && self.version == BOOT_INFO_VERSION
             && self.structure_size as usize == core::mem::size_of::<Self>()
+            && self.flags & !(BOOT_INFO_FLAG_FRAMEBUFFER_VALID | BOOT_INFO_FLAG_ACPI_VALID) == 0
             && self.memory_map_format == MEMORY_MAP_FORMAT_UEFI
             && self.memory_descriptor_size >= 40
+            && self.memory_descriptor_version != 0
+            && self.memory_map_size != 0
             && self.memory_map_size % self.memory_descriptor_size == 0
             && self.memory_map_physical != 0
+            && self.memory_map_physical.checked_add(self.memory_map_size).is_some()
             && self.kernel_physical_base != 0
+            && self.kernel_virtual_base != 0
             && self.kernel_image_size != 0
-            && self.kernel_entry != 0
+            && self.kernel_physical_base.checked_add(self.kernel_image_size).is_some()
+            && self.kernel_virtual_base.checked_add(self.kernel_image_size).is_some()
+            && self.kernel_entry >= self.kernel_virtual_base
+            && self.kernel_entry < self.kernel_virtual_base + self.kernel_image_size
+            && (self.flags & BOOT_INFO_FLAG_ACPI_VALID != 0 || self.acpi_rsdp_physical == 0)
+            && (self.flags & BOOT_INFO_FLAG_FRAMEBUFFER_VALID != 0
+                || (self.framebuffer_physical == 0 && self.framebuffer_size == 0
+                    && self.framebuffer_width == 0 && self.framebuffer_height == 0
+                    && self.framebuffer_pixels_per_scanline == 0 && self.framebuffer_pixel_format == 0))
+            && (self.flags & BOOT_INFO_FLAG_ACPI_VALID == 0 || self.acpi_rsdp_physical != 0)
+            && (self.flags & BOOT_INFO_FLAG_FRAMEBUFFER_VALID == 0
+                || (self.framebuffer_physical != 0 && self.framebuffer_size != 0
+                    && self.framebuffer_width != 0 && self.framebuffer_height != 0
+                    && self.framebuffer_pixels_per_scanline >= self.framebuffer_width))
             && self.reserved[0] == 0
             && self.reserved[1] == 0
             && self.reserved[2] == 0
