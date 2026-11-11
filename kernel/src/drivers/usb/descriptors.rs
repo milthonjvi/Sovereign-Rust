@@ -1,5 +1,5 @@
 //! Allocation-free USB descriptor parsing.
-use super::UsbError;
+use super::{UsbError,transfer::{TransferType,UsbSpeed}};
 pub const DEVICE_DESCRIPTOR: u8 = 1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeviceDescriptor {
@@ -102,6 +102,50 @@ impl ParsedEndpoint{
   Ok(Self{address:b[2],attributes:b[3],max_packet_size:packet,interval:b[6],
    transactions_per_microframe:mult+1,max_burst:0,companion_attributes:0,
    bytes_per_interval:0,has_ss_companion:false})
+ }
+ /// Applies USB-version-specific packet-size, multiplier and interval rules.
+ /// Call after the device speed is known; descriptor parsing alone is speed-neutral.
+ pub fn validate_for_speed(&self,speed:UsbSpeed)->Result<(),UsbError>{
+  let transfer=self.attributes&3;
+  let packet=self.max_packet_size;
+  let valid=match speed{
+   UsbSpeed::Low=>{
+    transfer==3&&packet<=8&&self.interval>=10&&self.transactions_per_microframe==1
+   }
+   UsbSpeed::Full=>{
+    let size_ok=match transfer{
+     2=>matches!(packet,8|16|32|64),
+     1=>packet<=1023,
+     3=>packet<=64,
+     _=>false,
+    };
+    size_ok&&self.transactions_per_microframe==1
+     &&(transfer!=1||self.interval!=0)
+   }
+   UsbSpeed::High=>{
+    let size_ok=match transfer{
+     2=>packet==512,
+     1|3=>packet<=1024,
+     _=>false,
+    };
+    size_ok&&self.interval>=1&&self.interval<=16
+     &&self.transactions_per_microframe<=3
+   }
+   UsbSpeed::Super|UsbSpeed::SuperPlus=>{
+    let size_ok=match transfer{
+     2=>packet<=1024,
+     1|3=>packet<=1024,
+     _=>false,
+    };
+    size_ok&&self.interval>=1&&self.interval<=16
+     &&self.transactions_per_microframe==1&&self.has_ss_companion
+   }
+  };
+  if !valid{return Err(UsbError::MalformedDescriptor)}
+  if matches!(speed,UsbSpeed::Low|UsbSpeed::Full|UsbSpeed::High)&&self.has_ss_companion{
+   return Err(UsbError::MalformedDescriptor)
+  }
+  Ok(())
  }
  fn apply_companion(&mut self,b:&[u8])->Result<(),UsbError>{
   if b.len()!=6||b[0]!=6||b[1]!=SS_ENDPOINT_COMPANION_DESCRIPTOR||self.has_ss_companion||b[2]>15{
@@ -299,6 +343,31 @@ mod superspeed_companion_validation_tests{
  }
  #[test]fn rejects_reserved_isochronous_endpoint_attribute_bits(){
   assert_eq!(ParsedEndpoint::parse(&[7,5,0x81,0x41,0,2,1]),Err(UsbError::MalformedDescriptor));
+ }
+}
+
+#[cfg(test)]
+mod endpoint_speed_validation_tests{
+ use super::*;
+ fn endpoint(attributes:u8,packet:u16,interval:u8)->ParsedEndpoint{
+  ParsedEndpoint::parse(&[7,5,0x81,attributes,packet as u8,(packet>>8)as u8,interval]).unwrap()
+ }
+ #[test]fn validates_low_speed_interrupt_constraints(){
+  assert_eq!(endpoint(3,8,10).validate_for_speed(UsbSpeed::Low),Ok(()));
+  assert_eq!(endpoint(3,9,10).validate_for_speed(UsbSpeed::Low),Err(UsbError::MalformedDescriptor));
+  assert_eq!(endpoint(2,8,10).validate_for_speed(UsbSpeed::Low),Err(UsbError::MalformedDescriptor));
+  assert_eq!(endpoint(3,8,9).validate_for_speed(UsbSpeed::Low),Err(UsbError::MalformedDescriptor));
+ }
+ #[test]fn validates_full_and_high_speed_bulk_packet_sizes(){
+  assert_eq!(endpoint(2,64,0).validate_for_speed(UsbSpeed::Full),Ok(()));
+  assert_eq!(endpoint(2,512,0).validate_for_speed(UsbSpeed::Full),Err(UsbError::MalformedDescriptor));
+  assert_eq!(endpoint(2,512,0).validate_for_speed(UsbSpeed::High),Ok(()));
+  assert_eq!(endpoint(2,64,0).validate_for_speed(UsbSpeed::High),Err(UsbError::MalformedDescriptor));
+ }
+ #[test]fn high_speed_periodic_endpoint_requires_valid_interval(){
+  assert_eq!(endpoint(3,1024,1).validate_for_speed(UsbSpeed::High),Ok(()));
+  assert_eq!(endpoint(3,1024,0).validate_for_speed(UsbSpeed::High),Err(UsbError::MalformedDescriptor));
+  assert_eq!(endpoint(3,1024,17).validate_for_speed(UsbSpeed::High),Err(UsbError::MalformedDescriptor));
  }
 }
 
