@@ -15,5 +15,5 @@ pub use config::{read_bars, scan_bus, Bar, BarKind, ConfigAccess, ConfigError, E
 pub use ecam::{parse_mcfg, physical_address, EcamAccess, McfgError};
 pub use enumeration::{scan_hierarchy, EnumerationReport};
 pub use mechanism::Mechanism1;
-pub use msi::{configure_msi, MsiCapability, MsiConfigError, MsixCapability, MSI_CAPABILITY_ID, MSIX_CAPABILITY_ID};
+pub use msi::{configure_msi, disable_msix, MsiCapability, MsiConfigError, MsixCapability, MSI_CAPABILITY_ID, MSIX_CAPABILITY_ID};
 pub use resources::{BarResource, ResourceError};
