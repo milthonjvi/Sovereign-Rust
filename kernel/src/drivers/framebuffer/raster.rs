@@ -820,6 +820,30 @@ mod tests {
     }
 
     #[test]
+    fn antialiased_line_clips_extreme_coordinates_and_vertical_segments() {
+        use super::stroke_line_aa;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        target.clear(Color::BLACK);
+        stroke_line_aa(
+            &mut target,
+            (i64::MIN, i64::MIN),
+            (i64::MAX, i64::MAX),
+            Color::WHITE,
+        ).unwrap();
+        stroke_line_aa(&mut target, (4, -10), (4, 20), Color::RED).unwrap();
+        drop(target);
+
+        for coordinate in 0..8 {
+            let diagonal = (coordinate * 8 + coordinate) * 4;
+            assert_eq!(memory[diagonal], 255);
+            let vertical = (coordinate * 8 + 4) * 4;
+            assert_eq!(memory[vertical], 255);
+            assert_eq!(memory[vertical + 3], 0);
+        }
+    }
+
+    #[test]
     fn strokes_open_polyline_without_closing_last_segment() {
         use super::stroke_polyline;
         let mut memory = [0u8; 8 * 8 * 4];
