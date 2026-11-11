@@ -1,4 +1,9 @@
-//! Block-device drivers.
+//! Block-device subsystem.
 //!
-//! Planned progression: virtio-blk/AHCI or NVMe after PCI, DMA, and interrupt
-//! infrastructure. Partition parsing and filesystems belong in separate layers.
+//! Transport-independent block I/O contracts live here. AHCI, NVMe, and
+//! VirtIO Block transports remain separate and require PCI, DMA, MMIO, and
+//! interrupt services before hardware access is enabled.
+
+pub mod block;
+
+pub use block::{BlockDevice, BlockError, BlockGeometry, BlockRange, validate_buffer};
