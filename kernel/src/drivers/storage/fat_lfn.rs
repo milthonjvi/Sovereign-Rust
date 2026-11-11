@@ -24,8 +24,7 @@ impl FatLongName {
         self.active = false;
     }
     pub fn push_record(&mut self, raw: &[u8]) -> Result<(), LfnError> {
-        if raw.len() < 32 || raw[11] != 0x0F || raw[12] != 0 || raw[13] == 0
-            || raw[26] != 0 || raw[27] != 0 {
+        if raw.len() < 32 || raw[11] != 0x0F || raw[12] != 0 || raw[26] != 0 || raw[27] != 0 {
             self.reset();
             return Err(LfnError::InvalidSequence);
         }
