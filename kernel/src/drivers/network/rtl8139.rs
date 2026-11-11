@@ -84,7 +84,16 @@ impl<'a> Rtl8139RxRing<'a> {
     pub const fn ring_size(&self) -> usize { self.ring_size }
     pub const fn cursor(&self) -> usize { self.cursor }
 
+    /// Value to write to CAPR after committing the current cursor.
+    /// RTL8139 expects the consumer cursor minus 16 bytes.
+    pub const fn capr_value(&self) -> u16 {
+        self.cursor.wrapping_sub(16) as u16
+    }
+
     /// Inspect the next complete packet. CBR is the device's current write cursor.
+    ///
+    /// The caller must read CBR and execute the platform DMA read barrier before
+    /// calling this method, so the device-written header and payload are visible.
     pub fn peek(&self, current_buffer_address: u16)
         -> Result<Option<Rtl8139RxPacket>, Rtl8139Error>
     {
@@ -202,6 +211,7 @@ mod tests {
         assert_eq!(rx.cursor(), 0);
         rx.commit(packet).unwrap();
         assert_eq!(rx.cursor(), 68);
+        assert_eq!(rx.capr_value(), 52);
     }
 
     #[test]
