@@ -132,6 +132,7 @@ pub fn enumerate_logical_partitions<D: super::block::BlockDevice>(
     let limit = extended.end_lba_exclusive()?;
     if limit > geometry.block_count { return Err(MbrError::InvalidPartitionRange); }
 
+    output.fill(None);
     let mut current = base;
     let mut visited_count = 0usize;
     let mut output_count = 0usize;
