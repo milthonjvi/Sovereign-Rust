@@ -170,18 +170,33 @@ impl<'a> ImageView<'a> {
                 / destination_height as u128) as usize;
             let source_row = source_y * self.stride;
 
-            for target_x in visible_left..visible_right {
-                let relative_x = (target_x as i128 - destination_x as i128) as u128;
-                let source_x = ((relative_x * self.width as u128)
-                    / destination_width as u128) as usize;
+            // Seed the exact nearest-neighbor mapping at the first visible
+            // destination pixel, then advance it with quotient/remainder steps.
+            // This removes a 128-bit division from every pixel in the hot loop.
+            let relative_x = (visible_left as i128 - destination_x as i128) as u128;
+            let numerator = relative_x * self.width as u128;
+            let destination_width_u128 = destination_width as u128;
+            let mut source_x = (numerator / destination_width_u128) as usize;
+            let mut x_remainder = numerator % destination_width_u128;
+            let source_step = (self.width as u128 / destination_width_u128) as usize;
+            let source_step_remainder = self.width as u128 % destination_width_u128;
+            let row_offset = target_y.checked_mul(target_info.pitch)
+                .and_then(|row| visible_left.checked_mul(4).and_then(|column| row.checked_add(column)))
+                .ok_or(FramebufferError::SizeOverflow)?;
+            for column in 0..(visible_right - visible_left) {
                 let color = self.pixels[source_row + source_x];
-                let offset = target_y.checked_mul(target_info.pitch)
-                    .and_then(|row| target_x.checked_mul(4).and_then(|column| row.checked_add(column)))
-                    .ok_or(FramebufferError::SizeOverflow)?;
+                let offset = row_offset + column * 4;
                 // SAFETY: destination coordinates were clipped to the validated
-                // target dimensions, and FramebufferInfo::validate checked pitch
-                // and total mapping-size arithmetic at surface construction.
+                // target dimensions, and the complete mapped extent was checked
+                // when FramebufferSurface was constructed.
                 unsafe { target.write_pixel_unchecked(offset, color); }
+
+                source_x += source_step;
+                x_remainder += source_step_remainder;
+                if x_remainder >= destination_width_u128 {
+                    x_remainder -= destination_width_u128;
+                    source_x += 1;
+                }
             }
         }
 
