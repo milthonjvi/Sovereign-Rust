@@ -366,6 +366,94 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
     /// must each have at least frames.len() entries. No frame bytes are copied
     /// unless the complete batch has free TX slots. Queue access must be
     /// externally serialized, as for transmit().
+    /// Build and publish a TX batch directly in its DMA buffers.
+    ///
+    /// The builder is called only after the complete batch has available ring
+    /// slots. If any builder rejects a frame, no descriptor in the batch is
+    /// published. The callback must be bounded and must not re-enter this device.
+    pub fn transmit_batch_with<F>(
+        &mut self,
+        count: usize,
+        slots: &mut [u16],
+        submissions: &mut [(u64, usize)],
+        mut fill: F,
+    ) -> Result<usize, DriverError>
+    where
+        F: FnMut(usize, &mut [u8]) -> Result<usize, DriverError>,
+    {
+        if !self.ready {
+            return Err(DriverError::NotReady);
+        }
+        if count == 0 {
+            return Ok(0);
+        }
+        if count > self.tx_descriptors.len() - 1 {
+            return Err(DriverError::ResourceUnavailable);
+        }
+        if count > slots.len() || count > submissions.len() {
+            return Err(DriverError::InvalidConfiguration);
+        }
+
+        let available = match self.tx_queue.reclaim_and_available_slots(
+            self.registers,
+            self.tx_descriptors,
+            &mut slots[..count],
+        ) {
+            Ok(available) => available,
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                    self.faulted = true;
+                }
+                return Err(map_queue_error(error));
+            }
+        };
+        if available != count {
+            return Err(DriverError::ResourceUnavailable);
+        }
+
+        for slot in slots[..count].iter().copied() {
+            let index = slot as usize;
+            if index >= self.tx_buffers.len() {
+                self.ready = false;
+                self.faulted = true;
+                return Err(DriverError::HardwareFault);
+            }
+            if self.tx_buffers[index].len() < E1000_MAX_FRAME_SIZE {
+                return Err(DriverError::InvalidConfiguration);
+            }
+        }
+
+        for index in 0..count {
+            let slot = slots[index] as usize;
+            let buffer = &mut self.tx_buffers[slot];
+            let length = fill(index, buffer.as_mut_slice())?;
+            if length == 0 || length > E1000_MAX_FRAME_SIZE || length > buffer.len() {
+                return Err(DriverError::InvalidConfiguration);
+            }
+            submissions[index] = (buffer.dma_address(), length);
+        }
+
+        match self.tx_queue.submit_batch(
+            self.registers,
+            self.tx_descriptors,
+            &submissions[..count],
+        ) {
+            Ok(submitted) => Ok(submitted),
+            Err(error) => {
+                if queue_error_is_fatal(&error) {
+                    self.ready = false;
+                    self.faulted = true;
+                }
+                Err(map_queue_error(error))
+            }
+        }
+    }
+
+    /// Copy and publish several frames as one hardware batch.
+    ///
+    /// The slots and submissions arguments are caller-owned scratch arrays.
+    /// The complete batch is preflighted before any frame is copied into DMA.
     pub fn transmit_batch(
         &mut self,
         frames: &[&[u8]],
@@ -381,63 +469,22 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         if frames.len() > self.tx_descriptors.len() - 1 {
             return Err(DriverError::ResourceUnavailable);
         }
-        if frames.len() > slots.len() || frames.len() > submissions.len()
-            || frames.iter().any(|frame| {
-                frame.is_empty() || frame.len() > E1000_MAX_FRAME_SIZE
-            })
-        {
+        if frames.iter().any(|frame| {
+            frame.is_empty() || frame.len() > E1000_MAX_FRAME_SIZE
+        }) {
             return Err(DriverError::InvalidConfiguration);
         }
-        let available = match self.tx_queue.reclaim_and_available_slots(
-            self.registers,
-            self.tx_descriptors,
-            &mut slots[..frames.len()],
-        ) {
-            Ok(available) => available,
-            Err(error) => {
-                if queue_error_is_fatal(&error) {
-                    self.ready = false;
-                    self.faulted = true;
-                }
-                return Err(map_queue_error(error));
-            }
-        };
-        if available != frames.len() {
-            return Err(DriverError::ResourceUnavailable);
-        }
 
-        // Preflight every selected buffer before staging any packet. A short
-        // later slot must not leave a partially copied batch behind.
-        for (frame_index, frame) in frames.iter().enumerate() {
-            let slot = slots[frame_index] as usize;
-            if slot >= self.tx_buffers.len()
-                || frame.len() > self.tx_buffers[slot].len()
-            {
-                return Err(DriverError::InvalidConfiguration);
-            }
-        }
-
-        for (frame_index, frame) in frames.iter().enumerate() {
-            let slot = slots[frame_index] as usize;
-            let buffer = &mut self.tx_buffers[slot];
-            buffer.as_mut_slice()[..frame.len()].copy_from_slice(frame);
-            submissions[frame_index] = (buffer.dma_address(), frame.len());
-        }
-
-        match self.tx_queue.submit_batch(
-            self.registers,
-            self.tx_descriptors,
-            &submissions[..frames.len()],
-        ) {
-            Ok(count) => Ok(count),
-            Err(error) => {
-                if queue_error_is_fatal(&error) {
-                    self.ready = false;
-                    self.faulted = true;
-                }
-                Err(map_queue_error(error))
-            }
-        }
+        self.transmit_batch_with(
+            frames.len(),
+            slots,
+            submissions,
+            |index, buffer| {
+                let frame = frames[index];
+                buffer[..frame.len()].copy_from_slice(frame);
+                Ok(frame.len())
+            },
+        )
     }
 
     /// Receive several completed Ethernet frames with one descriptor scan
