@@ -111,7 +111,7 @@ pub unsafe fn write_cr0(value: u64) {
 /// page-table hierarchy; PCID/no-flush bits must obey the active CR4.PCIDE state.
 pub unsafe fn write_cr3(value: u64) {
     // SAFETY: Caller guarantees ring 0 and a valid CR3 value.
-    unsafe { core::arch::asm!("mov cr3, {}", in(reg) value, options(nomem, nostack, preserves_flags)); }
+    unsafe { core::arch::asm!("mov cr3, {}", in(reg) value, options(nostack, preserves_flags)); }
 }
 
 #[inline]
