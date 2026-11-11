@@ -27,10 +27,13 @@ to privileged CPU operations and transitions that require it.
   for x86_64 `ET_EXEC` images, including file length, program-header bounds,
   `PT_LOAD` file/memory ranges, alignment, canonical virtual ranges, and executable entry point.
 
-The loader validates segments but does not yet allocate pages, copy segment data,
-zero BSS, acquire the final memory map, call ExitBootServices, or transfer control
-to the kernel. The kernel still consumes its existing Limine handoff during this
-transition; Limine has not been removed.
+The loader now allocates a bounded contiguous physical span for the ELF image,
+copies each validated `PT_LOAD` payload, zeroes BSS and inter-segment gaps, and
+constructs a separate four-level page-table root with per-segment permissions
+and NX protection. It does not yet map its own runtime/stack and handoff buffers,
+switch CR3, acquire the final memory map, call ExitBootServices, or transfer
+control to the kernel. The kernel still consumes its existing Limine handoff;
+Limine has not been removed.
 
 ## Build
 
