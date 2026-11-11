@@ -254,6 +254,39 @@ mod tests {
     }
 
     #[test]
+    fn fills_concave_polygon_with_even_odd_rule() {
+        use super::{fill_polygon, ScanlineIntersection};
+
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        let vertices = [(1, 1), (6, 1), (6, 3), (3, 3), (3, 6), (1, 6)];
+        let mut scratch = [ScanlineIntersection::default(); 6];
+        fill_polygon(&mut target, &vertices, Color::RED, &mut scratch).unwrap();
+        drop(target);
+
+        let pixel = |x: usize, y: usize| memory[(y * 8 + x) * 4] == 255;
+        assert!(pixel(5, 2));
+        assert!(pixel(2, 5));
+        assert!(!pixel(5, 5));
+    }
+
+    #[test]
+    fn polygon_requires_sufficient_scratch_before_writing() {
+        use super::{fill_polygon, ScanlineIntersection};
+
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        let vertices = [(1, 1), (6, 1), (3, 6)];
+        let mut scratch = [ScanlineIntersection::default(); 2];
+        assert_eq!(
+            fill_polygon(&mut target, &vertices, Color::RED, &mut scratch),
+            Err(crate::drivers::framebuffer::info::FramebufferError::BufferTooSmall),
+        );
+        drop(target);
+        assert!(memory.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn fills_triangle_as_horizontal_spans() {
         let mut memory = [0u8; 8 * 8 * 4];
         let mut target = surface(&mut memory);
