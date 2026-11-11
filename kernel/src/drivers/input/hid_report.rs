@@ -103,6 +103,14 @@ struct Collection {
 }
 impl Collection { const EMPTY: Self = Self { id: 0, page: 0, usage: 0, kind: 0 }; }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TouchSample {
+    x: u16, y: u16, pressure: u16, contact: u16, tip: bool, seen: bool,
+}
+impl TouchSample {
+    const EMPTY: Self = Self { x: 0, y: 0, pressure: 0, contact: 0, tip: false, seen: false };
+}
+
 /// Fixed-storage descriptor model. Each field represents one HID Main Input
 /// item; its report_count values occupy consecutive bits and state slots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -389,7 +397,7 @@ pub struct HidReportDecoder {
     device: InputDeviceId,
     previous: [i32; MAX_HID_VALUES],
     initialized: [bool; MAX_HID_VALUES],
-    contact_active: bool,
+    contact_active: [bool; MAX_HID_COLLECTIONS],
     pointer_buttons_state: u32,
     resync_required: bool,
     pub dropped_events: u64,
@@ -398,7 +406,7 @@ impl HidReportDecoder {
     pub const fn new(device: InputDeviceId) -> Self {
         Self {
             device, previous: [0; MAX_HID_VALUES], initialized: [false; MAX_HID_VALUES],
-            contact_active: false, pointer_buttons_state: 0,
+            contact_active: [false; MAX_HID_COLLECTIONS], pointer_buttons_state: 0,
             resync_required: false, dropped_events: 0,
         }
     }
@@ -424,7 +432,7 @@ impl HidReportDecoder {
     pub fn reset(&mut self) {
         self.previous = [0; MAX_HID_VALUES];
         self.initialized = [false; MAX_HID_VALUES];
-        self.contact_active = false;
+        self.contact_active = [false; MAX_HID_COLLECTIONS];
         self.pointer_buttons_state = 0;
         self.resync_required = false;
     }
@@ -461,7 +469,7 @@ impl HidReportDecoder {
             stats.published = stats.published.saturating_add(1);
             self.previous = [0; MAX_HID_VALUES];
             self.initialized = [false; MAX_HID_VALUES];
-            self.contact_active = false;
+            self.contact_active = [false; MAX_HID_COLLECTIONS];
             self.pointer_buttons_state = 0;
             self.resync_required = false;
         }
@@ -710,12 +718,7 @@ impl HidReportDecoder {
         // Digitizer collections use Generic Desktop X/Y plus Digitizer-page
         // usages for tip, pressure, range and contact identity. Decode them
         // separately from relative mouse axes.
-        let mut touch_x = 0u16;
-        let mut touch_y = 0u16;
-        let mut touch_pressure = 0u16;
-        let mut touch_contact = 0u16;
-        let mut touch_tip = false;
-        let mut touch_seen = false;
+        let mut touches = [TouchSample::EMPTY; MAX_HID_COLLECTIONS];
         let mut pen_x = 0u16;
         let mut pen_y = 0u16;
         let mut pen_pressure = 0u16;
@@ -736,13 +739,16 @@ impl HidReportDecoder {
                 let raw = extract_bits(payload, bit, field.report_size).ok_or(HidReportError::ReportTooShort)?;
                 let value = decode_signed(raw, field.report_size, field.logical_min);
                 if is_touch {
-                    touch_seen = true;
+                    let collection = field.collection_id as usize;
+                    if collection == 0 || collection > MAX_HID_COLLECTIONS { continue; }
+                    let sample = &mut touches[collection - 1];
+                    sample.seen = true;
                     match (field.usage_page, usage) {
-                        (0x01, 0x30) => touch_x = normalize_absolute(value, field.logical_min, field.logical_max),
-                        (0x01, 0x31) => touch_y = normalize_absolute(value, field.logical_min, field.logical_max),
-                        (0x0D, 0x30) => touch_pressure = normalize_absolute(value, field.logical_min, field.logical_max),
-                        (0x0D, 0x42) => touch_tip = value != 0,
-                        (0x0D, 0x51) => touch_contact = value.max(0) as u16,
+                        (0x01, 0x30) => sample.x = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x01, 0x31) => sample.y = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x0D, 0x30) => sample.pressure = normalize_absolute(value, field.logical_min, field.logical_max),
+                        (0x0D, 0x42) => sample.tip = value != 0,
+                        (0x0D, 0x51) => sample.contact = value.max(0) as u16,
                         _ => {}
                     }
                 } else {
@@ -761,21 +767,24 @@ impl HidReportDecoder {
                 }
             }
         }
-        if touch_seen {
-            let phase = if touch_tip && !self.contact_active {
+        for index in 0..MAX_HID_COLLECTIONS {
+            let sample = touches[index];
+            if !sample.seen { continue; }
+            let was_active = self.contact_active[index];
+            let phase = if sample.tip && !was_active {
                 Some(super::event::ContactPhase::Down)
-            } else if touch_tip {
+            } else if sample.tip {
                 Some(super::event::ContactPhase::Move)
-            } else if self.contact_active {
+            } else if was_active {
                 Some(super::event::ContactPhase::Up)
             } else { None };
             if let Some(phase) = phase {
                 self.emit(InputEvent::TouchContact {
-                    device: self.device, contact: touch_contact, phase,
-                    x: touch_x, y: touch_y, pressure: touch_pressure,
+                    device: self.device, contact: sample.contact, phase,
+                    x: sample.x, y: sample.y, pressure: sample.pressure,
                 }, producer, &mut stats);
             }
-            self.contact_active = touch_tip;
+            self.contact_active[index] = sample.tip;
         }
         if pen_seen {
             self.emit(InputEvent::Tablet {
