@@ -1,9 +1,8 @@
 //! Fixed-capacity software layer compositor.
 //!
-//! Layers are borrowed image views in slot order (low slot to high slot).
-//! Higher slot indices are drawn later and therefore appear above lower slots.
-//! Reusing a vacant slot preserves slot-based ordering; it does not implicitly
-//! raise that layer above layers already occupying higher slots.
+//! Layers are borrowed image views ordered by an independent back-to-front
+//! table. Stable generation-checked handles identify slots, not draw positions.
+//! Reusing a vacant slot appends the new layer to the front of the draw order.
 //! Rendering is damage-driven: each dirty region is restored to the compositor
 //! background and every intersecting visible layer is composited over it.
 //! No heap allocation or implicit framebuffer ownership is required.
