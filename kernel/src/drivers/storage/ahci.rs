@@ -270,11 +270,14 @@ pub fn configure_port<R:AhciRegisterIo>(
 }
 
 pub fn start_port<R:AhciRegisterIo>(io:&mut R,base:u32,polls:u32)->Result<(),AhciError>{
-    const CMD:u32=0x18; const ST:u32=1; const FRE:u32=1<<4; const FR:u32=1<<14; const CR:u32=1<<15;
+    start_port_with_spinup(io,base,false,polls)
+}
+pub fn start_port_with_spinup<R:AhciRegisterIo>(io:&mut R,base:u32,staggered_spinup:bool,polls:u32)->Result<(),AhciError>{
+    const CMD:u32=0x18; const ST:u32=1; const SUD:u32=1<<1; const FRE:u32=1<<4; const FR:u32=1<<14; const CR:u32=1<<15;
     let reg=port_register(base,CMD)?;
     wait_register(io,reg,CR|FR,true,polls)?;
     let command=io.read32(reg)?;
-    io.write32(reg,command|FRE)?;
+    io.write32(reg,command|FRE|if staggered_spinup{SUD}else{0})?;
     wait_register(io,reg,FR,false,polls)?;
     let command=io.read32(reg)?;
     io.write32(reg,command|ST)?;
