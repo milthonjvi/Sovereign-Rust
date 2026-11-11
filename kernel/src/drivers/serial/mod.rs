@@ -228,6 +228,7 @@ impl Uart16550 {
 
     pub fn shutdown(&mut self) -> Result<(), UartError> {
         self.ensure_initialized()?;
+        self.flush()?;
         // SAFETY: This instance owns the UART.
         unsafe { io::out8(self.port(IER), 0); io::out8(self.port(MCR), 0); }
         self.initialized = false;
