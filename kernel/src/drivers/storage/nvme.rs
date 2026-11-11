@@ -211,7 +211,8 @@ pub trait NvmeRegisterIo {
     fn write64(&mut self, offset:u32, value:u64)->Result<(),NvmeError>;
 }
 
-/// Queue slices must be DMA-mapped, physically contiguous, and backed by the supplied bases.\npub struct NvmeAdminQueueMemory<'a> {
+/// Queue slices must be DMA-mapped, physically contiguous, and backed by the supplied bases.
+pub struct NvmeAdminQueueMemory<'a> {
     pub submission_phys:u64,
     pub completion_phys:u64,
     pub submission:&'a mut [NvmeCommand],
