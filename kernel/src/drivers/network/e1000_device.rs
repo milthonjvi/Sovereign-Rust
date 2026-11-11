@@ -750,6 +750,13 @@ mod tests {
         assert_eq!(device.tx_buffers[1].as_slice()[..96], second);
         assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_TDT).count(), 1);
         assert!(device.registers.writes.contains(&(REG_TDT, 2)));
+
+        device.registers.fail_register = Some(REG_TDT);
+        assert_eq!(device.transmit(&[0x33; 64]), Err(DriverError::HardwareFault));
+        assert_eq!(device.tx_descriptors[2].status, TXD_STATUS_DD);
+        assert!(!device.ready);
+        assert!(device.faulted);
+        assert_eq!(device.shutdown(), Ok(()));
     }
 
     #[test]
