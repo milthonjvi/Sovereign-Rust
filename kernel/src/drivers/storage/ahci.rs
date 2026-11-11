@@ -179,3 +179,36 @@ mod tests{
         assert_eq!(build_prdt(0x1_0000_0000,512,&mut entries,false),Err(AhciError::UnsupportedAddressing));
     }
 }
+
+
+/// Fixed-capacity AHCI command-slot allocator. N must not exceed the
+/// controller's 32 command slots; slot indices can also be used as NCQ tags.
+pub struct AhciCommandSlots<const N:usize>{used:[bool;N],in_flight:usize}
+impl<const N:usize> AhciCommandSlots<N>{
+    pub const fn new()->Self{Self{used:[false;N],in_flight:0}}
+    pub const fn in_flight(&self)->usize{self.in_flight}
+    pub fn allocate(&mut self)->Result<u8,AhciError>{
+        if N==0 || N>32{return Err(AhciError::InvalidCapabilities);}
+        if let Some(index)=self.used.iter().position(|used|!*used){
+            self.used[index]=true;self.in_flight+=1;Ok(index as u8)
+        }else{Err(AhciError::PrdtCapacity)}
+    }
+    pub fn release(&mut self,slot:u8)->bool{
+        let index=slot as usize;
+        if index<N && self.used[index]{self.used[index]=false;self.in_flight-=1;true}else{false}
+    }
+    pub fn is_used(&self,slot:u8)->bool{self.used.get(slot as usize).copied().unwrap_or(false)}
+}
+impl<const N:usize> Default for AhciCommandSlots<N>{fn default()->Self{Self::new()}}
+
+#[cfg(test)]
+mod slot_tests{
+    use super::*;
+    #[test]fn allocates_and_releases_slots_without_duplicates(){
+        let mut slots=AhciCommandSlots::<2>::new();
+        let a=slots.allocate().unwrap();let b=slots.allocate().unwrap();
+        assert_ne!(a,b);assert_eq!(slots.allocate(),Err(AhciError::PrdtCapacity));
+        assert!(slots.release(a));assert!(!slots.release(a));
+        assert_eq!(slots.in_flight(),1);assert!(slots.is_used(b));
+    }
+}
