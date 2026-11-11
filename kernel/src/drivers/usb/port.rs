@@ -62,7 +62,12 @@ impl UsbPortMachine{
     None
    }
    PortPhase::Debouncing=>{
-    if observation.connection_changed{return Some(PortAction::ClearConnectionChange)}
+    // A connection-change notification invalidates the entire debounce
+    // window: the port may have disconnected and reconnected between polls.
+    if observation.connection_changed{
+     self.stable_ms=0;
+     return Some(PortAction::ClearConnectionChange)
+    }
     if !observation.connected{self.stable_ms=0;return None}
     self.stable_ms=self.stable_ms.saturating_add(elapsed_ms);
     if self.stable_ms>=USB_CONNECT_DEBOUNCE_MS{
@@ -135,6 +140,18 @@ mod tests{
   p.advance(9,reset_done);assert_eq!(p.phase,PortPhase::ResetRecovery);
   assert_eq!(p.advance(1,reset_done),Some(PortAction::BeginEnumeration));
   p.enumeration_complete(true).unwrap();assert_eq!(p.phase,PortPhase::Active);
+ }
+ #[test]fn connection_change_restarts_full_debounce_window(){
+  let mut p=UsbPortMachine::new(1,0);p.start().unwrap();p.advance(0,EMPTY);
+  let connected=PortObservation{connected:true,..EMPTY};
+  p.advance(60,connected);
+  let changed=PortObservation{connected:true,connection_changed:true,..EMPTY};
+  assert_eq!(p.advance(1,changed),Some(PortAction::ClearConnectionChange));
+  assert_eq!(p.phase,PortPhase::Debouncing);
+  assert_eq!(p.advance(99,connected),None);
+  assert_eq!(p.phase,PortPhase::Debouncing);
+  assert_eq!(p.advance(1,connected),Some(PortAction::Reset));
+  assert_eq!(p.phase,PortPhase::Resetting);
  }
  #[test]fn disconnect_during_reset_aborts_enumeration(){
   let mut p=UsbPortMachine::new(1,0);p.start().unwrap();p.advance(0,EMPTY);
