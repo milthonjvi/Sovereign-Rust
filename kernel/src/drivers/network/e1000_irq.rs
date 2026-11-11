@@ -159,6 +159,19 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_keeps_registered_handle_when_device_is_still_enabled() {
+        let mut interrupt = E1000Interrupt {
+            vector: 0xb5,
+            mask: E1000_DEFAULT_INTERRUPT_MASK,
+            enabled: true,
+            registered: true,
+        };
+        assert_eq!(unsafe { interrupt.uninstall() }, Err(E1000InterruptError::StillEnabled));
+        assert!(interrupt.is_registered());
+        assert!(interrupt.is_enabled());
+    }
+
+    #[test]
     fn interrupt_mask_rejects_unknown_causes() {
         assert_eq!(E1000_DEFAULT_INTERRUPT_MASK,
             E1000_ICR_TXDW | E1000_ICR_LSC | E1000_ICR_RXO | E1000_ICR_RXT0);
