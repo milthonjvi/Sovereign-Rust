@@ -30,6 +30,7 @@ pub enum IoApicError {
     InvalidTriggerMode,
     InvalidFlags,
     HardwareRejectedWrite,
+    InvalidIsaIrq,
 }
 
 /// Decoded ACPI interrupt electrical configuration.
@@ -158,7 +159,7 @@ impl IoApicController {
     ) -> Result<Self, IoApicError> {
         // SAFETY: Forwarded from this constructor's caller.
         let mut controller = unsafe { Self::new(base, descriptor)? };
-        controller.mask_all();
+        controller.mask_all()?;
         Ok(controller)
     }
 
@@ -302,6 +303,15 @@ impl IoApicController {
         let mut low = self.read_register(low_reg);
         if masked { low |= REDIRECTION_MASK; } else { low &= !REDIRECTION_MASK; }
         self.write_register(low_reg, low);
+        let actual = self.read_register(low_reg);
+        if (actual & REDIRECTION_MASK != 0) != masked {
+            // If an unmask operation failed, make a best-effort attempt to
+            // restore the safe state before reporting the hardware fault.
+            if !masked {
+                self.write_register(low_reg, actual | REDIRECTION_MASK);
+            }
+            return Err(IoApicError::HardwareRejectedWrite);
+        }
         Ok(())
     }
 
@@ -315,13 +325,17 @@ impl IoApicController {
         route_bitmap_insert(&mut self.configured_entries, index);
     }
 
-    /// Mask every redirection entry before handing the controller to routing code.
-    pub fn mask_all(&mut self) {
+    /// Mask every redirection entry and verify the hardware accepted each mask.
+    pub fn mask_all(&mut self) -> Result<(), IoApicError> {
         for index in 0..self.redirection_count {
             let register = REG_REDIRECTION_BASE + (index * 2) as u8;
             let low = self.read_register(register);
             self.write_register(register, low | REDIRECTION_MASK);
+            if self.read_register(register) & REDIRECTION_MASK == 0 {
+                return Err(IoApicError::HardwareRejectedWrite);
+            }
         }
+        Ok(())
     }
 }
 
@@ -331,6 +345,9 @@ pub fn resolve_isa_irq(
     irq: u8,
     overrides: &[InterruptSourceOverride],
 ) -> Result<(u32, InterruptMode), IoApicError> {
+    if irq >= 16 {
+        return Err(IoApicError::InvalidIsaIrq);
+    }
     let mut matched = None;
     for entry in overrides {
         if entry.bus == 0 && entry.source == irq {
@@ -418,6 +435,12 @@ mod tests {
         assert_eq!(InterruptMode::from_acpi_flags(0b0101).unwrap(),
             InterruptMode { active_low: false, level_triggered: false });
         assert_eq!(InterruptMode::from_acpi_flags(0x10), Err(IoApicError::InvalidFlags));
+    }
+
+    #[test]
+    fn rejects_irq_numbers_outside_the_isa_legacy_range() {
+        assert_eq!(resolve_isa_irq(16, &[]), Err(IoApicError::InvalidIsaIrq));
+        assert_eq!(resolve_isa_irq(u8::MAX, &[]), Err(IoApicError::InvalidIsaIrq));
     }
 
     #[test]
