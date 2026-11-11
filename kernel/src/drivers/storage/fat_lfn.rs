@@ -139,8 +139,10 @@ pub fn consume_lfn_record_for_kind(state: &mut FatLongName, raw: &[u8], kind: su
     let entry = match FatDirEntry::parse_for_kind(raw, kind)? { Some(entry) => entry, None => { state.reset(); return Ok(None); } };
     match state.finish(&entry.short_name) {
         Ok(Some((name, len))) => Ok(Some((name, len, entry))),
-        Ok(None) => Ok(None),
-        Err(_) => { state.reset(); Ok(None) }
+        Ok(None) | Err(_) => {
+            state.reset();
+            Ok(Some(([0u16; 260], 0, entry)))
+        }
     }
 }
 
