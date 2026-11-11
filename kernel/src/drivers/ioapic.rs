@@ -6,6 +6,7 @@
 use core::ptr::{NonNull, read_volatile, write_volatile};
 
 use crate::drivers::acpi::madt::{InterruptSourceOverride, IoApic};
+use crate::drivers::ioapic_topology::IoApicGsiRange;
 
 const IOREGSEL: usize = 0x00;
 const IOWIN: usize = 0x10;
@@ -142,6 +143,15 @@ impl IoApicController {
     pub const fn id(&self) -> u8 { self.id }
     pub const fn gsi_base(&self) -> u32 { self.gsi_base }
     pub const fn redirection_count(&self) -> u32 { self.redirection_count }
+
+    /// Export the hardware-discovered interval for multi-controller routing.
+    pub const fn gsi_range(&self) -> IoApicGsiRange {
+        IoApicGsiRange {
+            apic_id: self.id,
+            gsi_base: self.gsi_base,
+            redirection_count: self.redirection_count,
+        }
+    }
 
     fn redirection_index(&self, gsi: u32) -> Result<u32, IoApicError> {
         let index = gsi.checked_sub(self.gsi_base).ok_or(IoApicError::GsiOutOfRange)?;
