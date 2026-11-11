@@ -12,6 +12,7 @@ use super::{
 };
 
 pub const DEFAULT_MEMORY_MAP_PAGES: usize = 128;
+pub const EFI_MEMORY_DESCRIPTOR_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CapturedMemoryMap {
@@ -78,7 +79,7 @@ impl EfiMemoryMapBuffer {
         }
         if descriptor_size < mem::size_of::<EfiMemoryDescriptor>()
             || descriptor_size == 0 || size > capacity || size % descriptor_size != 0
-            || descriptor_version == 0
+            || descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
         {
             return Err(EFI_COMPROMISED_DATA);
         }
