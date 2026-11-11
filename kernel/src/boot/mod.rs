@@ -6,3 +6,5 @@
 //!
 //! Keep boot protocol parsing in the top-level boot integration; this module
 //! owns the kernel-side representation and validation boundary.
+
+pub mod limine;
