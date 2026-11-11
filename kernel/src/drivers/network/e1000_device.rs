@@ -173,8 +173,8 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         }
         let next = E1000MulticastFilter::from_addresses(addresses)
             .map_err(|_| DriverError::InvalidConfiguration)?;
-        let current_registers = self.multicast_filter.registers();
-        let next_registers = next.registers();
+        let current_registers = *self.multicast_filter.registers();
+        let next_registers = *next.registers();
         let mut changed = false;
         for index in 0..next_registers.len() {
             if current_registers[index] == next_registers[index] {
