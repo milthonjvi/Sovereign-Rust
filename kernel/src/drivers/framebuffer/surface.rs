@@ -55,6 +55,86 @@ impl<'a> FramebufferSurface<'a> {
         self.fill_rect(0, 0, self.info.width, self.info.height, color);
     }
 
+    /// Draw a line, clipping its major axis to the visible framebuffer.
+    ///
+    /// The major-axis iteration is bounded by the display dimensions, even when
+    /// callers provide endpoints far outside the screen.
+    pub fn draw_line(
+        &mut self,
+        x0: i64,
+        y0: i64,
+        x1: i64,
+        y1: i64,
+        color: Color,
+    ) {
+        let dx = (x1 as i128 - x0 as i128).abs();
+        let dy = (y1 as i128 - y0 as i128).abs();
+        if dx == 0 && dy == 0 {
+            if x0 >= 0 && y0 >= 0 {
+                let _ = self.put_pixel(x0 as usize, y0 as usize, color);
+            }
+            return;
+        }
+
+        if dx >= dy {
+            let (start, end) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+            let visible_start = start.max(0);
+            let visible_end = end.min(self.info.width.saturating_sub(1) as i64);
+            if visible_start > visible_end { return; }
+            let direction = if x1 >= x0 { 1i128 } else { -1i128 };
+            let y_direction = if y1 >= y0 { 1i128 } else { -1i128 };
+            for x in visible_start..=visible_end {
+                let distance = (x as i128 - x0 as i128).abs();
+                let offset = (distance * dy + dx / 2) / dx;
+                let y = y0 as i128 + y_direction * offset;
+                if y >= 0 && y < self.info.height as i128 {
+                    let _ = self.put_pixel(x as usize, y as usize, color);
+                }
+            }
+            let _ = direction;
+        } else {
+            let (start, end) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+            let visible_start = start.max(0);
+            let visible_end = end.min(self.info.height.saturating_sub(1) as i64);
+            if visible_start > visible_end { return; }
+            let x_direction = if x1 >= x0 { 1i128 } else { -1i128 };
+            let y_direction = if y1 >= y0 { 1i128 } else { -1i128 };
+            for y in visible_start..=visible_end {
+                let distance = (y as i128 - y0 as i128).abs();
+                let offset = (distance * dx + dy / 2) / dy;
+                let x = x0 as i128 + x_direction * offset;
+                if x >= 0 && x < self.info.width as i128 {
+                    let _ = self.put_pixel(x as usize, y as usize, color);
+                }
+            }
+            let _ = y_direction;
+        }
+    }
+
+    /// Draw the four edges of a rectangle, clipped to the display.
+    pub fn stroke_rect(
+        &mut self,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        color: Color,
+    ) {
+        if width == 0 || height == 0 { return; }
+        let right = x.saturating_add(width - 1);
+        let bottom = y.saturating_add(height - 1);
+        self.draw_line(x as i64, y as i64, right as i64, y as i64, color);
+        if height > 1 {
+            self.draw_line(x as i64, bottom as i64, right as i64, bottom as i64, color);
+        }
+        if height > 2 {
+            self.draw_line(x as i64, y.saturating_add(1) as i64, x as i64, bottom.saturating_sub(1) as i64, color);
+            if width > 1 {
+                self.draw_line(right as i64, y.saturating_add(1) as i64, right as i64, bottom.saturating_sub(1) as i64, color);
+            }
+        }
+    }
+
     /// Draw a rectangle clipped to the visible display area.
     pub fn fill_rect(&mut self, x: usize, y: usize, width: usize, height: usize, color: Color) {
         let end_x = x.saturating_add(width).min(self.info.width);
