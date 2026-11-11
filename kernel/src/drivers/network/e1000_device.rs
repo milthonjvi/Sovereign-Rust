@@ -469,10 +469,12 @@ mod tests {
         let mut tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
         let mut rx_storage = [[0u8; 2048]; 8];
         let mut tx_storage = [[0u8; 2048]; 8];
-        let mut rx_buffers: [_; 8] = core::array::from_fn(|i|
-            DmaBuffer::new(0x10000 + i as u64 * 2048, &mut rx_storage[i]).unwrap());
-        let mut tx_buffers: [_; 8] = core::array::from_fn(|i|
-            DmaBuffer::new(0x20000 + i as u64 * 2048, &mut tx_storage[i]).unwrap());
+        let mut rx_buffers: [DmaBuffer<'_>; 8] = rx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| DmaBuffer::new(0x10000 + i as u64 * 2048, bytes).unwrap())
+            .collect::<Vec<_>>().try_into().ok().unwrap();
+        let mut tx_buffers: [DmaBuffer<'_>; 8] = tx_storage.iter_mut().enumerate()
+            .map(|(i, bytes)| DmaBuffer::new(0x20000 + i as u64 * 2048, bytes).unwrap())
+            .collect::<Vec<_>>().try_into().ok().unwrap();
         for (descriptor, buffer) in rx_descriptors.iter_mut().zip(rx_buffers.iter()) {
             descriptor.buffer_address = buffer.dma_address();
         }
@@ -499,7 +501,7 @@ mod tests {
     fn batch_receive_copies_frames_and_recycles_with_one_tail_write() {
         let mut registers = MockRegisters::default();
         let mut rx_descriptors = [RxDescriptor::for_buffer(0x10000); 8];
-        let tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut tx_descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
         let mut rx_storage = [[0u8; 2048]; 8];
         let mut tx_storage = [[0u8; 2048]; 8];
         rx_storage[0][..64].fill(0x31);
