@@ -11,7 +11,7 @@ use super::{
     EfiHandle, EfiStatus, EFI_BUFFER_TOO_SMALL, EFI_COMPROMISED_DATA, EFI_INVALID_PARAMETER, EFI_SUCCESS, EFI_UNSUPPORTED,
 };
 
-pub const DEFAULT_MEMORY_MAP_PAGES: usize = 128;
+pub const DEFAULT_MEMORY_MAP_PAGES: usize = 256;
 pub const EFI_MEMORY_DESCRIPTOR_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug)]
