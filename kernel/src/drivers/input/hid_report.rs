@@ -144,6 +144,12 @@ impl HidReportMap {
         let mut current_collection = Collection::EMPTY;
         let mut application = Collection::EMPTY;
         let mut offset = 0usize;
+        // HID report streams must use either implicit report ID zero or
+        // explicit non-zero IDs. Mixing both layouts makes report framing
+        // ambiguous because the decoder cannot know whether byte zero is
+        // payload or a report-ID prefix.
+        let mut uses_unnumbered_reports = false;
+        let mut uses_numbered_reports = false;
 
         while offset < descriptor.len() {
             let prefix = descriptor[offset];
@@ -222,6 +228,17 @@ impl HidReportMap {
                 0 => { // Main items
                     match tag {
                         8 => {
+                            if global.report_id == 0 {
+                                if uses_numbered_reports {
+                                    return Err(HidReportError::MalformedDescriptor);
+                                }
+                                uses_unnumbered_reports = true;
+                            } else {
+                                if uses_unnumbered_reports {
+                                    return Err(HidReportError::MalformedDescriptor);
+                                }
+                                uses_numbered_reports = true;
+                            }
                             if global.report_size == 0 || global.report_size > 32
                                 || global.report_count == 0 || global.report_count > 128
                                 || global.logical_max < global.logical_min {
@@ -842,6 +859,20 @@ mod tests {
         assert_eq!(field.application_usage, 0x06);
         assert_eq!(field.collection_type, 1);
         assert_ne!(field.collection_id, 0);
+    }
+
+    #[test]
+    fn rejects_mixed_implicit_and_explicit_report_ids() {
+        // The first Input item uses implicit report ID zero. The second
+        // switches to report ID 1, which would make the wire framing ambiguous.
+        const MIXED: &[u8] = &[
+            0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+            0x85, 0x01, 0x81, 0x02,
+        ];
+        assert_eq!(
+            HidReportMap::parse(MIXED),
+            Err(HidReportError::MalformedDescriptor),
+        );
     }
 
     #[test]
