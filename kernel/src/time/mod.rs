@@ -8,6 +8,7 @@ pub mod deadline;
 pub mod timer_queue;
 pub mod periodic;
 pub mod hpet_clock;
+pub mod tsc_clock;
 pub mod service;
 
 pub use clock::{ns_to_ticks_ceil, ticks_to_ns, ClockSource, MonotonicClock};
@@ -15,4 +16,5 @@ pub use deadline::{earlier, Deadline};
 pub use timer_queue::{TimerEvent, TimerId, TimerQueue, TimerQueueError};
 pub use periodic::{PeriodicExpiration, PeriodicMode, PeriodicTimer};
 pub use hpet_clock::{hpet_frequency_hz, HpetClockSource};
+pub use tsc_clock::TscClockSource;
 pub use service::{TimerService, TimerServiceError};
