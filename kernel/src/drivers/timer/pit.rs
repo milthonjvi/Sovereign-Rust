@@ -10,10 +10,11 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 static PIT_IRQ_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PIT_TICKS: AtomicU64 = AtomicU64::new(0);
 static PIT_FREQUENCY_HZ: AtomicU32 = AtomicU32::new(0);
+static PIT_WORK_PENDING: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn pit_irq_handler(_vector: u8) {
     PIT_TICKS.fetch_add(1, Ordering::Relaxed);
-    crate::time::interrupt::signal_timer_work_pending();
+    PIT_WORK_PENDING.store(true, Ordering::Release);
 }
 
 /// Errors while connecting PIT channel 0 to the legacy PIC IRQ0 path.
@@ -129,6 +130,7 @@ impl Pit {
         }
 
         PIT_TICKS.store(0, Ordering::Relaxed);
+        PIT_WORK_PENDING.store(false, Ordering::Release);
         PIT_FREQUENCY_HZ.store(config.actual_hz, Ordering::Release);
         if let Err(error) = unsafe { self.configure(requested_hz) } {
             let _ = unsafe {
@@ -205,6 +207,18 @@ pub fn periodic_ticks() -> u64 {
 #[inline]
 pub fn periodic_frequency_hz() -> u32 {
     PIT_FREQUENCY_HZ.load(Ordering::Acquire)
+}
+
+/// Atomically consume the PIT-specific deferred-work signal.
+#[inline]
+pub fn take_periodic_work_pending() -> bool {
+    PIT_WORK_PENDING.swap(false, Ordering::AcqRel)
+}
+
+/// Reassert PIT deferred work when a consumer cannot drain its event buffer.
+#[inline]
+pub(crate) fn signal_periodic_work_pending() {
+    PIT_WORK_PENDING.store(true, Ordering::Release);
 }
 
 impl Default for Pit {
