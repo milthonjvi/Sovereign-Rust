@@ -33,6 +33,39 @@ impl Rect {
     pub const fn bottom(self) -> usize {
         self.y.saturating_add(self.height)
     }
+    /// Return the half-open intersection with another rectangle.
+    /// Empty intersections are represented by Rect::EMPTY.
+    pub fn intersection(self, other: Self) -> Self {
+        let left = self.x.max(other.x);
+        let top = self.y.max(other.y);
+        let right = self.right().min(other.right());
+        let bottom = self.bottom().min(other.bottom());
+        if left >= right || top >= bottom { return Self::EMPTY; }
+        Self { x: left, y: top, width: right - left, height: bottom - top }
+    }
+
+    /// Whether two non-empty half-open rectangles share at least one pixel.
+    pub fn intersects(self, other: Self) -> bool {
+        !self.intersection(other).is_empty()
+    }
+
+    /// Return the smallest rectangle containing both inputs.
+    /// Empty inputs are treated as identity elements.
+    pub fn bounding_union(self, other: Self) -> Self {
+        if self.is_empty() { return other; }
+        if other.is_empty() { return self; }
+        self.union(other)
+    }
+
+    /// Clip this rectangle to a target extent beginning at the origin.
+    pub fn clip_to(self, width: usize, height: usize) -> Self {
+        self.clipped(width, height)
+    }
+
+    /// Pixel area, saturating if the mathematical area exceeds usize.
+    pub const fn area(self) -> usize {
+        self.width.saturating_mul(self.height)
+    }
 
     fn touches_or_overlaps(self, other: Self) -> bool {
         self.x <= other.right()
@@ -179,6 +212,23 @@ impl<const CAPACITY: usize> DirtyRegionSet<CAPACITY> {
 mod tests {
     use super::{DirtyRegionSet, Rect};
 
+    #[test]
+    fn rectangle_intersection_uses_half_open_pixel_bounds() {
+        let a = Rect { x: 2, y: 3, width: 5, height: 4 };
+        let b = Rect { x: 5, y: 1, width: 4, height: 5 };
+        assert_eq!(a.intersection(b), Rect { x: 5, y: 3, width: 2, height: 3 });
+        assert!(a.intersects(b));
+        assert!(!a.intersects(Rect { x: 7, y: 3, width: 2, height: 2 }));
+    }
+
+    #[test]
+    fn rectangle_union_and_clip_handle_empty_and_overflowing_extents() {
+        let empty = Rect::EMPTY;
+        let rect = Rect { x: 8, y: 7, width: usize::MAX, height: 4 };
+        assert_eq!(empty.bounding_union(rect), rect);
+        assert_eq!(rect.clip_to(10, 9), Rect { x: 8, y: 7, width: 2, height: 2 });
+        assert_eq!(rect.area(), usize::MAX);
+    }
     #[test]
     fn clips_regions_to_surface() {
         let mut dirty = DirtyRegionSet::<4>::new(100, 80).unwrap();
