@@ -204,7 +204,7 @@ impl Fadt {
     ///
     /// Offset 44 accepts zero (reserved) or one (the ACPI 1.0-compatible
     /// legacy interrupt model). Preferred_PM_Profile values above 8 are
-    /// reserved by ACPI 6.5.
+    /// reserved by ACPI 6.6.
     pub fn validate_firmware_metadata(&self) -> Result<(), AcpiError> {
         if self.legacy_int_model > 1 || self.preferred_power_management_profile > 8 {
             return Err(AcpiError::MalformedTable);
@@ -375,7 +375,7 @@ impl Fadt {
 
     /// Validate reserved and currently-defined encodings in FADT Flags.
     pub fn validate_fixed_feature_flags(&self) -> Result<(), AcpiError> {
-        // ACPI 6.5 defines bits 0..23. Persistent CPU cache encoding 3 is reserved.
+        // ACPI 6.6 defines bits 0..23. Persistent CPU cache encoding 3 is reserved.
         if self.flags & 0xFF00_0000 != 0 || ((self.flags >> 22) & 0b11) == 0b11 {
             return Err(AcpiError::MalformedTable);
         }
