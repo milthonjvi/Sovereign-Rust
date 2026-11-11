@@ -232,7 +232,7 @@ pub extern "efiapi" fn efi_main(
         Ok(map) => map,
         Err(status) => return status,
     };
-    let boot_info = SovereignBootInfo {
+    let mut boot_info = SovereignBootInfo {
         magic: BOOT_INFO_MAGIC,
         version: BOOT_INFO_VERSION,
         structure_size: mem::size_of::<SovereignBootInfo>() as u32,
@@ -262,17 +262,49 @@ pub extern "efiapi" fn efi_main(
     // SAFETY: The loader reserved one writable identity-mapped page for this ABI.
     unsafe { boot_info_pointer.write(boot_info) };
 
-    // These values are retained for the upcoming ExitBootServices + CR3 stage.
-    let _kernel_page_table_root = page_tables.root_physical();
-    let _boot_info_physical = boot_info_physical;
-    let _map_key = captured_map.map_key;
-    let _loaded_kernel = loaded_kernel;
-    if !console.write_ascii("ELF segments loaded; kernel page tables and boot-info ABI prepared.\r\n")
-        || !console.write_ascii("ExitBootServices and CR3 transition remain pending.\r\n")
-    {
+    if !console.write_ascii("Kernel mappings and boot-info prepared; exiting UEFI Boot Services.\\r\\n") {
         return EFI_INVALID_PARAMETER;
     }
-    EFI_SUCCESS
+
+    let kernel_page_table_root = page_tables.root_physical();
+    let kernel_stack_size = (KERNEL_STACK_PAGES as u64) * 4096;
+    let kernel_stack_top = match kernel_stack_physical.checked_add(kernel_stack_size) {
+        Some(top) => top,
+        None => return EFI_COMPROMISED_DATA,
+    };
+
+    // Refresh the memory map and update the already-allocated boot-info page
+    // immediately before each ExitBootServices attempt. The callback performs
+    // only bounded memory writes: no firmware calls and no allocations.
+    let mut handoff_valid = true;
+    // SAFETY: The image handle and Boot Services table remain valid. The
+    // callback only mutates the preallocated boot-info page.
+    let final_map = unsafe {
+        memory_map_buffer.exit_boot_services_with(image_handle, |map| {
+            boot_info.memory_map_physical = map.physical_base;
+            boot_info.memory_map_size = map.size_bytes as u64;
+            boot_info.memory_descriptor_size = map.descriptor_size as u64;
+            boot_info.memory_descriptor_version = map.descriptor_version;
+            handoff_valid = boot_info.is_well_formed();
+            if handoff_valid {
+                // SAFETY: This page was allocated and mapped before the final map.
+                unsafe { boot_info_pointer.write(boot_info) };
+            }
+        })
+    };
+    if final_map.is_err() || !handoff_valid {
+        loader_halt();
+    }
+
+    // No firmware service may be called after ExitBootServices succeeds.
+    // The new root maps the loader transition code, dedicated kernel stack,
+    // boot-info page, memory map, and all kernel PT_LOAD segments.
+    transition_to_kernel(
+        kernel_page_table_root,
+        loaded_kernel.entry,
+        boot_info_physical,
+        kernel_stack_top,
+    );
 }
 
 #[panic_handler]
@@ -310,5 +342,50 @@ fn page_table_error_status(error: PageTableError) -> EfiStatus {
     match error {
         PageTableError::AllocationFailed => EFI_OUT_OF_RESOURCES,
         _ => EFI_COMPROMISED_DATA,
+    }
+}
+
+
+fn transition_to_kernel(
+    page_table_root: u64,
+    kernel_entry: u64,
+    boot_info_physical: u64,
+    stack_top: u64,
+) -> ! {
+    let new_stack = match (stack_top & !0xf).checked_sub(8) {
+        Some(stack) => stack,
+        None => loader_halt(),
+    };
+    // Provide the conventional dummy return slot expected at a SysV x86_64
+    // function entry. The kernel entry never returns to the loader.
+    // SAFETY: The dedicated stack is a live writable EFI_LOADER_DATA allocation.
+    unsafe { ptr::write(new_stack as usize as *mut u64, 0) };
+
+    // SAFETY: ExitBootServices has succeeded. Every instruction fetched before
+    // the jump belongs to the mapped loader image; the new stack, boot-info
+    // page, and kernel entry are mapped in the supplied root. IF is cleared
+    // before CR3 changes and no firmware services are called afterward.
+    unsafe {
+        core::arch::asm!(
+            "cli",
+            "cld",
+            "mov cr3, rax",
+            "mov rdi, rdx",
+            "mov rsp, rcx",
+            "jmp r8",
+            in("rax") page_table_root,
+            in("rdx") boot_info_physical,
+            in("rcx") new_stack,
+            in("r8") kernel_entry,
+            options(noreturn)
+        );
+    }
+}
+
+fn loader_halt() -> ! {
+    loop {
+        // SAFETY: Fatal loader transition state; remain in ring 0 without
+        // returning to firmware after a possibly partial ExitBootServices.
+        unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
     }
 }
