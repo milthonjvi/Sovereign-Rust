@@ -6,5 +6,6 @@
 pub mod dispatch;
 pub mod exceptions;
 pub mod idt;
+pub mod init;
 pub mod irq;
 pub mod pic;
