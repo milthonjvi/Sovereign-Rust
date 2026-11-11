@@ -64,17 +64,14 @@ impl Pic8259 {
             || slave_offset < 0x20
             || master_offset as u16 + 8 > 0x100
             || slave_offset as u16 + 8 > 0x100
-            || (master_offset as u16..master_offset as u16 + 8)
-                .contains(&(slave_offset as u16))
+            || (master_offset as u16) < (slave_offset as u16 + 8)
+                && (slave_offset as u16) < (master_offset as u16 + 8)
         {
             return Err(PicError::InvalidVectorOffset);
         }
 
         // SAFETY: Caller guarantees exclusive PIC ownership and disabled IF.
         unsafe {
-            let saved_master = io::in8(MASTER_DATA);
-            let saved_slave = io::in8(SLAVE_DATA);
-
             io::out8(MASTER_COMMAND, ICW1_INIT | ICW1_ICW4);
             Self::io_wait();
             io::out8(SLAVE_COMMAND, ICW1_INIT | ICW1_ICW4);
@@ -97,7 +94,6 @@ impl Pic8259 {
 
             // Start fully masked. Restore prior masks only after explicit
             // unmask calls, preventing unexpected IRQ delivery during setup.
-            let _ = (saved_master, saved_slave);
             io::out8(MASTER_DATA, 0xFF);
             io::out8(SLAVE_DATA, 0xFF);
         }
