@@ -14,6 +14,12 @@ const PCI_SUBCLASS_PCI_TO_PCI: u8 = 0x04;
 const PCI_BRIDGE_BUS_NUMBERS: u16 = 0x18;
 const BUS_COUNT: usize = 256;
 
+#[derive(Clone, Copy, Default)]
+struct QueuedBus {
+    number: u8,
+    subordinate_limit: u8,
+}
+
 /// Result of a hierarchy scan. `devices_found` includes devices that could not
 /// fit in the caller's output slice; `written` is the number actually stored.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -37,17 +43,18 @@ pub fn scan_hierarchy<A: ConfigAccess>(
     root_bus: u8,
     out: &mut [PciFunction],
 ) -> Result<EnumerationReport, ConfigError> {
-    let mut queue = [0u8; BUS_COUNT];
+    let mut queue = [QueuedBus::default(); BUS_COUNT];
     let mut queue_head = 0usize;
     let mut queue_tail = 0usize;
     let mut visited = [0u64; 4];
     let mut report = EnumerationReport::default();
 
-    enqueue_bus(root_bus, &mut queue, &mut queue_tail, &mut visited);
+    enqueue_bus(root_bus, u8::MAX, &mut queue, &mut queue_tail, &mut visited);
 
     while queue_head < queue_tail {
-        let bus = queue[queue_head];
+        let queued = queue[queue_head];
         queue_head += 1;
+        let bus = queued.number;
         report.buses_scanned = report.buses_scanned.saturating_add(1);
 
         for device in 0..MAX_DEVICES {
@@ -68,6 +75,7 @@ pub fn scan_hierarchy<A: ConfigAccess>(
                 out,
                 &mut queue,
                 &mut queue_tail,
+                queued.subordinate_limit,
                 &mut visited,
             )?;
 
@@ -88,6 +96,7 @@ pub fn scan_hierarchy<A: ConfigAccess>(
                     out,
                     &mut queue,
                     &mut queue_tail,
+                    queued.subordinate_limit,
                     &mut visited,
                 )?;
             }
@@ -102,8 +111,9 @@ fn process_function<A: ConfigAccess>(
     function: PciFunction,
     report: &mut EnumerationReport,
     out: &mut [PciFunction],
-    queue: &mut [u8; BUS_COUNT],
+    queue: &mut [QueuedBus; BUS_COUNT],
     queue_tail: &mut usize,
+    subordinate_limit: u8,
     visited: &mut [u64; 4],
 ) -> Result<(), ConfigError> {
     report.devices_found = report.devices_found.saturating_add(1);
@@ -134,17 +144,19 @@ fn process_function<A: ConfigAccess>(
         || secondary == 0
         || secondary <= primary
         || secondary > subordinate
+        || subordinate > subordinate_limit
     {
         return Ok(());
     }
 
-    enqueue_bus(secondary, queue, queue_tail, visited);
+    enqueue_bus(secondary, subordinate, queue, queue_tail, visited);
     Ok(())
 }
 
 fn enqueue_bus(
     bus: u8,
-    queue: &mut [u8; BUS_COUNT],
+    subordinate_limit: u8,
+    queue: &mut [QueuedBus; BUS_COUNT],
     queue_tail: &mut usize,
     visited: &mut [u64; 4],
 ) {
@@ -157,7 +169,7 @@ fn enqueue_bus(
     // At most 256 distinct bus numbers exist, and buses are marked visited
     // before enqueueing, so this bound cannot be exceeded.
     if *queue_tail < queue.len() {
-        queue[*queue_tail] = bus;
+        queue[*queue_tail] = QueuedBus { number: bus, subordinate_limit };
         *queue_tail += 1;
     }
 
@@ -281,6 +293,31 @@ mod tests {
         let report = scan_hierarchy(&io, 0, 0, &mut output).unwrap();
         assert_eq!(report.devices_found, 2);
         assert_eq!(report.buses_scanned, 1);
+    }
+
+    #[test]
+    fn does_not_follow_bridge_ranges_outside_parent_subordinate_limit() {
+        let io = MockConfig {
+            devices: [
+                Some(endpoint(address(0, 0))),
+                Some(bridge(address(0, 1), 1, 1)),
+                Some(bridge(address(1, 0), 2, 3)),
+                Some(endpoint(address(2, 0))),
+            ],
+        };
+        let mut output = [PciFunction {
+            address: address(0, 0),
+            identity: PciIdentity {
+                vendor_id: 0, device_id: 0, command: 0, status: 0,
+                revision: 0, programming_interface: 0, subclass: 0,
+                class_code: 0, header_type: 0,
+            },
+        }; 4];
+
+        let report = scan_hierarchy(&io, 0, 0, &mut output).unwrap();
+        assert_eq!(report.devices_found, 3);
+        assert_eq!(report.buses_scanned, 2);
+        assert!(!output[..report.written].iter().any(|function| function.address.bus == 2));
     }
 }
 
