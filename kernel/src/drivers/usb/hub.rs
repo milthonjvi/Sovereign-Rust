@@ -248,7 +248,7 @@ pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRe
 pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32,superspeed:bool,clear_connection_change:bool,clear_enable_change:bool,clear_suspend_change:bool,clear_over_current_change:bool,clear_reset_change:bool,clear_link_state_change:bool,clear_config_error_change:bool,clear_warm_reset_change:bool,reset_elapsed_ms:u32}
 impl HubPortMachine{
  pub const fn new(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:false,clear_connection_change:false,clear_enable_change:false,clear_suspend_change:false,clear_over_current_change:false,clear_reset_change:false,clear_link_state_change:false,clear_config_error_change:false,clear_warm_reset_change:false,reset_elapsed_ms:0}}
- pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true,clear_connection_change:false,clear_warm_reset_change:false,reset_elapsed_ms:0}}
+ pub const fn new_superspeed(port:u8,power_on_to_good_2ms:u8)->Self{Self{port,state:HubPortState::Unpowered,elapsed_ms:0,power_good_ms:power_on_to_good_2ms as u32*2,superspeed:true,clear_connection_change:false,clear_enable_change:false,clear_suspend_change:false,clear_over_current_change:false,clear_reset_change:false,clear_link_state_change:false,clear_config_error_change:false,clear_warm_reset_change:false,reset_elapsed_ms:0}}
  pub fn start(&mut self)->Result<HubPortAction,UsbError>{if self.port==0||self.state!=HubPortState::Unpowered{return Err(UsbError::Unsupported)}self.state=HubPortState::PowerGoodWait;self.elapsed_ms=0;Ok(HubPortAction::PowerOn)}
  pub fn elapse_ms(&mut self,ms:u32){
   self.elapsed_ms=self.elapsed_ms.saturating_add(ms);
@@ -277,7 +277,7 @@ impl HubPortMachine{
   if status.change&HubPortStatus::C_ENABLE!=0{self.clear_enable_change=true;}
   if status.change&HubPortStatus::C_SUSPEND!=0{self.clear_suspend_change=true;}
   if status.change&HubPortStatus::C_OVER_CURRENT!=0{self.clear_over_current_change=true;}
-  if status.change&HubPortStatus::C_RESET!=0{self.clear_reset_change=true;}
+  if status.change&HubPortStatus::C_RESET!=0&&self.state!=HubPortState::Resetting{self.clear_reset_change=true;}
   if status.status&HubPortStatus::OVER_CURRENT!=0{if self.state!=HubPortState::OverCurrentLatched{self.state=HubPortState::OverCurrent;}return}
   match self.state{
    HubPortState::AwaitConnection=>if status.connected(){self.state=HubPortState::Debouncing;self.elapsed_ms=0},
