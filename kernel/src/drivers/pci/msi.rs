@@ -133,7 +133,13 @@ pub unsafe fn disable_msix<A: ConfigAccess>(
     let offset = capability.offset as u16;
     let header = read_standard(io, address, offset)?;
     let control = (header >> 16) as u16;
-    let disabled_masked = (control & !(1 << 15)) | (1 << 14);
+    let function_masked = control | (1 << 14);
+    io.write_u32(
+        address,
+        offset,
+        (header & 0xffff) | ((function_masked as u32) << 16),
+    )?;
+    let disabled_masked = function_masked & !(1 << 15);
     io.write_u32(
         address,
         offset,
