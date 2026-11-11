@@ -160,4 +160,128 @@ fn enqueue_bus(
         queue[*queue_tail] = bus;
         *queue_tail += 1;
     }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct MockConfig {
+        devices: [Option<(PciAddress, [u32; 16])>; 4],
+    }
+
+    impl ConfigAccess for MockConfig {
+        fn read_u32(&self, address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+            let index = (register / 4) as usize;
+            if index >= 16 {
+                return Err(ConfigError::OutOfRange);
+            }
+            for device in self.devices.iter().flatten() {
+                if device.0 == address {
+                    return Ok(device.1[index]);
+                }
+            }
+            Ok(if register == 0 { u32::MAX } else { 0 })
+        }
+
+        fn write_u32(&self, _address: PciAddress, _register: u16, _value: u32) -> Result<(), ConfigError> {
+            Err(ConfigError::OutOfRange)
+        }
+    }
+
+    fn endpoint(address: PciAddress) -> (PciAddress, [u32; 16]) {
+        let mut registers = [0u32; 16];
+        registers[0] = 0x5678_1234;
+        registers[2] = 0x0200_0000;
+        (address, registers)
+    }
+
+    fn bridge(address: PciAddress, secondary: u8, subordinate: u8) -> (PciAddress, [u32; 16]) {
+        let mut registers = [0u32; 16];
+        registers[0] = 0x1111_2222;
+        registers[2] = 0x0604_0000;
+        registers[3] = 0x0001_0000;
+        registers[6] = address.bus as u32 | ((secondary as u32) << 8) | ((subordinate as u32) << 16);
+        (address, registers)
+    }
+
+    fn address(bus: u8, device: u8) -> PciAddress {
+        PciAddress { segment: 0, bus, device, function: 0 }
+    }
+
+    fn hierarchy() -> MockConfig {
+        MockConfig {
+            devices: [
+                Some(endpoint(address(0, 0))),
+                Some(bridge(address(0, 1), 1, 1)),
+                Some(endpoint(address(1, 0))),
+                None,
+            ],
+        }
+    }
+
+    #[test]
+    fn scans_root_and_secondary_bus_through_bridge() {
+        let io = hierarchy();
+        let mut output = [PciFunction {
+            address: address(0, 0),
+            identity: PciIdentity {
+                vendor_id: 0, device_id: 0, command: 0, status: 0,
+                revision: 0, programming_interface: 0, subclass: 0,
+                class_code: 0, header_type: 0,
+            },
+        }; 3];
+
+        let report = scan_hierarchy(&io, 0, 0, &mut output).unwrap();
+        assert_eq!(report.written, 3);
+        assert_eq!(report.devices_found, 3);
+        assert_eq!(report.buses_scanned, 2);
+        assert!(!report.truncated);
+        assert_eq!(output[2].address, address(1, 0));
+    }
+
+    #[test]
+    fn reports_truncation_without_losing_discovery_count() {
+        let io = hierarchy();
+        let mut output = [PciFunction {
+            address: address(0, 0),
+            identity: PciIdentity {
+                vendor_id: 0, device_id: 0, command: 0, status: 0,
+                revision: 0, programming_interface: 0, subclass: 0,
+                class_code: 0, header_type: 0,
+            },
+        }; 1];
+
+        let report = scan_hierarchy(&io, 0, 0, &mut output).unwrap();
+        assert_eq!(report.written, 1);
+        assert_eq!(report.devices_found, 3);
+        assert_eq!(report.buses_scanned, 2);
+        assert!(report.truncated);
+    }
+
+    #[test]
+    fn ignores_malformed_bridge_bus_numbers() {
+        let io = MockConfig {
+            devices: [
+                Some(endpoint(address(0, 0))),
+                Some(bridge(address(0, 1), 0, 2)),
+                Some(endpoint(address(2, 0))),
+                None,
+            ],
+        };
+        let mut output = [PciFunction {
+            address: address(0, 0),
+            identity: PciIdentity {
+                vendor_id: 0, device_id: 0, command: 0, status: 0,
+                revision: 0, programming_interface: 0, subclass: 0,
+                class_code: 0, header_type: 0,
+            },
+        }; 4];
+
+        let report = scan_hierarchy(&io, 0, 0, &mut output).unwrap();
+        assert_eq!(report.devices_found, 2);
+        assert_eq!(report.buses_scanned, 1);
+    }
+}
+
 }
