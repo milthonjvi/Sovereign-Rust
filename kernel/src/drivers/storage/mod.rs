@@ -8,5 +8,5 @@ pub mod gpt;
 pub mod mbr;
 
 pub use block::{BlockDevice, BlockError, BlockGeometry, BlockRange, validate_buffer};
-pub use gpt::{GptError, GptHeader};
+pub use gpt::{enumerate_gpt_partitions, GptError, GptHeader, GptPartition};
 pub use mbr::{enumerate_logical_partitions, LogicalPartition, MbrError, MbrPartition, MbrTable};
