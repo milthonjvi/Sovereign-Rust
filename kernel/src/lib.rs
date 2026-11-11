@@ -6,6 +6,7 @@
 //! Hardware access is isolated behind architecture and driver interfaces.
 
 pub mod arch;
+pub mod boot;
 pub mod drivers;
 pub mod firmware;
 pub mod fs;
