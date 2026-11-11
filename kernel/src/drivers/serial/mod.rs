@@ -83,6 +83,18 @@ pub struct UartLineStatus {
     pub fifo_error: bool,
 }
 
+/// Outcome of a bounded receive-FIFO recovery operation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UartRxRecoveryReport {
+    /// Bytes explicitly read from the UART data register before reset.
+    pub discarded_bytes: usize,
+    /// True when the drain budget was consumed and the final LSR sample still
+    /// reported unread data. A hardware FIFO reset may then discard more bytes.
+    pub data_pending_before_reset: bool,
+    /// True when an RX FIFO reset command was issued to a FIFO-capable UART.
+    pub fifo_reset_issued: bool,
+}
+
 /// Decoded UART Modem Status Register (MSR).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UartModemStatus {
@@ -315,17 +327,25 @@ impl Uart16550 {
     /// Discards pending hardware RX data and resets only the receive FIFO.
     ///
     /// Returns the number of bytes explicitly drained before the FIFO reset.
-    /// This is a recovery operation: unread input is intentionally lost.
-    /// It is unavailable while IRQ mode is attached to avoid racing the handler.
+    /// This compatibility wrapper preserves the original API; use
+    /// `recover_receive_fifo_report` when diagnostics about a saturated drain
+    /// or an actual hardware FIFO reset are required.
     pub fn recover_receive_fifo(&self) -> Result<usize, UartError> {
+        self.recover_receive_fifo_report().map(|report| report.discarded_bytes)
+    }
+
+    /// Performs bounded RX recovery and reports whether unread data remained.
+    ///
+    /// The operation intentionally discards unread input. It is unavailable
+    /// while IRQ mode is attached, avoiding races with the interrupt handler.
+    /// If the drain reaches its fixed budget, one final LSR sample determines
+    /// whether additional data was pending before the RX FIFO reset.
+    pub fn recover_receive_fifo_report(&self) -> Result<UartRxRecoveryReport, UartError> {
         self.ensure_initialized()?;
         if irq::is_attached(self.base) {
             return Err(UartError::InterruptsActive);
         }
 
-        // Drain the currently visible data with a strict bound. The bound is
-        // larger than the maximum supported hardware FIFO, while still
-        // preventing a faulty device from trapping the kernel in this routine.
         let mut discarded = 0usize;
         for _ in 0..MAX_RX_RECOVERY_DRAIN {
             // SAFETY: This instance exclusively owns the UART and IRQ mode is detached.
@@ -338,11 +358,26 @@ impl Uart16550 {
             discarded += 1;
         }
 
-        // FCR bit 1 resets RX only; do not reset TX or change FIFO trigger level.
-        let fifo_control = receive_recovery_fcr(self.fifo);
-        // SAFETY: FCR is writable and RX reset is self-clearing on 16550A devices.
-        unsafe { io::out8(self.port(FCR), fifo_control | (1 << 1)); }
-        Ok(discarded)
+        let data_pending_before_reset = if discarded == MAX_RX_RECOVERY_DRAIN {
+            // SAFETY: This instance exclusively owns LSR while IRQ mode is detached.
+            unsafe { io::in8(self.port(LSR)) } & DATA_READY != 0
+        } else {
+            false
+        };
+
+        let fifo_reset_issued = self.fifo != UartFifo::None;
+        if fifo_reset_issued {
+            // FCR bit 1 resets RX only; preserve TX FIFO and trigger level.
+            let fifo_control = receive_recovery_fcr(self.fifo);
+            // SAFETY: FCR is writable and RX reset is self-clearing on 16550A devices.
+            unsafe { io::out8(self.port(FCR), fifo_control | (1 << 1)); }
+        }
+
+        Ok(UartRxRecoveryReport {
+            discarded_bytes: discarded,
+            data_pending_before_reset,
+            fifo_reset_issued,
+        })
     }
 
     /// Drains currently available input into the supplied buffer.
