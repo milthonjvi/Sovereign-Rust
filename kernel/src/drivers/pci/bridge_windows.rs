@@ -56,7 +56,7 @@ impl PciBridgeWindows {
         let io_limit = (io_limit_upper << 16)
             | ((((io_base_limit >> 8) & 0x00f0) as u64) << 8)
             | 0x0fff;
-        let io_window = if io_base <= io_limit {
+        let io_window = if identity.command & 1 != 0 && io_base <= io_limit {
             Some(make_window(ResourceSpace::Io, false, io_base, io_limit)?)
         } else { None };
 
@@ -67,7 +67,7 @@ impl PciBridgeWindows {
         }
         let memory_base = ((memory & 0x0000_fff0) as u64) << 16;
         let memory_limit = (((memory >> 16) & 0x0000_fff0) as u64) << 16 | 0x000f_ffff;
-        let memory_window = if memory_base <= memory_limit {
+        let memory_window = if identity.command & 2 != 0 && memory_base <= memory_limit {
             Some(make_window(ResourceSpace::Memory, false, memory_base, memory_limit)?)
         } else { None };
 
@@ -90,7 +90,7 @@ impl PciBridgeWindows {
         let prefetch_limit = (limit_upper << 32)
             | ((((prefetch >> 16) & 0x0000_fff0) as u64) << 16)
             | 0x000f_ffff;
-        let prefetch_window = if prefetch_base <= prefetch_limit {
+        let prefetch_window = if identity.command & 2 != 0 && prefetch_base <= prefetch_limit {
             Some(make_window(ResourceSpace::Memory, true, prefetch_base, prefetch_limit)?)
         } else { None };
 
@@ -130,7 +130,7 @@ mod tests {
         PciFunction {
             address: PciAddress { segment: 0, bus: 0, device: 1, function: 0 },
             identity: PciIdentity {
-                vendor_id: 1, device_id: 2, command: 0, status: 0, revision: 0,
+                vendor_id: 1, device_id: 2, command: 3, status: 0, revision: 0,
                 programming_interface: 0, subclass: 4, class_code: 6, header_type: 1,
             },
         }
