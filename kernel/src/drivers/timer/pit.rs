@@ -132,7 +132,7 @@ impl Pit {
         PIT_TICKS.store(0, Ordering::Relaxed);
         PIT_WORK_PENDING.store(false, Ordering::Release);
         PIT_FREQUENCY_HZ.store(config.actual_hz, Ordering::Release);
-        if let Err(error) = unsafe { self.configure(requested_hz) } {
+        if let Err(error) = unsafe { self.program_config(config) } {
             let _ = unsafe {
                 crate::interrupts::init::unregister_legacy_irq(0, pit_irq_handler)
             };
@@ -179,15 +179,29 @@ impl Pit {
     /// The caller must own ports 0x40/0x43, run at CPL 0, and arrange a valid
     /// IRQ0 handler before relying on periodic interrupts.
     pub unsafe fn configure(&mut self, requested_hz: u32) -> Result<PitConfig, DriverError> {
+        if PIT_IRQ_ACTIVE.load(Ordering::Acquire) {
+            return Err(DriverError::NotReady);
+        }
         let config = PitConfig::from_frequency(requested_hz)?;
         // SAFETY: Port ownership and privilege are guaranteed by this function's caller.
+        unsafe { self.program_config(config)?; }
+        Ok(config)
+    }
+
+    /// Program an already validated PIT divisor.
+    ///
+    /// # Safety
+    /// The caller must own the PIT ports and ensure the active IRQ handler's
+    /// clocksource frequency cannot be changed concurrently.
+    unsafe fn program_config(&mut self, config: PitConfig) -> Result<(), DriverError> {
+        // SAFETY: Port ownership and privilege are guaranteed by the caller.
         unsafe {
             io::out8(COMMAND, CHANNEL0_RATE_GENERATOR);
             io::out8(CHANNEL0_DATA, config.divisor as u8);
             io::out8(CHANNEL0_DATA, (config.divisor >> 8) as u8);
         }
         self.config = Some(config);
-        Ok(config)
+        Ok(())
     }
 }
 
@@ -241,6 +255,11 @@ impl Driver for Pit {
     }
 
     fn shutdown(&mut self) -> Result<(), DriverError> {
+        // IRQ ownership must be released through the explicit unsafe teardown
+        // API, which requires IF clear and an idle handler.
+        if PIT_IRQ_ACTIVE.load(Ordering::Acquire) {
+            return Err(DriverError::NotReady);
+        }
         // The PIT has no universally safe "stop" operation; leave its current mode.
         self.config = None;
         Ok(())
