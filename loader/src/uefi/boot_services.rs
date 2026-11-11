@@ -6,7 +6,19 @@ pub const EFI_ALLOCATE_ANY_PAGES: u32 = 0;
 /// UEFI memory type reserved for allocations owned by a boot application.
 pub const EFI_LOADER_DATA: u32 = 2;
 
-/// UEFI Boot Services prefix through HandleProtocol.
+/// UEFI memory descriptor returned by GetMemoryMap.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct EfiMemoryDescriptor {
+    pub memory_type: u32,
+    _padding: u32,
+    pub physical_start: u64,
+    pub virtual_start: u64,
+    pub number_of_pages: u64,
+    pub attribute: u64,
+}
+
+/// UEFI Boot Services prefix through ExitBootServices.
 #[repr(C)]
 pub struct EfiBootServices {
     pub header: EfiTableHeader,
@@ -22,7 +34,13 @@ pub struct EfiBootServices {
         memory: u64,
         pages: usize,
     ) -> EfiStatus>,
-    _get_memory_map: usize,
+    pub get_memory_map: Option<unsafe extern "efiapi" fn(
+        memory_map_size: *mut usize,
+        memory_map: *mut EfiMemoryDescriptor,
+        map_key: *mut usize,
+        descriptor_size: *mut usize,
+        descriptor_version: *mut u32,
+    ) -> EfiStatus>,
     _allocate_pool: usize,
     _free_pool: usize,
     _create_event: usize,
@@ -38,6 +56,19 @@ pub struct EfiBootServices {
         handle: EfiHandle,
         protocol: *const super::EfiGuid,
         interface: *mut *mut core::ffi::c_void,
+    ) -> EfiStatus>,
+    _reserved: usize,
+    _register_protocol_notify: usize,
+    _locate_handle: usize,
+    _locate_device_path: usize,
+    _install_configuration_table: usize,
+    _load_image: usize,
+    _start_image: usize,
+    _exit: usize,
+    _unload_image: usize,
+    pub exit_boot_services: Option<unsafe extern "efiapi" fn(
+        image_handle: EfiHandle,
+        map_key: usize,
     ) -> EfiStatus>,
 }
 
