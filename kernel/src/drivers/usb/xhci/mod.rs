@@ -31,7 +31,10 @@ impl CapabilityRegisters{
 /// software from overwriting commands not yet retired by completion events.
 pub struct XhciProducerRing<'a,const N:usize>{entries:&'a mut[Trb;N],physical_base:u64,enqueue:usize,cycle:bool,in_flight:usize}
 impl<'a,const N:usize>XhciProducerRing<'a,N>{
- /// # Safety\n /// `physical_base` must be the DMA address of `entries`, which must be\n /// contiguous, coherent, 64-byte aligned, and remain pinned for the ring lifetime.\n pub unsafe fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
+ /// # Safety
+ /// `physical_base` must be the DMA address of `entries`, which must be
+ /// contiguous, coherent, 64-byte aligned, and remain pinned for the ring lifetime.
+ pub unsafe fn new(entries:&'a mut[Trb;N],physical_base:u64)->Result<Self,XhciError>{
   if N<2||physical_base&0x3f!=0{return Err(XhciError::InvalidRing)}
   for entry in entries.iter_mut(){unsafe{core::ptr::write_volatile(entry,Trb::EMPTY);}}
   let mut ring=Self{entries,physical_base,enqueue:0,cycle:true,in_flight:0};
