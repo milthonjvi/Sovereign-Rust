@@ -40,3 +40,7 @@ pub struct EfiConfigurationTable {
     pub vendor_guid: super::EfiGuid,
     pub vendor_table: *mut c_void,
 }
+
+const _: [(); 120] = [(); core::mem::size_of::<EfiSystemTable>()];
+const _: [(); 24] = [(); core::mem::size_of::<EfiConfigurationTable>()];
+const _: [(); 16] = [(); core::mem::size_of::<super::EfiGuid>()];
