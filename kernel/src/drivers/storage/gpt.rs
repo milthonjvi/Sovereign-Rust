@@ -33,7 +33,11 @@ impl GptHeader {
         let block=geometry.block_size as u64;
         let blocks=bytes.checked_add(block-1).ok_or(GptError::AddressOverflow)?/block;
         let end=entries_lba.checked_add(blocks).ok_or(GptError::AddressOverflow)?;
-        if entries_lba==0 || end>geometry.block_count { return Err(GptError::TableOutOfBounds); }
+        if entries_lba==0 || end>geometry.block_count
+            || (entries_lba <= current_lba && current_lba < end)
+            || (entries_lba <= backup_lba && backup_lba < end)
+            || (entries_lba <= last_usable_lba && first_usable_lba < end)
+        { return Err(GptError::TableOutOfBounds); }
         Ok(Self { revision,header_size,current_lba,backup_lba,first_usable_lba,last_usable_lba,disk_guid,entries_lba,entry_count,entry_size,entries_crc32 })
     }
 }
