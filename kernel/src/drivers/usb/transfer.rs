@@ -29,7 +29,7 @@ impl Endpoint{
   let max_packet_size=raw&0x07ff;
   let multiplier=(raw>>11)&3;
   if max_packet_size==0||raw&0xe000!=0||multiplier==3||b[2]&0x0f==0||b[2]&0x70!=0
-   ||(transfer!=1&&b[3]&0xfc!=0)||((transfer!=1&&transfer!=3)&&multiplier!=0){
+   ||(transfer==1&&b[3]&0xc0!=0)||(transfer!=1&&b[3]&0xfc!=0)||((transfer!=1&&transfer!=3)&&multiplier!=0){
    return Err(UsbError::MalformedDescriptor)
   }
   Ok(Self{address:EndpointAddress::from_raw(b[2]),transfer_type,max_packet_size,interval:b[6]})
