@@ -257,7 +257,6 @@ mod tests {
         set_partition(&mut sector, 1, 0, 0x07, 150, 100);
         assert_eq!(MbrTable::parse(&sector, GEOMETRY), Err(MbrError::OverlappingPartitions));
     }
-}
     struct MockDisk { first: [u8; 512], second: [u8; 512] }
     impl super::super::block::BlockDevice for MockDisk {
         fn geometry(&self) -> BlockGeometry { GEOMETRY }
@@ -317,4 +316,4 @@ mod tests {
         );
         assert_eq!(result, Err(MbrError::EbrCycle));
     }
-
+}
