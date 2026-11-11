@@ -174,7 +174,7 @@ mod change_bitmap_tests{
 /// Non-blocking downstream-port lifecycle policy. Timing and status polling are
 /// supplied by the caller; no polling loop or MMIO is performed here.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent}
+pub enum HubPortState{Unpowered,PowerGoodWait,AwaitConnection,Debouncing,ResetRequired,Resetting,ClearResetChange,Ready,Disconnected,OverCurrent,OverCurrentLatched}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct HubPortMachine{pub port:u8,pub state:HubPortState,elapsed_ms:u32,power_good_ms:u32}
 impl HubPortMachine{
@@ -187,6 +187,8 @@ impl HubPortMachine{
    HubPortState::AwaitConnection=>if status.connected(){self.state=HubPortState::Debouncing;self.elapsed_ms=0},
    HubPortState::Debouncing=>if !status.connected(){self.state=HubPortState::AwaitConnection;self.elapsed_ms=0},
    HubPortState::Resetting=>if !status.connected(){self.state=HubPortState::Disconnected}else if status.status&HubPortStatus::RESET==0&&status.enabled(){self.state=HubPortState::ClearResetChange},
+   HubPortState::Disconnected=>if status.connected(){self.state=HubPortState::Debouncing;self.elapsed_ms=0},
+   HubPortState::ClearResetChange=>if !status.connected(){self.state=HubPortState::Disconnected},
    HubPortState::Ready=>if !status.connected(){self.state=HubPortState::Disconnected}else if !status.enabled(){self.state=HubPortState::ResetRequired},
    _=>{}
   }
@@ -194,7 +196,7 @@ impl HubPortMachine{
  pub fn take_action(&mut self)->Option<HubPortAction>{match self.state{
   HubPortState::ResetRequired=>{self.state=HubPortState::Resetting;Some(HubPortAction::Reset)},
   HubPortState::ClearResetChange=>{self.state=HubPortState::Ready;Some(HubPortAction::ClearResetChange)},
-  HubPortState::OverCurrent=>Some(HubPortAction::PowerOff),_=>None}}
+  HubPortState::OverCurrent=>{self.state=HubPortState::OverCurrentLatched;Some(HubPortAction::PowerOff)},_=>None}}
  pub const fn ready(&self)->bool{matches!(self.state,HubPortState::Ready)}
 }
 #[cfg(test)]mod port_machine_tests{
