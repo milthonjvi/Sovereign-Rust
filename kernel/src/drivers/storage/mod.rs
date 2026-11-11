@@ -32,3 +32,6 @@ pub use fat_lfn::{consume_lfn_record, short_name_checksum, visit_directory, look
 
 pub mod cache;
 pub use cache::{BlockCache, CacheStats};
+
+pub mod nvme;
+pub use nvme::{build_prps, identify_command, read_command, write_command, NvmeCapabilities, NvmeCommand, NvmeCompletion, NvmeCompletionQueue, NvmeError, NvmeNamespace, NvmePrpMapping, NvmeSubmissionQueue};
