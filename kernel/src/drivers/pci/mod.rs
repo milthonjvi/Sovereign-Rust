@@ -19,7 +19,7 @@ pub use bar_probe::{probe_bar_sizes, BarProbeError, BarSize};
 pub use bar_program::{program_bar, BarProgramError};
 pub use bridge_windows::{BridgeWindowError, PciBridgeWindows};
 pub use capabilities::{Capability, ExtendedCapabilities, ExtendedCapability, StandardCapabilities};
-pub use config::{read_bars, scan_bus, Bar, BarKind, ConfigAccess, ConfigError, EcamWindow, PciAddress, PciFunction, PciIdentity};
+pub use config::{read_bars, scan_bus, scan_bus_report, Bar, BarKind, BusScanReport, ConfigAccess, ConfigError, EcamWindow, PciAddress, PciFunction, PciIdentity};
 pub use command::{read_command, set_bus_master, set_intx_disabled, set_io_space, set_memory_space, update_command, COMMAND_BUS_MASTER, COMMAND_INTERRUPT_DISABLE, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE};
 pub use ecam::{parse_mcfg, physical_address, EcamAccess, McfgError};
 pub use enumeration::{scan_hierarchy, EnumerationReport};
