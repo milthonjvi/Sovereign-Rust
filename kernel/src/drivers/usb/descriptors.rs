@@ -89,7 +89,7 @@ impl ParsedEndpoint{
   let mult=((raw>>11)&3) as u8;
   let transfer=b[3]&3;
   if packet==0||raw&0xe000!=0||mult==3||b[2]&0x0f==0||b[2]&0x70!=0
-   ||transfer==0||(transfer!=1&&b[3]&0xfc!=0)
+   ||transfer==0||(transfer==1&&b[3]&0xc0!=0)||(transfer!=1&&b[3]&0xfc!=0)
    ||((transfer!=1&&transfer!=3)&&mult!=0){return Err(UsbError::MalformedDescriptor)}
   Ok(Self{address:b[2],attributes:b[3],max_packet_size:packet,interval:b[6],
    transactions_per_microframe:mult+1,max_burst:0,companion_attributes:0,
@@ -237,5 +237,23 @@ mod alternate_setting_tests{
   ];
   let parsed=ParsedConfiguration::parse(&bytes).unwrap();
   assert_eq!(parsed.interface_len,3);
+ }
+}
+
+#[cfg(test)]
+mod superspeed_companion_validation_tests{
+ use super::*;
+ #[test]fn validates_isochronous_companion_fields(){
+  let mut endpoint=ParsedEndpoint::parse(&[7,5,0x81,1,0,0,1]).unwrap();
+  endpoint.apply_companion(&[6,0x30,2,1,0,4]).unwrap();
+  assert_eq!(endpoint.max_burst,2);assert_eq!(endpoint.bytes_per_interval,1024);
+ }
+ #[test]fn rejects_reserved_bulk_companion_bytes_and_excess_burst(){
+  let mut endpoint=ParsedEndpoint::parse(&[7,5,0x81,2,0,2,0]).unwrap();
+  assert_eq!(endpoint.apply_companion(&[6,0x30,1,0,0,1]),Err(UsbError::MalformedDescriptor));
+  assert_eq!(endpoint.apply_companion(&[6,0x30,16,0,0,0]),Err(UsbError::MalformedDescriptor));
+ }
+ #[test]fn rejects_reserved_isochronous_endpoint_attribute_bits(){
+  assert_eq!(ParsedEndpoint::parse(&[7,5,0x81,0x41,0,2,1]),Err(UsbError::MalformedDescriptor));
  }
 }
