@@ -1,8 +1,13 @@
-//! USB bus subsystem. Protocol handling is independent of host-controller hardware.
-//! xHCI is the first controller target; additional controller families can reuse
-//! the same device, descriptor, endpoint, and transfer model.
+//! USB bus subsystem spanning legacy USB 1.x through USB 3.x host controllers.
+//! USB4 tunnelling is usable when platform firmware exposes a compatible xHCI
+//! controller; native USB4 router management is a separate future subsystem.
+pub mod controller;
 pub mod descriptors;
+pub mod ehci;
+pub mod hub;
+pub mod ohci;
 pub mod transfer;
+pub mod uhci;
 pub mod xhci;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum UsbError{BufferTooShort,MalformedDescriptor,InvalidAddress,Unsupported,NoResources,ControllerUnavailable,TransferFailed,Timeout}
