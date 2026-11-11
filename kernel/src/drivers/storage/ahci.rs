@@ -364,3 +364,51 @@ mod port_tests {
         assert_eq!(configure_port(&mut regs,0,AhciPortMemory{command_list_phys:0x4100,received_fis_phys:0x5000},0,true,1),Err(AhciError::InvalidPortMemory));
     }
 }
+
+
+/// DMA command-table layout. The first 128 bytes contain CFIS, ATAPI command
+/// and reserved fields; PRDT entries follow at offset 128.
+#[repr(C,align(128))]
+pub struct AhciCommandTable<const N:usize>{
+    pub command_fis:[u8;64],
+    pub atapi_command:[u8;16],
+    pub reserved:[u8;48],
+    pub prdt:[AhciPrdtEntry;N],
+}
+const _: [();128]=[();core::mem::size_of::<AhciCommandTable<0>>()];
+impl<const N:usize> AhciCommandTable<N>{
+    pub const fn new()->Self{
+        Self{command_fis:[0;64],atapi_command:[0;16],reserved:[0;48],
+            prdt:[AhciPrdtEntry{data_base:0,data_base_upper:0,reserved:0,byte_count_and_interrupt:0};N]}
+    }
+    pub fn set_register_fis(&mut self,fis:RegisterFisH2d){
+        let bytes=[fis.fis_type,fis.flags,fis.command,fis.feature_low,
+            fis.lba0,fis.lba1,fis.lba2,fis.device,fis.lba3,fis.lba4,fis.lba5,
+            fis.feature_high,fis.count_low,fis.count_high,fis.icc,fis.control,
+            fis.reserved[0],fis.reserved[1],fis.reserved[2],fis.reserved[3]];
+        self.command_fis[..20].copy_from_slice(&bytes);
+        self.command_fis[20..].fill(0);
+    }
+    pub fn set_prdt(&mut self,entries:&[AhciPrdtEntry])->Result<u16,AhciError>{
+        if entries.len()>N || entries.len()>u16::MAX as usize{return Err(AhciError::PrdtCapacity);}
+        self.prdt.fill(AhciPrdtEntry::default());
+        self.prdt[..entries.len()].copy_from_slice(entries);
+        Ok(entries.len() as u16)
+    }
+}
+impl<const N:usize> Default for AhciCommandTable<N>{fn default()->Self{Self::new()}}
+
+#[cfg(test)]
+mod table_tests{
+    use super::*;
+    #[test]
+    fn command_table_has_protocol_offset_and_copies_fis(){
+        let mut table=AhciCommandTable::<4>::new();
+        let fis=RegisterFisH2d::read_dma_ext(0x1234,8).unwrap();
+        table.set_register_fis(fis);
+        assert_eq!(table.command_fis[0],0x27);
+        assert_eq!(table.command_fis[2],0x25);
+        assert_eq!(table.command_fis[19],0);
+        assert_eq!(core::mem::size_of_val(&table),128+4*16);
+    }
+}
