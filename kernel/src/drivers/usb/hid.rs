@@ -79,6 +79,39 @@ pub const fn get_report_descriptor(interface:u8,length:u16)->SetupPacket{
  SetupPacket::new(0x81,6,(HID_REPORT_DESCRIPTOR_TYPE as u16)<<8,interface as u16,length)
 }
 
+
+/// Executes SET_PROTOCOL and validates the HID protocol selector.
+pub fn execute_set_protocol<C:HostController>(
+ controller:&mut C,address:DeviceAddress,interface:u8,protocol:u16,
+)->Result<(),UsbError>{
+ if protocol!=HID_PROTOCOL_BOOT&&protocol!=HID_PROTOCOL_REPORT{return Err(UsbError::Unsupported)}
+ let setup=set_protocol(interface,protocol);
+ super::control::execute_control(controller,address,setup,&mut[])?;
+ Ok(())
+}
+
+/// Executes SET_IDLE for one report ID (zero selects all reports).
+pub fn execute_set_idle<C:HostController>(
+ controller:&mut C,address:DeviceAddress,interface:u8,duration:u8,report_id:u8,
+)->Result<(),UsbError>{
+ let setup=set_idle(interface,duration,report_id);
+ super::control::execute_control(controller,address,setup,&mut[])?;
+ Ok(())
+}
+
+/// Retrieves one HID Input, Output or Feature report. A short IN transfer is
+/// returned as-is; the caller must validate its report layout and ID.
+pub fn execute_get_report<C:HostController>(
+ controller:&mut C,address:DeviceAddress,interface:u8,report_type:u8,
+ report_id:u8,buffer:&mut[u8],
+)->Result<usize,UsbError>{
+ if !(1..=3).contains(&report_type){return Err(UsbError::Unsupported)}
+ if buffer.is_empty()||buffer.len()>u16::MAX as usize{return Err(UsbError::BufferTooShort)}
+ let setup=get_report(interface,report_type,report_id,buffer.len() as u16);
+ let result=super::control::execute_control(controller,address,setup,buffer)?;
+ Ok(result.bytes_transferred)
+}
+
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct BootKeyboardReport{pub modifiers:u8,pub keys:[u8;6]}
 impl BootKeyboardReport{
