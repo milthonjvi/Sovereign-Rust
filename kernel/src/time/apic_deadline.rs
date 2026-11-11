@@ -32,6 +32,17 @@ pub enum BootstrapTimerInitError {
     Queue(TscDeadlineQueueError),
 }
 
+/// Outcome of draining expired timers and attempting to re-arm the comparator.
+///
+/// Expired events remain delivered in the caller's output buffer even when
+/// hardware reprogramming fails. The caller must process those events and
+/// arrange a deferred retry; the queue also reasserts its pending-work signal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimerProcessReport {
+    pub expired: usize,
+    pub reprogram_error: Option<DriverError>,
+}
+
 /// Per-CPU timer queue driven by the local APIC TSC-deadline facility.
 pub struct TscDeadlineQueue<S: ClockSource, const N: usize> {
     service: TimerService<S, N>,
@@ -175,11 +186,17 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
     pub unsafe fn process_expired(
         &self,
         output: &mut [Option<TimerEvent>],
-    ) -> Result<usize, DriverError> {
-        let count = self.service.drain_expired(output);
+    ) -> TimerProcessReport {
+        let expired = self.service.drain_expired(output);
         // SAFETY: Same-CPU requirement is part of this method's contract.
-        unsafe { self.reprogram()? };
-        Ok(count)
+        let reprogram_error = unsafe { self.reprogram() }.err();
+        if reprogram_error.is_some() {
+            // Preserve a retry request: the current batch is already in
+            // caller-owned storage, while remaining deadlines still need
+            // another attempt to arm the local comparator.
+            super::interrupt::signal_timer_work_pending();
+        }
+        TimerProcessReport { expired, reprogram_error }
     }
 
     /// Reprogram the hardware from the current queue head.
