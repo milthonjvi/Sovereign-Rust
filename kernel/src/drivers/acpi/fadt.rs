@@ -212,9 +212,13 @@ impl Fadt {
         Ok(())
     }
 
-    /// Validate the FADT fixed-register block lengths from ACPI 6.5 §5.2.9.
+    /// Validate the FADT fixed-register block lengths from ACPI 6.6 §5.2.9.
+    /// The legacy block fields are ignored entirely in Hardware Reduced mode.
     /// This is metadata validation only; it does not probe or access hardware.
     pub fn validate_register_block_lengths(&self) -> Result<(), AcpiError> {
+        if self.pm_hardware_mode() == PmHardwareMode::HardwareReduced {
+            return self.validate_hardware_mode();
+        }
         self.register_block_lengths.validate()
     }
 
@@ -1007,6 +1011,7 @@ mod tests {
         b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
         let fadt = Fadt::parse(&b).unwrap();
         assert_eq!(fadt.validate_pm_registers(), Ok(()));
+        assert_eq!(fadt.validate_register_block_lengths(), Ok(()));
         assert_eq!(fadt.resolve_pm_register_map().unwrap().pm1a_control, None);
     }
 
