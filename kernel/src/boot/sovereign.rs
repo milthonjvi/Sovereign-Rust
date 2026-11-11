@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_rejects_zero_pages_and_physical_overflow() {
+    fn descriptor_rejects_physical_overflow_and_preserves_zero_page_metadata() {
         let zero_pages = [EfiMemoryDescriptor::new(2, 0x1000, 0, 0, 0)];
         let map = EfiMemoryMap::from_descriptors(&zero_pages);
         assert_eq!(map.descriptor(0), Ok(zero_pages[0]));
