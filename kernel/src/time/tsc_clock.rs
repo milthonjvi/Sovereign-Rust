@@ -45,7 +45,7 @@ impl TscClockSource {
             .checked_mul(1_000_000_000_000)?
             .checked_add(period_fs as u128 - 1)?)
             / period_fs as u128;
-        if target_ticks == 0 || target_ticks > u64::MAX as u128 {
+        if target_ticks == 0 || target_ticks > mask as u128 {
             return None;
         }
 
@@ -71,9 +71,13 @@ impl TscClockSource {
         }
 
         let tsc_before_end = Self::read_tsc();
-        let _hpet_end_sample = hpet.read_counter() & mask;
+        hpet_end = hpet.read_counter() & mask;
+        elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
         let tsc_after_end = Self::read_tsc();
         let tsc_end = midpoint(tsc_before_end, tsc_after_end);
+        if elapsed_hpet as u128 < target_ticks {
+            return None;
+        }
         let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
         if elapsed_tsc == 0 {
             return None;
