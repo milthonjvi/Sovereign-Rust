@@ -198,6 +198,46 @@ impl RedirectionEntry {
     }
 }
 
+/// Minimal indexed-register interface used to test the redirection transaction
+/// without dereferencing real MMIO.
+trait IoApicRegisterAccess {
+    fn read_register(&mut self, register: u8) -> u32;
+    fn write_register(&mut self, register: u8, value: u32);
+}
+
+/// Program a redirection pair without ever changing its destination before
+/// the old route is confirmed masked. Readback is checked before success.
+fn program_redirection_masked(
+    io: &mut impl IoApicRegisterAccess,
+    low_reg: u8,
+    expected_low: u32,
+    expected_high: u32,
+) -> Result<(), IoApicError> {
+    let previous_low = io.read_register(low_reg);
+    io.write_register(low_reg, previous_low | REDIRECTION_MASK);
+    if io.read_register(low_reg) & REDIRECTION_MASK == 0 {
+        io.write_register(low_reg, previous_low | REDIRECTION_MASK);
+        return Err(IoApicError::HardwareRejectedWrite);
+    }
+
+    io.write_register(low_reg + 1, expected_high);
+    io.write_register(low_reg, expected_low);
+
+    let actual_low = io.read_register(low_reg);
+    let actual_high = io.read_register(low_reg + 1);
+    if !redirection_readback_matches(
+        expected_low,
+        expected_high,
+        actual_low,
+        actual_high,
+    ) {
+        io.write_register(low_reg, actual_low | REDIRECTION_MASK);
+        let _ = io.read_register(low_reg);
+        return Err(IoApicError::HardwareRejectedWrite);
+    }
+    Ok(())
+}
+
 /// Return the fixed-size bitmap slot for a hardware redirection index.
 #[inline]
 const fn route_bitmap_slot(index: u32) -> Option<(usize, u64)> {
@@ -384,34 +424,8 @@ impl IoApicController {
         // A failed reconfiguration must never leave a stale route unmaskable.
         self.unmark_route_configured(index);
 
-        let previous_low = self.read_register(low_reg);
-        self.write_register(low_reg, previous_low | REDIRECTION_MASK);
-        if self.read_register(low_reg) & REDIRECTION_MASK == 0 {
-            // Retry the safety-critical mask once before abandoning the route.
-            self.write_register(low_reg, previous_low | REDIRECTION_MASK);
-            return Err(IoApicError::HardwareRejectedWrite);
-        }
-
         let expected_low = entry.low() | REDIRECTION_MASK;
-        self.write_register(low_reg + 1, expected_high);
-        self.write_register(low_reg, expected_low);
-
-        // Read back the programmed fields before making this route eligible
-        // for unmasking. Read-only Delivery Status and Remote-IRR are excluded.
-        let actual_low = self.read_register(low_reg);
-        let actual_high = self.read_register(low_reg + 1);
-        if !redirection_readback_matches(
-            expected_low,
-            expected_high,
-            actual_low,
-            actual_high,
-        ) {
-            // Best-effort fail-safe: leave the source masked and never publish
-            // it in the configured-route bitmap.
-            self.write_register(low_reg, actual_low | REDIRECTION_MASK);
-            let _ = self.read_register(low_reg);
-            return Err(IoApicError::HardwareRejectedWrite);
-        }
+        program_redirection_masked(self, low_reg, expected_low, expected_high)?;
 
         self.mark_route_configured(index);
         Ok(())
@@ -503,6 +517,18 @@ impl IoApicController {
     }
 }
 
+impl IoApicRegisterAccess for IoApicController {
+    #[inline]
+    fn read_register(&mut self, register: u8) -> u32 {
+        IoApicController::read_register(self, register)
+    }
+
+    #[inline]
+    fn write_register(&mut self, register: u8, value: u32) {
+        IoApicController::write_register(self, register, value);
+    }
+}
+
 /// Resolve an ISA IRQ to its GSI and electrical mode using bus-0 MADT
 /// overrides. Overrides for other buses are unrelated and are ignored.
 pub fn resolve_isa_irq(
@@ -534,6 +560,97 @@ pub fn resolve_isa_irq(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FakeIoApicRegisters {
+        registers: [u32; 256],
+        reject_mask_writes: bool,
+        reject_high_writes: bool,
+    }
+
+    impl FakeIoApicRegisters {
+        fn new() -> Self {
+            Self {
+                registers: [0; 256],
+                reject_mask_writes: false,
+                reject_high_writes: false,
+            }
+        }
+    }
+
+    impl IoApicRegisterAccess for FakeIoApicRegisters {
+        fn read_register(&mut self, register: u8) -> u32 {
+            self.registers[register as usize]
+        }
+
+        fn write_register(&mut self, register: u8, value: u32) {
+            if register == REG_REDIRECTION_BASE && self.reject_mask_writes {
+                self.registers[register as usize] = value & !REDIRECTION_MASK;
+            } else if register == REG_REDIRECTION_BASE + 1 && self.reject_high_writes {
+                // Simulate a controller that refuses destination updates.
+            } else {
+                self.registers[register as usize] = value;
+            }
+        }
+    }
+
+    #[test]
+    fn redirection_transaction_masks_before_programming_and_verifies() {
+        let mut io = FakeIoApicRegisters::new();
+        io.registers[REG_REDIRECTION_BASE as usize] = 0x20;
+        let expected_low = 0x41 | REDIRECTION_MASK | REDIRECTION_ACTIVE_LOW;
+        let expected_high = 3 << 24;
+
+        assert_eq!(
+            program_redirection_masked(
+                &mut io,
+                REG_REDIRECTION_BASE,
+                expected_low,
+                expected_high,
+            ),
+            Ok(())
+        );
+        assert_eq!(io.registers[REG_REDIRECTION_BASE as usize], expected_low);
+        assert_eq!(io.registers[(REG_REDIRECTION_BASE + 1) as usize], expected_high);
+    }
+
+    #[test]
+    fn redirection_transaction_aborts_if_old_route_cannot_be_masked() {
+        let mut io = FakeIoApicRegisters::new();
+        io.registers[REG_REDIRECTION_BASE as usize] = 0x20;
+        io.reject_mask_writes = true;
+
+        assert_eq!(
+            program_redirection_masked(
+                &mut io,
+                REG_REDIRECTION_BASE,
+                0x41 | REDIRECTION_MASK,
+                3 << 24,
+            ),
+            Err(IoApicError::HardwareRejectedWrite)
+        );
+        assert_eq!(io.registers[(REG_REDIRECTION_BASE + 1) as usize], 0);
+    }
+
+    #[test]
+    fn redirection_transaction_keeps_route_masked_on_readback_mismatch() {
+        let mut io = FakeIoApicRegisters::new();
+        io.registers[REG_REDIRECTION_BASE as usize] = 0x20;
+        io.reject_high_writes = true;
+
+        assert_eq!(
+            program_redirection_masked(
+                &mut io,
+                REG_REDIRECTION_BASE,
+                0x41 | REDIRECTION_MASK,
+                3 << 24,
+            ),
+            Err(IoApicError::HardwareRejectedWrite)
+        );
+        assert_ne!(
+            io.registers[REG_REDIRECTION_BASE as usize] & REDIRECTION_MASK,
+            0
+        );
+    }
 
     #[test]
     fn decodes_ioapic_id_and_redirection_count_registers() {
