@@ -45,6 +45,7 @@ pub unsafe fn program_bar<A: ConfigAccess>(
     measured_size: BarSize,
 ) -> Result<Bar, BarProgramError> {
     if allocation.address != function.address
+        || measured_size.address != function.address
         || measured_size.index != allocation.bar_index
         || measured_size.size != allocation.size
     {
@@ -195,7 +196,7 @@ mod tests {
             bar_index: 0, kind: BarKind::Memory32, prefetchable: true,
             base: 0x9000_0000, size: 0x1000, end: 0x9000_1000,
         };
-        let size = BarSize { index: 0, size: 0x1000 };
+        let size = BarSize { address: function().address, index: 0, size: 0x1000 };
         let result = unsafe { program_bar(&io, function(), allocation, size) }.unwrap();
         assert_eq!(result.base, 0x9000_0000);
         let registers = io.registers.borrow();
@@ -216,7 +217,7 @@ mod tests {
             bar_index: 0, kind: BarKind::Memory64, prefetchable: false,
             base: 0x1_0000_2000, size: 0x2000, end: 0x1_0000_4000,
         };
-        let size = BarSize { index: 0, size: 0x2000 };
+        let size = BarSize { address: function().address, index: 0, size: 0x2000 };
         let result = unsafe { program_bar(&io, function(), allocation, size) }.unwrap();
         assert_eq!(result.base, allocation.base);
         let registers = io.registers.borrow();
