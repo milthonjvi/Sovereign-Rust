@@ -8,10 +8,9 @@ use crate::drivers::api::{BusAddress, DeviceClass, DeviceInfo, Driver, DriverErr
 use super::device::{
     LinkState, NetworkDevice, NetworkInterfaceInfo, ETHERNET_DEFAULT_MTU,
 };
-use super::dma::{DmaBuffer, DmaBufferError, E1000_RX_BUFFER_MIN_SIZE};
+use super::dma::DmaBuffer;
 use super::e1000::{
     supports_device, RxDescriptor, TxDescriptor, PCI_VENDOR_INTEL,
-    RXD_STATUS_EOP,
 };
 use super::e1000_hw::{
     read_link_state, E1000QueueError, E1000Registers, E1000RxQueue, E1000TxQueue,
@@ -41,6 +40,7 @@ pub struct E1000Device<'a, R: E1000Registers> {
     tx_queue: E1000TxQueue,
     interface: NetworkInterfaceInfo,
     ready: bool,
+    dropping_rx_frame: bool,
 }
 
 impl<'a, R: E1000Registers> E1000Device<'a, R> {
@@ -68,9 +68,14 @@ impl<'a, R: E1000Registers> E1000Device<'a, R> {
         }
         DmaBuffer::validate_rx_pool(rx_buffers)
             .map_err(|_| E1000DeviceError::InvalidBufferPool)?;
-        for buffer in tx_buffers.iter() {
+        for (index, buffer) in tx_buffers.iter().enumerate() {
             if buffer.is_empty() || buffer.len() < E1000_MAX_FRAME_SIZE {
                 return Err(E1000DeviceError::InvalidBufferPool);
+            }
+            for other in tx_buffers.iter().skip(index + 1) {
+                if ranges_overlap(buffer, other)? {
+                    return Err(E1000DeviceError::OverlappingDmaPools);
+                }
             }
         }
         validate_cross_pool_disjoint(rx_buffers, tx_buffers)?;
@@ -90,6 +95,7 @@ impl<'a, R: E1000Registers> E1000Device<'a, R> {
             tx_queue,
             interface,
             ready: false,
+            dropping_rx_frame: false,
         })
     }
 
@@ -168,7 +174,14 @@ impl<R: E1000Registers> NetworkDevice for E1000Device<'_, R> {
             };
 
             let slot = index as usize;
-            let valid = completion.end_of_packet
+            let was_fragmented = self.dropping_rx_frame;
+            if !completion.end_of_packet {
+                self.dropping_rx_frame = true;
+            } else {
+                self.dropping_rx_frame = false;
+            }
+            let valid = !was_fragmented
+                && completion.end_of_packet
                 && completion.errors == 0
                 && completion.length as usize <= self.rx_buffers[slot].len()
                 && completion.length as usize <= E1000_MAX_FRAME_SIZE;
@@ -242,17 +255,24 @@ fn validate_cross_pool_disjoint(
     tx: &[DmaBuffer<'_>],
 ) -> Result<(), E1000DeviceError> {
     for rx_buffer in rx {
-        let rx_start = rx_buffer.dma_address();
-        let rx_end = rx_start.checked_add(rx_buffer.len() as u64)
-            .ok_or(E1000DeviceError::InvalidBufferPool)?;
         for tx_buffer in tx {
-            let tx_start = tx_buffer.dma_address();
-            let tx_end = tx_start.checked_add(tx_buffer.len() as u64)
-                .ok_or(E1000DeviceError::InvalidBufferPool)?;
-            if rx_start < tx_end && tx_start < rx_end {
+            if ranges_overlap(rx_buffer, tx_buffer)? {
                 return Err(E1000DeviceError::OverlappingDmaPools);
             }
         }
     }
     Ok(())
+}
+
+fn ranges_overlap(
+    left: &DmaBuffer<'_>,
+    right: &DmaBuffer<'_>,
+) -> Result<bool, E1000DeviceError> {
+    let left_start = left.dma_address();
+    let left_end = left_start.checked_add(left.len() as u64)
+        .ok_or(E1000DeviceError::InvalidBufferPool)?;
+    let right_start = right.dma_address();
+    let right_end = right_start.checked_add(right.len() as u64)
+        .ok_or(E1000DeviceError::InvalidBufferPool)?;
+    Ok(left_start < right_end && right_start < left_end)
 }
