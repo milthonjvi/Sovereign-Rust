@@ -6,3 +6,4 @@
 
 pub mod boot_map;
 pub mod frame;
+pub mod paging;
