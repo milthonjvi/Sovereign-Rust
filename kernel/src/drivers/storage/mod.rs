@@ -26,3 +26,6 @@ pub use fat::{parse_bpb, probe_fat, FatBpb, FatError, FatKind};
 pub mod fat_read;
 pub use fat::{FatChainValue, FatDirEntry};
 pub use fat_read::{enumerate_directory, read_cluster, read_fat_entry, read_file_data, FatVolume};
+
+pub mod fat_lfn;
+pub use fat_lfn::{consume_lfn_record, short_name_checksum, FatLongName, LfnError};
