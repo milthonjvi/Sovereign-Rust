@@ -7,14 +7,12 @@
 
 use crate::{
     drivers::{
-        api::DriverError,
         timer::pit::{Pit, PitIrqError, take_periodic_work_pending, signal_periodic_work_pending},
     },
 };
 
 use super::{
     deadline::Deadline,
-    hpet_clock::HpetClockSource,
     pit_clock::PitClockSource,
     service::{TimerService, TimerServiceError},
     timer_queue::{TimerEvent, TimerId},
@@ -26,7 +24,6 @@ pub enum PitTimerServiceError {
     Pit(PitIrqError),
     ClockSourceUnavailable,
     Service(TimerServiceError),
-    Hardware(DriverError),
 }
 
 /// BSP timer service driven by periodic legacy PIC IRQ0 ticks.
