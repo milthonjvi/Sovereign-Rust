@@ -115,6 +115,44 @@ impl<'a, const LAYERS: usize, const DIRTY: usize> Compositor<'a, LAYERS, DIRTY> 
         Ok(())
     }
 
+    /// Swap draw order without changing either stable layer handle.
+    pub fn swap_layer_order(&mut self, first: LayerId, second: LayerId) -> Result<(), CompositorError> {
+        if first == second {
+            self.layer(first)?;
+            return Ok(());
+        }
+        let a = *self.layer(first)?;
+        let b = *self.layer(second)?;
+        self.mark_layer_bounds(a.image, a.x, a.y);
+        self.mark_layer_bounds(b.image, b.x, b.y);
+        self.layers.swap(first.0, second.0);
+        Ok(())
+    }
+
+    /// Move a layer to the highest occupied slot, preserving its handle.
+    pub fn raise_layer(&mut self, id: LayerId) -> Result<(), CompositorError> {
+        let layer = *self.layer(id)?;
+        let highest = self.layers.iter().rposition(Option::is_some)
+            .ok_or(CompositorError::InvalidLayer)?;
+        if id.0 != highest {
+            self.mark_layer_bounds(layer.image, layer.x, layer.y);
+            self.layers.swap(id.0, highest);
+        }
+        Ok(())
+    }
+
+    /// Move a layer to the lowest occupied slot, preserving its handle.
+    pub fn lower_layer(&mut self, id: LayerId) -> Result<(), CompositorError> {
+        let layer = *self.layer(id)?;
+        let lowest = self.layers.iter().position(Option::is_some)
+            .ok_or(CompositorError::InvalidLayer)?;
+        if id.0 != lowest {
+            self.mark_layer_bounds(layer.image, layer.x, layer.y);
+            self.layers.swap(id.0, lowest);
+        }
+        Ok(())
+    }
+
     /// Change layer opacity (0 transparent, 255 fully opaque).
     pub fn set_opacity(&mut self, id: LayerId, opacity: u8) -> Result<(), CompositorError> {
         let old = *self.layer(id)?;
