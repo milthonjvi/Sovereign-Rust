@@ -164,3 +164,16 @@ mod retry_tests{
   p.retry().unwrap();assert_eq!(p.phase,PortPhase::Debouncing);
  }
 }
+
+#[cfg(test)]
+mod hub_action_tests{
+ use super::*;
+ #[test]fn maps_port_actions_to_class_requests(){
+  let reset=PortAction::Reset.hub_request(4).unwrap();
+  assert_eq!(reset.request,3);assert_eq!(reset.value,4);assert_eq!(reset.index,4);
+  let clear=PortAction::ClearConnectionChange.hub_request(2).unwrap();
+  assert_eq!(clear.request,1);assert_eq!(clear.value,16);assert_eq!(clear.index,2);
+  assert_eq!(PortAction::BeginEnumeration.hub_request(2),None);
+  assert_eq!(PortAction::PowerOn.hub_request(0),None);
+ }
+}
