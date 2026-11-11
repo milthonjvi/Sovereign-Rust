@@ -88,8 +88,8 @@ mod tests {
 
     #[test]
     fn routes_keyboard_and_mouse_into_one_ordered_stream() {
-        let queue = SpscQueue::<InputEvent, 16>::new();
-        let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&queue, false);
+        let mut queue = SpscQueue::<InputEvent, 16>::new();
+        let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&mut queue, false);
         pipeline.feed(0, 0x1E);
         pipeline.feed(STATUS_AUXILIARY, 0x09);
         pipeline.feed(STATUS_AUXILIARY, 0x04);
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn rejects_corrupt_bytes_and_counts_queue_overflow() {
-        let queue = SpscQueue::<InputEvent, 2>::new();
+        let mut queue = SpscQueue::<InputEvent, 2>::new();
         let (mut pipeline, mut consumer) = Ps2InputPipeline::new(&queue, false);
         pipeline.feed(STATUS_PARITY, 0x1E);
         pipeline.feed(0, 0x1E);
