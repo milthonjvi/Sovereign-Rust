@@ -79,7 +79,7 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
         let is_io = low & 1 != 0;
         let memory_type = (low >> 1) & 0x3;
         let is_64 = !is_io && memory_type == 0x2;
-        if !is_io && memory_type != 0 && memory_type != 0x2 {
+        if !is_io && memory_type == 0x3 {
             operation_error = Some(BarProbeError::InvalidBar);
             break;
         }
@@ -106,13 +106,25 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
 
             let size = if is_io {
                 let mask = mask_low & !0x3;
-                if mask == 0 { None } else { Some((!mask).wrapping_add(1) as u64) }
+                if mask == 0 {
+                    if mask_low & 1 != 0 { Some(1u64 << 32) } else { None }
+                } else { Some((!mask).wrapping_add(1) as u64) }
+            } else if memory_type == 0x1 {
+                let mask = mask_low & 0x000f_fff0;
+                if mask == 0 {
+                    if mask_low & 0x6 == 0x2 { Some(1u64 << 20) } else { None }
+                } else { Some((!(mask as u64) & 0x000f_ffff) + 1) }
             } else if is_64 {
                 let mask = ((mask_high as u64) << 32) | ((mask_low & !0xf) as u64);
-                if mask == 0 { None } else { Some((!mask).wrapping_add(1)) }
+                if mask == 0 {
+                    if mask_low & 0x6 == 0x4 { return Err(BarProbeError::InvalidMask); }
+                    None
+                } else { Some((!mask).wrapping_add(1)) }
             } else {
                 let mask = mask_low & !0xf;
-                if mask == 0 { None } else { Some((!mask).wrapping_add(1) as u64) }
+                if mask == 0 {
+                    if mask_low & 0x8 != 0 { Some(1u64 << 32) } else { None }
+                } else { Some((!mask).wrapping_add(1) as u64) }
             };
             if let Some(value) = size {
                 if value == 0 || !value.is_power_of_two() {
