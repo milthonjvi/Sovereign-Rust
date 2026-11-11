@@ -166,6 +166,13 @@ fn route_bitmap_insert(bitmap: &mut [u64; 2], index: u32) {
     }
 }
 
+#[inline]
+fn route_bitmap_remove(bitmap: &mut [u64; 2], index: u32) {
+    if let Some((word, mask)) = route_bitmap_slot(index) {
+        bitmap[word] &= !mask;
+    }
+}
+
 /// Handle for one mapped I/O APIC register page.
 ///
 /// # Safety
@@ -296,8 +303,16 @@ impl IoApicController {
         let low_reg = REG_REDIRECTION_BASE + (index * 2) as u8;
         // First mask the existing route, then change destination, then publish
         // the new delivery attributes while it is still masked.
+        // Invalidate any previous authorization before touching hardware.
+        // A failed reconfiguration must never leave a stale route unmaskable.
+        self.unmark_route_configured(index);
+
         let previous_low = self.read_register(low_reg);
         self.write_register(low_reg, previous_low | REDIRECTION_MASK);
+        if self.read_register(low_reg) & REDIRECTION_MASK == 0 {
+            return Err(IoApicError::HardwareRejectedWrite);
+        }
+
         let expected_low = entry.low() | REDIRECTION_MASK;
         let expected_high = entry.high();
         self.write_register(low_reg + 1, expected_high);
@@ -357,8 +372,16 @@ impl IoApicController {
         route_bitmap_insert(&mut self.configured_entries, index);
     }
 
+    #[inline]
+    fn unmark_route_configured(&mut self, index: u32) {
+        route_bitmap_remove(&mut self.configured_entries, index);
+    }
+
     /// Mask every redirection entry and verify the hardware accepted each mask.
     pub fn mask_all(&mut self) -> Result<(), IoApicError> {
+        // Require every route to be explicitly configured again before it can
+        // be unmasked after a controller-wide shutdown.
+        self.configured_entries = [0; 2];
         for index in 0..self.redirection_count {
             let register = REG_REDIRECTION_BASE + (index * 2) as u8;
             let low = self.read_register(register);
@@ -467,6 +490,9 @@ mod tests {
         }
         assert_eq!(configured[0], (1u64 << 0) | (1u64 << 63));
         assert_eq!(configured[1], (1u64 << 0) | (1u64 << 55));
+        route_bitmap_remove(&mut configured, 64);
+        assert!(!route_bitmap_contains(&configured, 64));
+        assert!(route_bitmap_contains(&configured, 119));
         assert_eq!(route_bitmap_slot(MAX_REDIRECTION_ENTRIES), None);
         assert!(!route_bitmap_contains(&configured, MAX_REDIRECTION_ENTRIES));
     }
