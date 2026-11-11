@@ -8,6 +8,37 @@ use super::info::FramebufferError;
 use super::surface::FramebufferSurface;
 
 
+/// Preflight the greatest visible scanline offset for an edge. Since the
+/// intersection numerator is linear in the non-negative offset, checking its
+/// maximum magnitude before rasterization prevents arithmetic errors after
+/// earlier rows have already been modified.
+fn validate_edge_range(
+    lower: (i64, i64),
+    upper: (i64, i64),
+    first_y: i64,
+    last_y: i64,
+) -> Result<(), FramebufferError> {
+    if lower.1 == upper.1 || first_y > last_y {
+        return Ok(());
+    }
+    let start_y = first_y.max(lower.1);
+    let end_y = last_y.min(upper.1.saturating_sub(1));
+    if start_y > end_y {
+        return Ok(());
+    }
+    let dx = (upper.0 as i128).checked_sub(lower.0 as i128)
+        .ok_or(FramebufferError::SizeOverflow)?;
+    let dy = (upper.1 as i128).checked_sub(lower.1 as i128)
+        .ok_or(FramebufferError::SizeOverflow)?;
+    let offset = (end_y as i128).checked_sub(lower.1 as i128)
+        .ok_or(FramebufferError::SizeOverflow)?;
+    let numerator = offset.checked_mul(dx)
+        .ok_or(FramebufferError::SizeOverflow)?;
+    (lower.0 as i128).checked_add(numerator.div_euclid(dy))
+        .ok_or(FramebufferError::SizeOverflow)?;
+    Ok(())
+}
+
 /// One exact scanline intersection. The private representation keeps the
 /// integer floor and fractional remainder paired during sorting.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -64,6 +95,15 @@ pub fn fill_polygon(
     let clip_right = max_x.min(info.width.saturating_sub(1) as i64) as i128;
     if first_y > last_y || clip_left > clip_right {
         return Ok(());
+    }
+
+    // Validate every edge before the first write so malformed/extreme geometry
+    // cannot leave a partially rendered polygon on arithmetic failure.
+    for index in 0..vertices.len() {
+        let start = vertices[index];
+        let end = vertices[(index + 1) % vertices.len()];
+        let (lower, upper) = if start.1 <= end.1 { (start, end) } else { (end, start) };
+        validate_edge_range(lower, upper, first_y, last_y)?;
     }
 
     for y in first_y..=last_y {
@@ -174,6 +214,10 @@ pub fn fill_triangle(
     }
 
     let edges = [(a, b), (b, c), (c, a)];
+    for (start, end) in edges {
+        let (lower, upper) = if start.1 <= end.1 { (start, end) } else { (end, start) };
+        validate_edge_range(lower, upper, min_y, max_y)?;
+    }
     let mut intersections = [0i128; 3];
     let mut fractional = [false; 3];
 
