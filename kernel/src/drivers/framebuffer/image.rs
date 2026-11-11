@@ -122,11 +122,12 @@ impl<'a> ImageView<'a> {
         for target_y in visible_top..visible_bottom {
             let source_y = (target_y as i128 - destination_y as i128) as usize;
             let source_row = source_y * self.stride;
-            for target_x in visible_left..visible_right {
-                let source_x = (target_x as i128 - destination_x as i128) as usize;
+            let source_start_x = (visible_left as i128 - destination_x as i128) as usize;
+            let source_end_x = source_start_x + (visible_right - visible_left);
+            for (column, source_x) in (source_start_x..source_end_x).enumerate() {
                 let mut color = self.pixels[source_row + source_x];
                 color.alpha = ((color.alpha as u16 * opacity as u16 + 127) / 255) as u8;
-                target.blend_pixel(target_x, target_y, color)?;
+                target.blend_pixel(visible_left + column, target_y, color)?;
             }
         }
         Ok(())
