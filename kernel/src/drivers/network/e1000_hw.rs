@@ -203,16 +203,20 @@ impl E1000TxQueue {
             return Err(E1000QueueError::InvalidFrameLength);
         }
         let index = self.cursor.index() as usize;
-        if self.pending as usize >= descriptors.len() - 1 || descriptors[index].status & TXD_STATUS_DD == 0 {
+        // SAFETY: the caller keeps this DMA ring pinned and exclusively owned by this queue.
+        let current = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+        if self.pending as usize >= descriptors.len() - 1 || current.status & TXD_STATUS_DD == 0 {
             return Err(E1000QueueError::TxRingFull);
         }
         let descriptor = super::e1000_descriptor::TxDescriptor::for_frame(buffer_dma, length)
             .map_err(|_| E1000QueueError::InvalidFrameLength)?;
-        descriptors[index] = descriptor;
+        // SAFETY: this descriptor belongs to the pinned DMA ring supplied by the caller.
+        unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(index), descriptor); }
         registers.dma_write_barrier();
         let next = (index + 1) & (descriptors.len() - 1);
         if let Err(error) = registers.write32(REG_TDT, next as u32) {
-            descriptors[index].status = TXD_STATUS_DD;
+            // SAFETY: restore the descriptor before returning ownership to the caller.
+            unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(index), current); }
             return Err(E1000QueueError::Register(error));
         }
         self.cursor.advance();
@@ -289,7 +293,9 @@ impl E1000RxQueue {
         }
         let index = self.cursor.index() as usize;
         registers.dma_read_barrier();
-        let Some(completion) = descriptors[index].completion() else {
+        // SAFETY: volatile read observes descriptor write-back performed by the NIC.
+        let descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(index)) };
+        let Some(completion) = descriptor.completion() else {
             return Ok(None);
         };
         self.cursor.advance();
@@ -311,11 +317,15 @@ impl E1000RxQueue {
             return Err(E1000QueueError::InvalidRing);
         }
         let slot = index as usize;
-        let completed_descriptor = descriptors[slot];
-        descriptors[slot] = RxDescriptor::for_buffer(completed_descriptor.buffer_address);
+        // SAFETY: this slot is pinned DMA memory and is CPU-owned until recycled.
+        let completed_descriptor = unsafe { core::ptr::read_volatile(descriptors.as_ptr().add(slot)) };
+        let rearmed = RxDescriptor::for_buffer(completed_descriptor.buffer_address);
+        // SAFETY: write the reset descriptor before advancing the hardware tail.
+        unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(slot), rearmed); }
         registers.dma_write_barrier();
         if let Err(error) = registers.write32(REG_RDT, index as u32) {
-            descriptors[slot] = completed_descriptor;
+            // SAFETY: restore the completed descriptor because hardware did not accept the tail update.
+            unsafe { core::ptr::write_volatile(descriptors.as_mut_ptr().add(slot), completed_descriptor); }
             return Err(E1000QueueError::Register(error));
         }
         self.recycle.advance();
