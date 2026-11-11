@@ -266,7 +266,8 @@ impl Fadt {
     }
 
     /// Validate the complete PM register metadata without accessing hardware.
-    /// Extended GAS widths must describe the byte lengths declared by the FADT.
+    /// PM2 is an 8-bit register; GPE GAS width/offset/access-size are ignored
+    /// per ACPI, while other extended blocks are checked against their lengths.
     pub fn validate_pm_registers(&self) -> Result<(), AcpiError> {
         // ACPI requires OSPM to ignore the legacy fixed-register interface
         // entirely when HW_REDUCED_ACPI is set.
