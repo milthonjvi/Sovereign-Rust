@@ -292,9 +292,6 @@ pub extern "efiapi" fn efi_main(
                 Some(end) => end,
                 None => return EFI_COMPROMISED_DATA,
             };
-            let contains_rsdp = rsdp_range
-                .map(|(start, end)| start < page_end && page < end)
-                .unwrap_or(false);
             let permissions = if descriptor.memory_type == 9 {
                 PagePermissions::KERNEL_READ_ONLY
             } else {
