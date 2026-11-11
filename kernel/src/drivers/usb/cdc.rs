@@ -163,3 +163,58 @@ mod tests{
   assert_eq!(d.data_interface,Some(1));assert_eq!(d.capabilities,2);
  }
 }
+
+
+use super::{control::execute_control,controller::{HostController,TransferStatus},transfer::DeviceAddress};
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct CdcTransferReport{pub bytes_transferred:usize,pub short_packet:bool}
+pub struct CdcAcmPort{pub address:DeviceAddress,pub interface:CdcAcmInterface}
+impl CdcAcmPort{
+ pub const fn new(address:DeviceAddress,interface:CdcAcmInterface)->Self{Self{address,interface}}
+ pub fn set_line_coding<C:HostController>(&self,controller:&mut C,coding:CdcLineCoding)->Result<(),UsbError>{
+  let mut bytes=coding.encode()?;
+  let report=execute_control(controller,self.address,set_line_coding(self.interface.control_interface),&mut bytes)?;
+  if report.bytes_transferred!=7{return Err(UsbError::TransferFailed)}Ok(())
+ }
+ pub fn get_line_coding<C:HostController>(&self,controller:&mut C)->Result<CdcLineCoding,UsbError>{
+  let mut bytes=[0u8;7];
+  let report=execute_control(controller,self.address,get_line_coding(self.interface.control_interface),&mut bytes)?;
+  if report.bytes_transferred!=7{return Err(UsbError::TransferFailed)}
+  CdcLineCoding::parse(&bytes)
+ }
+ pub fn set_control_lines<C:HostController>(&self,controller:&mut C,dtr:bool,rts:bool)->Result<(),UsbError>{
+  let mut empty=[];
+  execute_control(controller,self.address,set_control_line_state(self.interface.control_interface,dtr,rts),&mut empty)?;
+  Ok(())
+ }
+ pub fn send_break<C:HostController>(&self,controller:&mut C,duration_ms:u16)->Result<(),UsbError>{
+  let mut empty=[];
+  execute_control(controller,self.address,send_break(self.interface.control_interface,duration_ms),&mut empty)?;
+  Ok(())
+ }
+ pub fn read<C:HostController>(&self,controller:&mut C,buffer:&mut[u8])->Result<CdcTransferReport,UsbError>{
+  let result=controller.bulk_transfer(self.address,self.interface.bulk_in,buffer)?;
+  match result.status{
+   TransferStatus::Success=>{},
+   TransferStatus::TimedOut=>return Err(UsbError::Timeout),
+   TransferStatus::NoDevice=>return Err(UsbError::ControllerUnavailable),
+   TransferStatus::Stall=>return Err(UsbError::Unsupported),
+   TransferStatus::Pending|TransferStatus::ControllerError=>return Err(UsbError::TransferFailed),
+  }
+  if result.bytes_transferred>buffer.len(){return Err(UsbError::TransferFailed)}
+  Ok(CdcTransferReport{bytes_transferred:result.bytes_transferred,short_packet:result.bytes_transferred<buffer.len()})
+ }
+ pub fn write<C:HostController>(&self,controller:&mut C,buffer:&mut[u8])->Result<CdcTransferReport,UsbError>{
+  let result=controller.bulk_transfer(self.address,self.interface.bulk_out,buffer)?;
+  match result.status{
+   TransferStatus::Success=>{},
+   TransferStatus::TimedOut=>return Err(UsbError::Timeout),
+   TransferStatus::NoDevice=>return Err(UsbError::ControllerUnavailable),
+   TransferStatus::Stall=>return Err(UsbError::Unsupported),
+   TransferStatus::Pending|TransferStatus::ControllerError=>return Err(UsbError::TransferFailed),
+  }
+  if result.bytes_transferred>buffer.len(){return Err(UsbError::TransferFailed)}
+  if result.bytes_transferred!=buffer.len(){return Err(UsbError::TransferFailed)}
+  Ok(CdcTransferReport{bytes_transferred:result.bytes_transferred,short_packet:false})
+ }
+}
