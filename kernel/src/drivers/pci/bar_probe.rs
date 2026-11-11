@@ -159,3 +159,88 @@ pub unsafe fn probe_bar_sizes<A: ConfigAccess>(
     out[..count].copy_from_slice(&measured[..count]);
     Ok(measured[..count].iter().filter(|entry| entry.is_some()).count())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::cell::RefCell;
+    use super::super::config::{PciAddress, PciIdentity};
+
+    struct MockConfig {
+        registers: RefCell<[u32; 64]>,
+        masks: [u32; MAX_BAR_REGISTERS],
+    }
+
+    impl ConfigAccess for MockConfig {
+        fn read_u32(&self, _address: PciAddress, register: u16) -> Result<u32, ConfigError> {
+            let slot = (register / 4) as usize;
+            let value = self.registers.borrow()[slot];
+            if (BAR0..BAR0 + 24).contains(&register) && value == u32::MAX {
+                Ok(self.masks[((register - BAR0) / 4) as usize])
+            } else {
+                Ok(value)
+            }
+        }
+
+        fn write_u32(&self, _address: PciAddress, register: u16, value: u32) -> Result<(), ConfigError> {
+            let slot = (register / 4) as usize;
+            let mut registers = self.registers.borrow_mut();
+            if register == COMMAND_STATUS {
+                let old_status = registers[slot] >> 16;
+                let status = old_status & !(value >> 16);
+                registers[slot] = (status << 16) | (value & 0xffff);
+            } else {
+                registers[slot] = value;
+            }
+            Ok(())
+        }
+    }
+
+    fn function() -> PciFunction {
+        PciFunction {
+            address: PciAddress { segment: 0, bus: 0, device: 1, function: 0 },
+            identity: PciIdentity {
+                vendor_id: 0x1234, device_id: 0x5678, command: 7, status: 0,
+                revision: 0, programming_interface: 0, subclass: 0, class_code: 0,
+                header_type: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn sizes_32_bit_bar_and_restores_command_and_status() {
+        let mut registers = [0u32; 64];
+        registers[1] = (0xa55a << 16) | 0x0007;
+        registers[4] = 0x8000_0000;
+        let mock = MockConfig { registers: RefCell::new(registers), masks: [0xffff_f000, 0, 0, 0, 0, 0] };
+        let mut sizes = [None; MAX_BAR_REGISTERS];
+        let count = unsafe { probe_bar_sizes(&mock, function(), &mut sizes) }.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(sizes[0], Some(BarSize { index: 0, size: 0x1000 }));
+        let restored = mock.registers.borrow();
+        assert_eq!(restored[4], 0x8000_0000);
+        assert_eq!(restored[1] as u16, 0x0007);
+        assert_eq!(restored[1] >> 16, 0xa55a);
+    }
+
+    #[test]
+    fn sizes_64_bit_bar_as_one_resource_and_restores_both_halves() {
+        let mut registers = [0u32; 64];
+        registers[1] = 0x0003;
+        registers[4] = 0x0000_0004;
+        registers[5] = 0x0000_0001;
+        let mock = MockConfig {
+            registers: RefCell::new(registers),
+            masks: [0xffff_e004, 0xffff_ffff, 0, 0, 0, 0],
+        };
+        let mut sizes = [None; MAX_BAR_REGISTERS];
+        let count = unsafe { probe_bar_sizes(&mock, function(), &mut sizes) }.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(sizes[0], Some(BarSize { index: 0, size: 0x2000 }));
+        assert_eq!(sizes[1], None);
+        let restored = mock.registers.borrow();
+        assert_eq!(restored[4], 0x4);
+        assert_eq!(restored[5], 0x1);
+        assert_eq!(restored[1] as u16, 0x3);
+    }
+}
