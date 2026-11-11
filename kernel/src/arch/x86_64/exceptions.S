@@ -370,6 +370,8 @@ sovereign_exception_common:
     push r14
     push r15
 
+    # Rust's x86-64 ABI requires the direction flag to be clear.
+    cld
     mov rdi, rsp
     and rsp, -16
     call sovereign_exception_dispatch
