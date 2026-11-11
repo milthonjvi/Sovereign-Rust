@@ -147,6 +147,8 @@ impl HidInterruptEndpoint{
    ||parsed.max_packet_size==0||parsed.interval==0{
    return Err(UsbError::MalformedDescriptor)
   }
+  let is_superspeed=speed==super::transfer::UsbSpeed::Super||speed==super::transfer::UsbSpeed::SuperPlus;
+  if is_superspeed!=parsed.has_ss_companion{return Err(UsbError::MalformedDescriptor)}
   let service_interval=match speed{
    super::transfer::UsbSpeed::Low=>{
     if parsed.interval<10||parsed.max_packet_size>8||parsed.transactions_per_microframe!=1{
@@ -284,6 +286,12 @@ mod tests{
   let high=HidInterruptEndpoint::from_parsed(parsed,super::super::transfer::UsbSpeed::High).unwrap();
   assert_eq!(high.service_interval,HidServiceInterval::Microframes(8));
   assert_eq!(high.transactions_per_interval,2);
+ }
+ #[test]fn rejects_companion_metadata_at_non_superspeed_rates(){
+  let parsed=ParsedEndpoint{address:0x81,attributes:3,max_packet_size:64,interval:3,
+   transactions_per_microframe:1,max_burst:0,companion_attributes:0,bytes_per_interval:64,
+   has_ss_companion:true};
+  assert!(HidInterruptEndpoint::from_parsed(parsed,super::super::transfer::UsbSpeed::High).is_err());
  }
  #[test]fn requires_superspeed_companion_and_uses_its_interval_payload(){
   let parsed=ParsedEndpoint{address:0x81,attributes:3,max_packet_size:64,interval:3,
