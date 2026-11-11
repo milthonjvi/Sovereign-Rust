@@ -159,6 +159,11 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         unsafe { self.timer.arm(absolute_tsc) }
     }
 
+    /// Next absolute deadline currently queued for this CPU.
+    pub fn next_deadline(&self) -> Option<Deadline> {
+        self.service.next_deadline()
+    }
+
     /// Access the underlying service for read-only diagnostics.
     pub fn pending(&self) -> usize {
         self.service.pending()
