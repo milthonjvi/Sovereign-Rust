@@ -381,3 +381,11 @@ sovereign_exception_common:
     hlt
     jmp .Lexception_halt
 .size sovereign_exception_common, .-sovereign_exception_common
+
+# APIC spurious vector: no EOI is sent for this vector by architectural design.
+# The interrupt gate already saved RIP, CS and RFLAGS; IRETQ restores them.
+.global sovereign_apic_spurious_stub
+.type sovereign_apic_spurious_stub, @function
+sovereign_apic_spurious_stub:
+    iretq
+.size sovereign_apic_spurious_stub, .-sovereign_apic_spurious_stub
