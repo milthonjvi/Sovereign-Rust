@@ -95,10 +95,7 @@ impl<const N: usize> TimerQueue<N> {
         if self.len == 0 { None } else { Some(self.heap[0].unwrap().event.deadline) }
     }
 
-    /// Remove a queued event by ID. O(N) lookup plus O(log N) heap repair.
-    pub fn cancel(&mut self, id: TimerId) -> Option<TimerEvent> {
-        let index = self.heap[..self.len].iter().position(|slot|
-            slot.map(|node| node.event.id == id).unwrap_or(false))?;
+    fn remove_at(&mut self, index: usize) -> TimerEvent {
         let removed = self.heap[index].take().unwrap().event;
         self.len -= 1;
         if index != self.len {
@@ -109,14 +106,21 @@ impl<const N: usize> TimerQueue<N> {
                 self.sift_down(index);
             }
         }
-        Some(removed)
+        removed
     }
 
-    /// Pop the earliest event only if its deadline has expired.
+    /// Remove a queued event by ID. O(N) lookup plus O(log N) heap repair.
+    pub fn cancel(&mut self, id: TimerId) -> Option<TimerEvent> {
+        let index = self.heap[..self.len].iter().position(|slot|
+            slot.map(|node| node.event.id == id).unwrap_or(false))?;
+        Some(self.remove_at(index))
+    }
+
+    /// Pop the earliest event only if expired. The hot path is O(log N).
     pub fn pop_expired(&mut self, now_ns: u64) -> Option<TimerEvent> {
         let event = self.heap.get(0).and_then(|slot| *slot)?.event;
         if !event.deadline.is_expired(now_ns) { return None; }
-        self.cancel(event.id)
+        Some(self.remove_at(0))
     }
 
     /// Remove every event. Returns the number discarded.
