@@ -88,7 +88,7 @@ pub fn fill_triangle(
 
         // Pixel centers are integer sample positions: ceil the left edge and
         // floor the right edge so fractional intersections never overdraw.
-        let left_edge = intersections[0] + i128::from(fractional[0]);
+        let left_edge = intersections[0] + if fractional[0] { 1 } else { 0 };
         let left = left_edge.max(min_x as i128);
         let right = intersections[count - 1].min(max_x as i128);
         if left > right {
