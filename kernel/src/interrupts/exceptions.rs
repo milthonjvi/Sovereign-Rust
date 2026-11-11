@@ -8,6 +8,7 @@ core::arch::global_asm!(include_str!("../arch/x86_64/exceptions.S"));
 
 unsafe extern "C" {
     static sovereign_exception_stub_table: [u64; 256];
+    static sovereign_apic_spurious_stub: u8;
 }
 
 /// Register snapshot and processor frame captured on exception entry.
@@ -107,6 +108,13 @@ pub unsafe fn install_exception_gates(idt: &mut Idt) -> Result<(), IdtError> {
         let entry = IdtEntry::new(handler, selector, ist, INTERRUPT_GATE, 0)?;
         idt.set_gate(vector as u8, entry);
     }
+
+    // APIC spurious interrupts are not CPU exceptions and must return without
+    // sending EOI. A minimal IRETQ-only stub preserves every GPR and SIMD state.
+    // SAFETY: The assembly symbol is a valid same-privilege interrupt entry.
+    let spurious = unsafe { core::ptr::addr_of!(sovereign_apic_spurious_stub) as u64 };
+    let entry = IdtEntry::new(spurious, selector, 0, INTERRUPT_GATE, 0)?;
+    idt.set_gate(0xFF, entry);
     Ok(())
 }
 
