@@ -379,6 +379,16 @@ impl X2ApicTimer {
         apic.timer_current_count()
     }
 
+    /// Disarm the countdown while keeping the LVT unmasked for later arms.
+    ///
+    /// # Safety
+    /// Must execute on the owning CPU at CPL 0.
+    pub unsafe fn disarm(&mut self) -> Result<(), DriverError> {
+        // SAFETY: Caller guarantees this CPU's x2APIC is enabled.
+        let mut apic = unsafe { X2Apic::new() };
+        apic.disarm_one_shot_timer().map_err(map_x2apic_error)
+    }
+
     /// Stop the countdown and mask its LVT source.
     ///
     /// # Safety
