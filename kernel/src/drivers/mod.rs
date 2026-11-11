@@ -8,6 +8,7 @@ pub mod acpi;
 pub mod framebuffer;
 pub mod input;
 pub mod ioapic;
+pub mod ioapic_topology;
 pub mod network;
 pub mod pci;
 pub mod serial;
