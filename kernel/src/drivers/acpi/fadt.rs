@@ -210,23 +210,34 @@ impl Fadt {
         self.validate_pm_registers()?;
         let ext = self.extended_pm_registers;
         let choose = |gas: Option<GenericAddress>, legacy: u32, length: u8|
-            -> Option<PmRegisterAddress> {
-            if let Some(gas) = gas.filter(|g| g.is_present()) { Some(PmRegisterAddress::Gas(gas)) }
-            else if legacy != 0 && length != 0 { Some(PmRegisterAddress::SystemIo(legacy)) }
-            else { None }
+            -> Result<Option<PmRegisterAddress>, AcpiError> {
+            if let Some(gas) = gas.filter(|g| g.is_present()) {
+                return Ok(Some(PmRegisterAddress::Gas(gas)));
+            }
+            if legacy == 0 || length == 0 {
+                return Ok(None);
+            }
+
+            // This kernel targets x86_64, whose processor I/O-port space is
+            // 16-bit. Validate the complete block before exposing its base.
+            let end = legacy.checked_add(length as u32).ok_or(AcpiError::UnsupportedAddress)?;
+            if legacy > u16::MAX as u32 || end > 0x1_0000 {
+                return Err(AcpiError::UnsupportedAddress);
+            }
+            Ok(Some(PmRegisterAddress::SystemIo(legacy)))
         };
         let get = |f: fn(&ExtendedPmRegisters) -> GenericAddress| ext.map(f);
         let l = self.register_block_lengths;
         let r = self.legacy_pm_registers;
         Ok(PmRegisterMap { mode,
-            pm1a_event: choose(get(|x| x.pm1a_event), r.pm1a_event, l.pm1_event),
-            pm1b_event: choose(get(|x| x.pm1b_event), r.pm1b_event, l.pm1_event),
-            pm1a_control: choose(get(|x| x.pm1a_control), r.pm1a_control, l.pm1_control),
-            pm1b_control: choose(get(|x| x.pm1b_control), r.pm1b_control, l.pm1_control),
-            pm2_control: choose(get(|x| x.pm2_control), r.pm2_control, l.pm2_control),
-            pm_timer: choose(get(|x| x.pm_timer), r.pm_timer, l.pm_timer),
-            gpe0: choose(get(|x| x.gpe0), r.gpe0, l.gpe0),
-            gpe1: choose(get(|x| x.gpe1), r.gpe1, l.gpe1),
+            pm1a_event: choose(get(|x| x.pm1a_event), r.pm1a_event, l.pm1_event)?,
+            pm1b_event: choose(get(|x| x.pm1b_event), r.pm1b_event, l.pm1_event)?,
+            pm1a_control: choose(get(|x| x.pm1a_control), r.pm1a_control, l.pm1_control)?,
+            pm1b_control: choose(get(|x| x.pm1b_control), r.pm1b_control, l.pm1_control)?,
+            pm2_control: choose(get(|x| x.pm2_control), r.pm2_control, l.pm2_control)?,
+            pm_timer: choose(get(|x| x.pm_timer), r.pm_timer, l.pm_timer)?,
+            gpe0: choose(get(|x| x.gpe0), r.gpe0, l.gpe0)?,
+            gpe1: choose(get(|x| x.gpe1), r.gpe1, l.gpe1)?,
         })
     }
 
@@ -654,6 +665,33 @@ mod tests {
         b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
         let map = Fadt::parse(&b).unwrap().resolve_pm_register_map().unwrap();
         assert_eq!(map.pm1a_control, Some(PmRegisterAddress::SystemIo(0x404)));
+    }
+
+    #[test]
+    fn rejects_legacy_io_blocks_outside_the_x86_port_space() {
+        for (base, length) in [(0x1_0000u32, 2u8), (0xFFFF, 2)] {
+            let mut b = make_fadt(244, 0, None, None);
+            b[64..68].copy_from_slice(&base.to_le_bytes());
+            b[89] = length;
+            b[9] = 0;
+            b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+            let fadt = Fadt::parse(&b).unwrap();
+            assert_eq!(
+                fadt.resolve_pm_register_map(),
+                Err(AcpiError::UnsupportedAddress),
+            );
+        }
+
+        let mut b = make_fadt(244, 0, None, None);
+        b[64..68].copy_from_slice(&0xFFFEu32.to_le_bytes());
+        b[89] = 2;
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(
+            fadt.resolve_pm_register_map().unwrap().pm1a_control,
+            Some(PmRegisterAddress::SystemIo(0xFFFE)),
+        );
     }
 
     #[test]
