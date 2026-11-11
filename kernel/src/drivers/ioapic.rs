@@ -62,6 +62,8 @@ pub enum IoApicError {
     InvalidRedirectionCount,
     GsiRangeOverflow,
     DestinationIdOutOfRange,
+    InterruptHandlerNotRegistered,
+    LocalApicUnavailable,
 }
 
 /// Decoded ACPI interrupt electrical configuration.
@@ -401,11 +403,22 @@ impl IoApicController {
     /// Enable delivery for a route that was configured through this controller.
     ///
     /// # Safety
-    /// The caller must have registered a valid interrupt handler for the route's
-    /// vector, initialized the destination local APIC, and ensured the target
-    /// CPU can receive this vector. The handler must remain valid for the
-    /// lifetime of the unmasked route.
+    /// The caller must have initialized the destination local APIC and
+    /// ensured the target CPU can receive this vector. The method verifies that
+    /// bootstrap APIC initialization and a vector handler registration exist,
+    /// but the caller must serialize against handler removal and keep the
+    /// handler valid for the lifetime of the unmasked route.
     pub unsafe fn unmask(&mut self, gsi: u32) -> Result<(), IoApicError> {
+        let state = self.read_redirection_state(gsi)?;
+        if !crate::interrupts::init::is_initialized()
+            || crate::interrupts::init::local_apic_mode()
+                != crate::interrupts::init::LocalApicMode::X2Apic
+        {
+            return Err(IoApicError::LocalApicUnavailable);
+        }
+        if !crate::interrupts::dispatch::is_registered(state.vector) {
+            return Err(IoApicError::InterruptHandlerNotRegistered);
+        }
         self.set_masked_internal(gsi, false)
     }
 
