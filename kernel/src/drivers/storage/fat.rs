@@ -77,11 +77,12 @@ pub fn parse_bpb(sector: &[u8], device_block_size: u32) -> Result<FatBpb, FatErr
         let root = le32(sector, 44) & 0x0FFF_FFFF;
         let fs = le16(sector, 48);
         let bk = le16(sector, 50);
-        if root < 2 || root >= clusters + 2 || fs == 0xFFFF || bk == 0xFFFF
-            || (fs != 0 && fs >= reserved) || (bk != 0 && bk >= reserved) {
+        if root < 2 || root >= clusters + 2
+            || (fs != 0 && fs != 0xFFFF && fs >= reserved)
+            || (bk != 0 && bk != 0xFFFF && bk >= reserved) {
             return Err(FatError::InvalidFat32Metadata);
         }
-        (Some(root), if fs == 0 { None } else { Some(fs) }, if bk == 0 { None } else { Some(bk) }, le32(sector, 67), mirroring, active_fat)
+        (Some(root), if fs == 0 || fs == 0xFFFF { None } else { Some(fs) }, if bk == 0 || bk == 0xFFFF { None } else { Some(bk) }, le32(sector, 67), mirroring, active_fat)
     } else { (None, None, None, le32(sector, 39), true, 0) };
     Ok(FatBpb { kind, bytes_per_sector: bps, sectors_per_cluster: spc,
         reserved_sectors: reserved, fat_count: fats, root_entry_count: root_entries,
