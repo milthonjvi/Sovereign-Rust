@@ -357,6 +357,13 @@ mod tests {
     }
 
     #[test]
+    fn fifo_capability_starts_as_undetected() {
+        // SAFETY: Construction does not access hardware.
+        let uart = unsafe { Uart16550::new(0x3F8, UartConfig::default()) };
+        assert_eq!(uart.fifo_capability(), UartFifo::None);
+    }
+
+    #[test]
     fn validates_ports_baud_and_frame_format() {
         // SAFETY: Validation does not access hardware.
         let bad_port = unsafe { Uart16550::new(0x1234, UartConfig::default()) };
