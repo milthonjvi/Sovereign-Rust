@@ -38,6 +38,7 @@ impl PeImageSection {
 pub struct PeImageLayout {
     pub headers_size: u64,
     pub image_size: u64,
+    pub entry_point_rva: u64,
     pub sections: [PeImageSection; MAX_SECTIONS],
     pub section_count: usize,
 }
@@ -75,12 +76,14 @@ pub unsafe fn inspect_loaded_image(
     if read_u16(base, image_size, optional)? != PE32_PLUS_MAGIC {
         return Err(PeImageError::UnsupportedImage);
     }
+    let entry_point_rva = read_u32(base, image_size, optional + 16)? as u64;
     let section_alignment = read_u32(base, image_size, optional + 32)? as u64;
     let size_of_image = read_u32(base, image_size, optional + 56)? as u64;
     let size_of_headers = read_u32(base, image_size, optional + 60)? as u64;
     if section_alignment < PAGE_SIZE || !section_alignment.is_power_of_two()
         || size_of_image == 0 || size_of_image > image_size
         || size_of_headers == 0 || size_of_headers > size_of_image
+        || entry_point_rva == 0 || entry_point_rva >= size_of_image
     {
         return Err(PeImageError::InvalidAlignment);
     }
@@ -92,6 +95,8 @@ pub unsafe fn inspect_loaded_image(
 
     let mut sections = [PeImageSection::EMPTY; MAX_SECTIONS];
     let mut count = 0usize;
+    let mut entry_is_executable = false;
+    let header_page_end = align_up(size_of_headers).ok_or(PeImageError::OutOfBounds)?;
     for index in 0..section_count {
         let header = optional_end + (index as u64) * 40;
         let virtual_size = read_u32(base, image_size, header + 8)? as u64;
@@ -117,6 +122,10 @@ pub unsafe fn inspect_loaded_image(
         };
         let page_start = relative_address & !(PAGE_SIZE - 1);
         let page_end = align_up(end).ok_or(PeImageError::OutOfBounds)?;
+        if page_start < header_page_end { return Err(PeImageError::OverlappingSections); }
+        if executable && entry_point_rva >= relative_address && entry_point_rva < end {
+            entry_is_executable = true;
+        }
         for previous in sections.iter().take(count) {
             let previous_start = previous.relative_address & !(PAGE_SIZE - 1);
             let previous_end = align_up(previous.relative_address + previous.size)
@@ -128,10 +137,11 @@ pub unsafe fn inspect_loaded_image(
         sections[count] = PeImageSection { relative_address, size, permissions };
         count += 1;
     }
-    if count == 0 { return Err(PeImageError::InvalidImage); }
+    if count == 0 || !entry_is_executable { return Err(PeImageError::InvalidImage); }
     Ok(PeImageLayout {
         headers_size: size_of_headers,
         image_size: size_of_image,
+        entry_point_rva,
         sections,
         section_count: count,
     })
