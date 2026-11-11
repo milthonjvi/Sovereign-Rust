@@ -295,7 +295,7 @@ pub extern "efiapi" fn efi_main(
             let contains_rsdp = rsdp_range
                 .map(|(start, end)| start < page_end && page < end)
                 .unwrap_or(false);
-            let permissions = if contains_rsdp || descriptor.memory_type == 9 {
+            let permissions = if descriptor.memory_type == 9 {
                 PagePermissions::KERNEL_READ_ONLY
             } else {
                 PagePermissions::KERNEL_READ_WRITE
