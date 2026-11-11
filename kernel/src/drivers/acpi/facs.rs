@@ -11,6 +11,7 @@ pub const FACS_MIN_LENGTH: usize = 64;
 pub const FACS_ALIGNMENT: u64 = 64;
 const FLAG_S4_BIOS: u32 = 1 << 0;
 const FLAG_64BIT_WAKE: u32 = 1 << 1;
+const OSPM_FLAG_64BIT_WAKE: u32 = 1 << 0;
 const GLOBAL_LOCK_PENDING: u32 = 1 << 0;
 const GLOBAL_LOCK_OWNED: u32 = 1 << 1;
 
@@ -52,14 +53,17 @@ impl GlobalLock {
 
     /// Calculate one acquire attempt while preserving reserved bits.
     pub const fn acquire_transition(observed: u32) -> GlobalLockAcquire {
-        if observed & GLOBAL_LOCK_OWNED == 0 {
+        // ACPI 6.6 §5.2.10.1: clear a stale pending bit before
+        // attempting ownership; if already owned, set pending again.
+        let without_pending = observed & !GLOBAL_LOCK_PENDING;
+        if without_pending & GLOBAL_LOCK_OWNED == 0 {
             GlobalLockAcquire {
-                updated_word: observed | GLOBAL_LOCK_OWNED,
+                updated_word: without_pending | GLOBAL_LOCK_OWNED,
                 acquired: true,
             }
         } else {
             GlobalLockAcquire {
-                updated_word: observed | GLOBAL_LOCK_PENDING,
+                updated_word: without_pending | GLOBAL_LOCK_PENDING,
                 acquired: false,
             }
         }
@@ -165,21 +169,33 @@ impl Facs {
         self.flags & FLAG_S4_BIOS != 0
     }
 
+    /// Whether firmware supports a 64-bit execution environment for wake.
     pub const fn supports_64bit_wake(&self) -> bool {
         self.flags & FLAG_64BIT_WAKE != 0
+    }
+
+    /// Whether OSPM requests a 64-bit execution environment for the X vector.
+    pub const fn requests_64bit_wake(&self) -> bool {
+        self.ospm_flags & OSPM_FLAG_64BIT_WAKE != 0
+    }
+
+    /// Whether both sides agree to use the 64-bit wake execution environment.
+    pub const fn uses_64bit_wake_environment(&self) -> bool {
+        self.supports_64bit_wake() && self.requests_64bit_wake()
     }
 
     pub const fn has_64bit_waking_vector(&self) -> bool {
         self.x_firmware_waking_vector != 0
     }
 
-    /// Select the waking vector advertised by firmware.
+    /// Select the waking vector using the firmware-defined precedence.
     ///
-    /// The extended vector is selected only when the FACS explicitly advertises
-    /// 64-bit wake support and supplies a nonzero address. This only validates
-    /// metadata; it does not install a trampoline or initiate a power transition.
+    /// Firmware checks X_Firmware_Waking_Vector first whenever it is nonzero;
+    /// 64BIT_WAKE_SUPPORTED_F controls the execution environment, not whether
+    /// the extended address field takes precedence over the legacy field.
+    /// This only selects metadata; it does not install a trampoline or sleep.
     pub const fn waking_vector(&self) -> Option<WakingVector> {
-        if self.supports_64bit_wake() && self.x_firmware_waking_vector != 0 {
+        if self.x_firmware_waking_vector != 0 {
             Some(WakingVector::Extended64(self.x_firmware_waking_vector))
         } else if self.firmware_waking_vector != 0 {
             Some(WakingVector::Legacy32(self.firmware_waking_vector))
@@ -239,12 +255,21 @@ mod tests {
 
 
     #[test]
-    fn selects_extended_waking_vector_only_when_firmware_advertises_support() {
+    fn extended_waking_vector_has_precedence_independent_of_execution_mode() {
         let mut bytes = fixture();
         let facs = Facs::parse(0x4000, &bytes).unwrap();
         assert_eq!(facs.waking_vector(), Some(WakingVector::Extended64(0x1_0000_1000)));
+        assert!(facs.uses_64bit_wake_environment());
 
+        // The X vector still has precedence when firmware only supports the
+        // 32-bit wake environment. The support flag controls execution mode.
         bytes[20..24].copy_from_slice(&FLAG_S4_BIOS.to_le_bytes());
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(facs.waking_vector(), Some(WakingVector::Extended64(0x1_0000_1000)));
+        assert!(!facs.uses_64bit_wake_environment());
+
+        // Without an X vector, firmware falls back to the legacy field.
+        bytes[24..32].copy_from_slice(&0u64.to_le_bytes());
         let facs = Facs::parse(0x4000, &bytes).unwrap();
         assert_eq!(facs.waking_vector(), Some(WakingVector::Legacy32(0x1000)));
     }
@@ -262,6 +287,12 @@ mod tests {
     fn global_lock_acquire_sets_owned_or_pending_and_preserves_reserved_bits() {
         let free = 0x8000_0000;
         let acquired = GlobalLock::acquire_transition(free);
+        assert_eq!(acquired.updated_word, free | GlobalLock::OWNED);
+        assert!(acquired.acquired);
+
+        // A stale pending bit is cleared before a fresh ownership attempt.
+        let stale_pending = free | GlobalLock::PENDING;
+        let acquired = GlobalLock::acquire_transition(stale_pending);
         assert_eq!(acquired.updated_word, free | GlobalLock::OWNED);
         assert!(acquired.acquired);
 
