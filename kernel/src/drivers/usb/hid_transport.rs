@@ -6,8 +6,31 @@
 use super::{
  UsbError,
  descriptors::{ParsedConfiguration,MAX_ENDPOINTS},
- transfer::{Endpoint,EndpointAddress,TransferType},
+ controller::{HostController,TransferStatus},
+ transfer::{DeviceAddress,Endpoint,EndpointAddress,TransferType},
 };
+
+/// Executes one interrupt-IN report transaction without interpreting its payload.
+/// The caller (Input) owns report state, decoding, scheduling cadence and event queues.
+pub fn read_interrupt_report<C:HostController>(
+ controller:&mut C,address:DeviceAddress,endpoint:Endpoint,buffer:&mut[u8],
+)->Result<usize,UsbError>{
+ if endpoint.transfer_type!=TransferType::Interrupt||!endpoint.address.is_in()
+  ||endpoint.address.number()==0||endpoint.max_packet_size==0
+  ||buffer.is_empty()||buffer.len()>endpoint.max_packet_size as usize{
+  return Err(UsbError::InvalidAddress)
+ }
+ let result=controller.interrupt_transfer(address,endpoint,buffer)?;
+ match result.status{
+  TransferStatus::Success=>{},
+  TransferStatus::TimedOut=>return Err(UsbError::Timeout),
+  TransferStatus::NoDevice=>return Err(UsbError::ControllerUnavailable),
+  TransferStatus::Stall=>return Err(UsbError::Unsupported),
+  TransferStatus::Pending|TransferStatus::ControllerError=>return Err(UsbError::TransferFailed),
+ }
+ if result.bytes_transferred>buffer.len(){return Err(UsbError::TransferFailed)}
+ Ok(result.bytes_transferred)
+}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct HidInterfaceInfo{
@@ -41,6 +64,14 @@ impl HidInterfaceInfo{
    found+=1;
   }
   None
+ }
+ /// Reads a raw report from the selected interrupt-IN endpoint.
+ pub fn read_report<C:HostController>(
+  self,configuration:&ParsedConfiguration,ordinal:usize,controller:&mut C,
+  address:DeviceAddress,buffer:&mut[u8],
+ )->Result<usize,UsbError>{
+  let endpoint=self.interrupt_in_endpoint(configuration,ordinal).ok_or(UsbError::Unsupported)?;
+  read_interrupt_report(controller,address,endpoint,buffer)
  }
  /// Counts interrupt-IN endpoints without allocating.
  pub fn interrupt_in_count(self,configuration:&ParsedConfiguration)->usize{
