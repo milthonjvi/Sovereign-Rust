@@ -67,6 +67,44 @@ impl<'a> ImageView<'a> {
         )
     }
 
+    /// Alpha-composite this image at native resolution.
+    ///
+    /// Pixels with alpha 0 are skipped; alpha 255 use the opaque fast path.
+    /// Intermediate alpha values are blended against the current framebuffer.
+    pub fn draw_alpha_blended(
+        &self,
+        target: &mut FramebufferSurface<'_>,
+        destination_x: i64,
+        destination_y: i64,
+    ) -> Result<(), FramebufferError> {
+        let target_info = *target.info();
+        let left = (destination_x as i128).max(0);
+        let top = (destination_y as i128).max(0);
+        let right = (destination_x as i128 + self.width as i128)
+            .min(target_info.width as i128);
+        let bottom = (destination_y as i128 + self.height as i128)
+            .min(target_info.height as i128);
+        if left >= right || top >= bottom {
+            return Ok(());
+        }
+
+        let visible_left = usize::try_from(left).map_err(|_| FramebufferError::SizeOverflow)?;
+        let visible_top = usize::try_from(top).map_err(|_| FramebufferError::SizeOverflow)?;
+        let visible_right = usize::try_from(right).map_err(|_| FramebufferError::SizeOverflow)?;
+        let visible_bottom = usize::try_from(bottom).map_err(|_| FramebufferError::SizeOverflow)?;
+
+        for target_y in visible_top..visible_bottom {
+            let source_y = (target_y as i128 - destination_y as i128) as usize;
+            let source_row = source_y * self.stride;
+            for target_x in visible_left..visible_right {
+                let source_x = (target_x as i128 - destination_x as i128) as usize;
+                let color = self.pixels[source_row + source_x];
+                target.blend_pixel(target_x, target_y, color)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Blit with nearest-neighbor scaling and clipping.
     ///
     /// This is an opaque copy; alpha compositing is intentionally separate so
@@ -110,7 +148,13 @@ impl<'a> ImageView<'a> {
                 let source_x = ((relative_x * self.width as u128)
                     / destination_width as u128) as usize;
                 let color = self.pixels[source_row + source_x];
-                target.put_pixel(target_x, target_y, color)?;
+                let offset = target_y.checked_mul(target_info.pitch)
+                    .and_then(|row| target_x.checked_mul(4).and_then(|column| row.checked_add(column)))
+                    .ok_or(FramebufferError::SizeOverflow)?;
+                // SAFETY: destination coordinates were clipped to the validated
+                // target dimensions, and FramebufferInfo::validate checked pitch
+                // and total mapping-size arithmetic at surface construction.
+                unsafe { target.write_pixel_unchecked(offset, color); }
             }
         }
 
