@@ -132,7 +132,7 @@ fn process_function<A: ConfigAccess>(
     // bridge; secondary must be a distinct, nonzero bus within the range.
     if primary != function.address.bus
         || secondary == 0
-        || secondary == primary
+        || secondary <= primary
         || secondary > subordinate
     {
         return Ok(());
