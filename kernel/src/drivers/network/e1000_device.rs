@@ -435,7 +435,7 @@ mod tests {
         writes: Vec<(u32, u32)>,
     }
 
-    impl E1000Registers for MockRegisters {
+    unsafe impl E1000Registers for MockRegisters {
         type Error = ();
 
         fn read32(&mut self, offset: u32) -> Result<u32, Self::Error> {
