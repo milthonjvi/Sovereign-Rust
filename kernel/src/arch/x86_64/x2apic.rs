@@ -39,11 +39,17 @@ const ICR_DELIVERY_PENDING: u64 = 1 << 12;
 const ICR_DESTINATION_SHIFT: u32 = 32;
 const ICR_WAIT_LIMIT: usize = 1_000_000;
 
+#[inline]
+const fn valid_tsc_deadline_vector(vector: u8) -> bool {
+    vector >= 0x30 && vector <= 0xFE && vector != 0x80
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum X2ApicError {
     FeatureUnavailable,
     InvalidPhysicalBase,
     InvalidVector,
+    InvalidTimerConfiguration,
     DeliveryTimeout,
 }
 
@@ -165,7 +171,7 @@ impl X2Apic {
     /// dispatcher callback registered before the caller unmasks this source.
     pub fn configure_tsc_deadline_timer(&mut self, vector: u8) -> Result<(), X2ApicError> {
         // Keep the architectural syscall vector and spurious vector reserved.
-        if !(0x30..=0xFE).contains(&vector) || vector == 0x80 {
+        if !valid_tsc_deadline_vector(vector) {
             return Err(X2ApicError::InvalidVector);
         }
         self.write_register(REG_LVT_TIMER, (vector as u32 | LVT_TIMER_TSC_DEADLINE | LVT_MASKED) as u64);
@@ -179,11 +185,9 @@ impl X2Apic {
     pub fn unmask_tsc_deadline_timer(&mut self) -> Result<(), X2ApicError> {
         let value = self.read_register(REG_LVT_TIMER) as u32;
         if value & LVT_TIMER_TSC_DEADLINE == 0
-            || value & LVT_MASKED == 0
-            || !(0x30..=0xFE).contains(&((value & LVT_TIMER_VECTOR_MASK) as u8))
-            || (value & LVT_TIMER_VECTOR_MASK) as u8 == 0x80
+            || !valid_tsc_deadline_vector((value & LVT_TIMER_VECTOR_MASK) as u8)
         {
-            return Err(X2ApicError::InvalidVector);
+            return Err(X2ApicError::InvalidTimerConfiguration);
         }
         self.write_register(REG_LVT_TIMER, (value & !LVT_MASKED) as u64);
         Ok(())
@@ -285,5 +289,21 @@ mod tests {
         assert!(valid_ipi_vector(32));
         assert!(valid_ipi_vector(0xFE));
         assert!(!valid_ipi_vector(0xFF));
+    }
+}
+
+#[cfg(test)]
+mod tsc_deadline_vector_tests {
+    use super::valid_tsc_deadline_vector;
+
+    #[test]
+    fn accepts_only_installed_apic_timer_vector_range() {
+        assert!(!valid_tsc_deadline_vector(0x2F));
+        assert!(valid_tsc_deadline_vector(0x30));
+        assert!(valid_tsc_deadline_vector(0x7F));
+        assert!(!valid_tsc_deadline_vector(0x80));
+        assert!(valid_tsc_deadline_vector(0x81));
+        assert!(valid_tsc_deadline_vector(0xFE));
+        assert!(!valid_tsc_deadline_vector(0xFF));
     }
 }
