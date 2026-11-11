@@ -22,6 +22,7 @@ pub struct UartRxBuffer<const N: usize> {
     head: CachePadded<AtomicUsize>,
     tail: CachePadded<AtomicUsize>,
     dropped: CachePadded<AtomicUsize>,
+    high_watermark: CachePadded<AtomicUsize>,
 }
 
 // SAFETY: The API is strictly SPSC. The producer exclusively writes the slot
@@ -41,6 +42,7 @@ impl<const N: usize> UartRxBuffer<N> {
             head: CachePadded(AtomicUsize::new(0)),
             tail: CachePadded(AtomicUsize::new(0)),
             dropped: CachePadded(AtomicUsize::new(0)),
+            high_watermark: CachePadded(AtomicUsize::new(0)),
         }
     }
 
@@ -66,6 +68,16 @@ impl<const N: usize> UartRxBuffer<N> {
         // unpublished head slot. The Release store publishes the initialized byte.
         unsafe { (*self.bytes.get())[head] = byte; }
         self.head.0.store(next, Ordering::Release);
+        let occupancy = next.wrapping_sub(tail) & (N - 1);
+        let mut peak = self.high_watermark.0.load(Ordering::Relaxed);
+        while occupancy > peak {
+            match self.high_watermark.0.compare_exchange_weak(
+                peak, occupancy, Ordering::Relaxed, Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => peak = observed,
+            }
+        }
         true
     }
 
@@ -112,6 +124,13 @@ impl<const N: usize> UartRxBuffer<N> {
         self.len() == self.capacity()
     }
 
+    /// Greatest queue occupancy observed since construction (usable bytes).
+    /// This monotonic metric is useful for sizing buffers and diagnosing RX pressure.
+    #[inline]
+    pub fn high_watermark(&self) -> usize {
+        self.high_watermark.0.load(Ordering::Relaxed)
+    }
+
     /// Total number of bytes rejected because the queue was full.
     #[inline]
     pub fn dropped_bytes(&self) -> usize {
@@ -136,6 +155,7 @@ mod tests {
         assert!(!queue.is_full());
         assert_eq!(queue.len(), 0);
         assert_eq!(queue.capacity(), 7);
+        assert_eq!(queue.high_watermark(), 0);
         assert_eq!(unsafe { queue.pop() }, None);
     }
 
@@ -146,6 +166,7 @@ mod tests {
         assert!(unsafe { queue.push(0x42) });
         assert!(unsafe { queue.push(0x43) });
         assert_eq!(queue.len(), 3);
+        assert_eq!(queue.high_watermark(), 3);
         assert_eq!(unsafe { queue.pop() }, Some(0x41));
         assert_eq!(unsafe { queue.pop() }, Some(0x42));
         assert_eq!(unsafe { queue.pop() }, Some(0x43));
@@ -161,6 +182,7 @@ mod tests {
         assert!(queue.is_full());
         assert!(!unsafe { queue.push(4) });
         assert_eq!(queue.dropped_bytes(), 1);
+        assert_eq!(queue.high_watermark(), 3);
         assert_eq!(unsafe { queue.pop() }, Some(1));
     }
 
@@ -176,6 +198,7 @@ mod tests {
         assert_eq!(unsafe { queue.pop() }, Some(3));
         assert_eq!(unsafe { queue.pop() }, Some(4));
         assert!(queue.is_empty());
+        assert_eq!(queue.high_watermark(), 3);
     }
 
     #[test]
