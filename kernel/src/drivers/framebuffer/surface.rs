@@ -282,7 +282,7 @@ impl<'a> FramebufferSurface<'a> {
             let inset = if edge_distance == 0 {
                 0
             } else {
-                let dy = edge_distance.saturating_sub(1) as u128;
+                let dy = edge_distance as u128;
                 radius.saturating_sub(integer_sqrt(radius_squared - dy * dy) as usize)
             };
             if inset.saturating_mul(2) < width {
