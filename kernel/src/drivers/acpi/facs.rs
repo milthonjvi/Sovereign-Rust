@@ -81,6 +81,14 @@ impl GlobalLock {
     }
 }
 
+
+/// Selected firmware waking vector, retaining its address width.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WakingVector {
+    Legacy32(u32),
+    Extended64(u64),
+}
+
 /// Validated, read-only FACS metadata.
 ///
 /// Firmware-owned state is exposed as values. Mutating the global lock or
@@ -157,6 +165,21 @@ impl Facs {
     pub const fn has_64bit_waking_vector(&self) -> bool {
         self.x_firmware_waking_vector != 0
     }
+
+    /// Select the waking vector advertised by firmware.
+    ///
+    /// The extended vector is selected only when the FACS explicitly advertises
+    /// 64-bit wake support and supplies a nonzero address. This only validates
+    /// metadata; it does not install a trampoline or initiate a power transition.
+    pub const fn waking_vector(&self) -> Option<WakingVector> {
+        if self.supports_64bit_wake() && self.x_firmware_waking_vector != 0 {
+            Some(WakingVector::Extended64(self.x_firmware_waking_vector))
+        } else if self.firmware_waking_vector != 0 {
+            Some(WakingVector::Legacy32(self.firmware_waking_vector))
+        } else {
+            None
+        }
+    }
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, AcpiError> {
@@ -206,6 +229,27 @@ mod tests {
         assert!(facs.has_64bit_waking_vector());
     }
 
+
+
+    #[test]
+    fn selects_extended_waking_vector_only_when_firmware_advertises_support() {
+        let mut bytes = fixture();
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(facs.waking_vector(), Some(WakingVector::Extended64(0x1_0000_1000)));
+
+        bytes[20..24].copy_from_slice(&FLAG_S4_BIOS.to_le_bytes());
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(facs.waking_vector(), Some(WakingVector::Legacy32(0x1000)));
+    }
+
+    #[test]
+    fn returns_no_waking_vector_when_firmware_provides_none() {
+        let mut bytes = fixture();
+        bytes[12..16].copy_from_slice(&0u32.to_le_bytes());
+        bytes[24..32].copy_from_slice(&0u64.to_le_bytes());
+        let facs = Facs::parse(0x4000, &bytes).unwrap();
+        assert_eq!(facs.waking_vector(), None);
+    }
 
     #[test]
     fn global_lock_acquire_sets_owned_or_pending_and_preserves_reserved_bits() {
