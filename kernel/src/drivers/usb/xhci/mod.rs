@@ -488,3 +488,12 @@ mod event_decode_tests{
   assert_eq!(CompletionCode::from_raw(250),CompletionCode::Unknown(250));
  }
 }
+
+#[cfg(test)]
+mod dma_range_tests{
+ use super::*;
+ #[test]fn rejects_ring_dma_range_overflow(){
+  let mut entries=[Trb::EMPTY;4];
+  assert_eq!(unsafe{XhciProducerRing::new(&mut entries,0xffff_ffff_ffff_ffc0)},Err(XhciError::InvalidDmaAddress));
+ }
+}
