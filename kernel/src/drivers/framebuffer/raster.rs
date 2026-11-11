@@ -154,7 +154,7 @@ mod tests {
                 &mut target,
                 (i64::MIN, i64::MIN),
                 (i64::MAX, i64::MIN),
-                (0, i64::MAX),
+                (i64::MIN, i64::MAX),
                 Color::WHITE,
             ),
             Err(crate::drivers::framebuffer::info::FramebufferError::SizeOverflow),
