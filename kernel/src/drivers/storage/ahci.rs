@@ -410,6 +410,52 @@ mod port_tests {
         assert_eq!(regs.0[0x38/4],0);
     }
 
+    struct OrderedRegisters {
+        values: [u32; 64],
+        writes: [(u32, u32); 8],
+        write_count: usize,
+    }
+    impl AhciRegisterIo for OrderedRegisters {
+        fn read32(&mut self, offset: u32) -> Result<u32, AhciError> {
+            Ok(self.values[(offset / 4) as usize])
+        }
+        fn write32(&mut self, offset: u32, value: u32) -> Result<(), AhciError> {
+            self.writes[self.write_count] = (offset, value);
+            self.write_count += 1;
+            self.values[(offset / 4) as usize] = value;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ncq_sets_sact_before_ci_and_preserves_other_slots() {
+        let mut regs = OrderedRegisters {
+            values: [0; 64],
+            writes: [(0, 0); 8],
+            write_count: 0,
+        };
+        regs.values[0x18 / 4] = (1 << 0) | (1 << 15);
+        regs.values[0x38 / 4] = 1 << 5;
+        regs.values[0x34 / 4] = 1 << 7;
+        issue_command(&mut regs, 0, 3, true, 1).unwrap();
+        assert_eq!(regs.writes[0], (0x34, (1 << 7) | (1 << 3)));
+        assert_eq!(regs.writes[1], (0x38, (1 << 5) | (1 << 3)));
+        assert_eq!(regs.values[0x38 / 4], (1 << 5) | (1 << 3));
+    }
+
+    #[test]
+    fn refuses_ncq_slot_already_active_without_writing_registers() {
+        let mut regs = OrderedRegisters {
+            values: [0; 64],
+            writes: [(0, 0); 8],
+            write_count: 0,
+        };
+        regs.values[0x18 / 4] = (1 << 0) | (1 << 15);
+        regs.values[0x34 / 4] = 1 << 3;
+        assert_eq!(issue_command(&mut regs, 0, 3, true, 1), Err(AhciError::SlotBusy));
+        assert_eq!(regs.write_count, 0);
+    }
+
     #[test]
     fn non_staggered_start_clears_stale_spinup_request() {
         let mut regs=Registers([0;64]);
@@ -559,8 +605,11 @@ pub fn snapshot_port<R: AhciRegisterIo>(
     })
 }
 
-/// Acknowledge only the supplied observed W1C bits. This avoids clearing
-/// unrelated status bits that may have arrived after a snapshot was taken.
+/// Write only the caller-supplied bits to the W1C status registers.
+///
+/// This preserves unrelated bits that are not included in the write. W1C
+/// hardware cannot distinguish a new event on the same bit between snapshot
+/// and acknowledgement; callers must account for that race during recovery.
 pub fn acknowledge_port_status<R: AhciRegisterIo>(
     io: &mut R,
     base: u32,
