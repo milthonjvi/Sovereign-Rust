@@ -21,9 +21,14 @@ impl<'a> Madt<'a> {
         if payload.len() < 8 {
             return Err(AcpiError::BufferTooSmall);
         }
+        let flags = read_u32(payload, 4)?;
+        // MADT Multiple APIC Flags defines only PCAT_COMPAT (bit 0).
+        if flags & !1 != 0 {
+            return Err(AcpiError::MalformedTable);
+        }
         Ok(Self {
             local_apic_address: read_u32(payload, 0)?,
-            flags: read_u32(payload, 4)?,
+            flags,
             records: &payload[8..],
         })
     }
@@ -280,6 +285,18 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, AcpiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_reserved_multiple_apic_flags() {
+        let mut bytes = std::vec![0u8; 44];
+        bytes[..4].copy_from_slice(&MADT_SIGNATURE);
+        bytes[4..8].copy_from_slice(&44u32.to_le_bytes());
+        bytes[8] = 1;
+        bytes[36..40].copy_from_slice(&0xFEE0_0000u32.to_le_bytes());
+        bytes[40..44].copy_from_slice(&2u32.to_le_bytes());
+        bytes[9] = 0u8.wrapping_sub(crate::drivers::acpi::checksum(&bytes));
+        assert_eq!(Madt::parse(&bytes), Err(AcpiError::MalformedTable));
+    }
 
     #[test]
     fn normalizes_xapic_and_x2apic_processors() {
