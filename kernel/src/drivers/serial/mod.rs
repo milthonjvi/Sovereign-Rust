@@ -17,6 +17,11 @@ const IER: u16 = 1;
 const FCR: u16 = 2;
 const LCR: u16 = 3;
 const MCR: u16 = 4;
+const MCR_DTR: u8 = 1 << 0;
+const MCR_RTS: u8 = 1 << 1;
+const MCR_OUT1: u8 = 1 << 2;
+const MCR_OUT2: u8 = 1 << 3;
+const MCR_LOOPBACK: u8 = 1 << 4;
 const LSR: u16 = 5;
 const DATA_READY: u8 = 1;
 const THR_EMPTY: u8 = 1 << 5;
@@ -97,6 +102,11 @@ pub struct Uart16550 {
     initialized: bool,
     fifo: UartFifo,
     poll_limit: usize,
+}
+
+#[inline]
+const fn update_mcr_value(current: u8, mask: u8, enabled: bool) -> u8 {
+    if enabled { current | mask } else { current & !mask }
 }
 
 impl Uart16550 {
@@ -323,6 +333,55 @@ impl Uart16550 {
         })
     }
 
+    /// Updates one writable modem-control output while preserving all others.
+    fn update_modem_control(&self, mask: u8, enabled: bool) -> Result<(), UartError> {
+        self.ensure_initialized()?;
+        // SAFETY: This instance exclusively owns the UART register range.
+        let current = unsafe { io::in8(self.port(MCR)) };
+        let next = update_mcr_value(current, mask, enabled);
+        // SAFETY: MCR is the UART's writable modem-control register.
+        unsafe { io::out8(self.port(MCR), next); }
+        Ok(())
+    }
+
+    /// Drives the RTS output. Useful for manually controlling a peer's
+    /// transmit permission; this does not enable automatic CTS/RTS flow control.
+    pub fn set_rts(&self, asserted: bool) -> Result<(), UartError> {
+        self.update_modem_control(MCR_RTS, asserted)
+    }
+
+    /// Drives the DTR output without changing RTS or OUT2.
+    pub fn set_dtr(&self, asserted: bool) -> Result<(), UartError> {
+        self.update_modem_control(MCR_DTR, asserted)
+    }
+
+    /// Drives the auxiliary OUT1 modem-control output.
+    pub fn set_out1(&self, asserted: bool) -> Result<(), UartError> {
+        self.update_modem_control(MCR_OUT1, asserted)
+    }
+
+    /// Drives OUT2. Disabling OUT2 can disconnect the UART's interrupt output.
+    pub fn set_out2(&self, asserted: bool) -> Result<(), UartError> {
+        self.update_modem_control(MCR_OUT2, asserted)
+    }
+
+    /// Enables or disables local loopback mode.
+    ///
+    /// In loopback mode, transmitted data is internally routed to the receiver
+    /// and modem-control outputs are reflected into modem-status inputs.
+    pub fn set_loopback(&self, enabled: bool) -> Result<(), UartError> {
+        self.update_modem_control(MCR_LOOPBACK, enabled)
+    }
+
+    /// Returns the current CTS input level.
+    ///
+    /// This is a sampled modem input, not an automatic transmission gate.
+    pub fn clear_to_send(&self) -> Result<bool, UartError> {
+        self.ensure_initialized()?;
+        // SAFETY: This instance owns the UART; reading MSR samples CTS.
+        Ok(unsafe { io::in8(self.port(MODEM_STATUS)) } & (1 << 4) != 0)
+    }
+
     /// Reads modem input state and delta flags. Reading MSR clears delta flags.
     pub fn modem_status(&self) -> Result<UartModemStatus, UartError> {
         self.ensure_initialized()?;
@@ -441,6 +500,15 @@ mod tests {
             data_bits: 9, ..UartConfig::default()
         }) };
         assert_eq!(bad_frame.validate(), Err(UartError::InvalidFrameFormat));
+    }
+
+    #[test]
+    fn modem_control_masks_are_independent() {
+        let initial = MCR_DTR | MCR_RTS | MCR_OUT2;
+        assert_eq!(update_mcr_value(initial, MCR_RTS, false), MCR_DTR | MCR_OUT2);
+        assert_eq!(update_mcr_value(initial, MCR_DTR, false), MCR_RTS | MCR_OUT2);
+        assert_eq!(update_mcr_value(initial, MCR_OUT1, true), initial | MCR_OUT1);
+        assert_eq!(update_mcr_value(initial, MCR_LOOPBACK, true), initial | MCR_LOOPBACK);
     }
 
     #[test]
