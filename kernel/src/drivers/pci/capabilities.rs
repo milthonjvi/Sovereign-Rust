@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn reports_invalid_standard_next_pointer() {
         let mut registers = [0u32; 1024];
-        registers[0x40 / 4] = 0x20_0001;
+        registers[0x40 / 4] = 0x0000_2001;
         let io = MockConfig(registers);
         let mut caps = StandardCapabilities::new(&io, address(), 1 << 4).unwrap();
         assert_eq!(caps.next().unwrap().unwrap().id, 1);
