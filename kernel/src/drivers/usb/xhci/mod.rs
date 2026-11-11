@@ -384,7 +384,7 @@ mod controller_state_tests{
   }
  }
  #[test]fn runs_halt_reset_configure_and_start_sequence(){
-  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<24);io.words[17]=USBSTS_HALTED;
+  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<8)|(1<<24);io.words[17]=USBSTS_HALTED;
   io.words[0x14/4]=0x80;io.words[0x18/4]=0x100;
   let mut h=XhciController::discover(&io).unwrap();
   h.request_halt(&mut io).unwrap();assert!(h.poll_halted(&io).unwrap());
@@ -398,7 +398,7 @@ mod controller_state_tests{
  }
 
  #[test]fn requests_warm_reset_for_superspeed_and_clears_change_bits(){
-  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<24);
+  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<8)|(1<<24);
   let mut h=XhciController::discover(&io).unwrap();h.state=ControllerState::Running;
   let port_offset=0x40+OP_PORT_BASE;
   io.words[port_offset/4]=(1<<0)|(1<<9)|(4<<10);
@@ -410,7 +410,7 @@ mod controller_state_tests{
   assert_eq!(io.words[port_offset/4],(1<<9)|(1<<19));
  }
  #[test]fn requests_standard_reset_for_usb2(){
-  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<24);
+  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<8)|(1<<24);
   let mut h=XhciController::discover(&io).unwrap();h.state=ControllerState::Running;
   let offset=0x40+OP_PORT_BASE;io.words[offset/4]=(1<<0)|(1<<9)|(3<<10);
   h.request_port_reset(&mut io,1).unwrap();assert_eq!(io.words[offset/4],(1<<9)|(1<<4));
