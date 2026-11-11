@@ -45,6 +45,41 @@ pub enum TopologyError {
     GsiNotCovered,
 }
 
+/// Errors while resolving a legacy ISA IRQ through ACPI and the I/O APIC map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsaRouteError {
+    Interrupt(super::ioapic::IoApicError),
+    Topology(TopologyError),
+}
+
+/// Complete, still-masked routing target for a legacy ISA IRQ.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsaGsiRoute {
+    pub gsi: u32,
+    pub controller_index: usize,
+    pub pin: u32,
+    pub mode: super::ioapic::InterruptMode,
+}
+
+/// Apply the MADT ISA source override, then resolve the resulting GSI to one
+/// controller and pin. This is a pure planning operation: it never unmasks or
+/// programs hardware.
+pub fn resolve_isa_irq_route(
+    irq: u8,
+    overrides: &[crate::drivers::acpi::madt::InterruptSourceOverride],
+    ranges: &[IoApicGsiRange],
+) -> Result<IsaGsiRoute, IsaRouteError> {
+    let (gsi, mode) = super::ioapic::resolve_isa_irq(irq, overrides)
+        .map_err(IsaRouteError::Interrupt)?;
+    let target = resolve_gsi(gsi, ranges).map_err(IsaRouteError::Topology)?;
+    Ok(IsaGsiRoute {
+        gsi,
+        controller_index: target.controller_index,
+        pin: target.pin,
+        mode,
+    })
+}
+
 /// Validate controller identity and GSI interval invariants.
 ///
 /// Call after reading each controller's actual redirection count. Duplicate
@@ -163,6 +198,24 @@ mod tests {
         ];
         assert_eq!(validate_io_apic_ranges(&duplicate_id),
             Err(TopologyError::DuplicateControllerId));
+    }
+
+    #[test]
+    fn resolves_isa_override_across_multiple_io_apics() {
+        let overrides = [crate::drivers::acpi::madt::InterruptSourceOverride {
+            bus: 0,
+            source: 1,
+            global_system_interrupt: 35,
+            flags: 0b1111,
+        }];
+        let route = resolve_isa_irq_route(1, &overrides, &TOPOLOGY).unwrap();
+        assert_eq!(route.gsi, 35);
+        assert_eq!(route.controller_index, 1);
+        assert_eq!(route.pin, 3);
+        assert_eq!(route.mode, super::super::ioapic::InterruptMode {
+            active_low: true,
+            level_triggered: true,
+        });
     }
 
     #[test]
