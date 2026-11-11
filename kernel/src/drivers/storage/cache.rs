@@ -27,6 +27,7 @@ impl<'a, D: BlockDevice, const N: usize> BlockCache<'a, D, N> {
     pub const fn stats(&self) -> CacheStats { self.stats }
     pub const fn capacity(&self) -> usize { N }
     pub fn inner(&self) -> &D { &self.inner }
+    /// Mutations made through this escape hatch require explicit cache invalidation.
     pub fn inner_mut(&mut self) -> &mut D { &mut self.inner }
     pub fn invalidate_all(&mut self) { self.lines.fill(CacheLine::EMPTY); }
     pub fn invalidate_range(&mut self, range: BlockRange) -> Result<(), BlockError> {
@@ -102,11 +103,12 @@ impl<D: BlockDevice, const N: usize> BlockDevice for BlockCache<'_, D, N> {
             return Err(error);
         }
         let block_size = self.block_size;
-        for index in 0..range.block_count as usize {
-            let lba = range.start_block + index as u64;
-            if let Some(line) = self.find(lba) {
-                let src = &input[index * block_size..(index + 1) * block_size];
-                self.line_mut(line).copy_from_slice(src);
+        let end = range.start_block + range.block_count;
+        for line in 0..N {
+            let lba = self.lines[line].lba;
+            if self.lines[line].valid && lba >= range.start_block && lba < end {
+                let offset = (lba - range.start_block) as usize * block_size;
+                self.line_mut(line).copy_from_slice(&input[offset..offset + block_size]);
                 self.touch(line);
             }
         }
