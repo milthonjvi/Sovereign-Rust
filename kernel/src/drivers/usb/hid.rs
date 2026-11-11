@@ -1,5 +1,5 @@
 //! USB HID class support primitives for boot keyboards and mice.
-use super::{UsbError,transfer::SetupPacket};
+use super::{UsbError,descriptors::ParsedConfiguration,transfer::{SetupPacket,TransferType}};
 
 pub const HID_CLASS:u8=3;
 pub const HID_SUBCLASS_BOOT:u8=1;
@@ -113,4 +113,36 @@ mod tests{
  #[test]fn rejects_keyboard_rollover_usage(){
   assert_eq!(BootKeyboardReport::parse(&[0,0,1,0,0,0,0,0]),Err(UsbError::MalformedDescriptor));
  }
+}
+
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum BootHidKind{Keyboard,Mouse}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct BootHidInterface{
+ pub interface_number:u8,pub alternate_setting:u8,pub kind:BootHidKind,
+ pub interrupt_in_address:u8,pub max_packet_size:u16,pub interval:u8,
+}
+/// Finds a boot-protocol HID interface and its interrupt-IN endpoint in a
+/// parsed configuration. It does not change the active alternate setting.
+pub fn find_boot_interface(config:&ParsedConfiguration,kind:BootHidKind)->Option<BootHidInterface>{
+ let (protocol,expected_packet)=match kind{
+  BootHidKind::Keyboard=>(HID_PROTOCOL_KEYBOARD,8),
+  BootHidKind::Mouse=>(HID_PROTOCOL_MOUSE,3),
+ };
+ for iface in config.interfaces[..config.interface_len as usize].iter().flatten(){
+  let d=iface.descriptor;
+  if d.class!=HID_CLASS||d.subclass!=HID_SUBCLASS_BOOT||d.protocol!=protocol{return continue}
+  let start=iface.first_endpoint as usize;
+  let end=start+iface.endpoint_count as usize;
+  for endpoint in config.endpoints[start..end].iter().flatten(){
+   if endpoint.address&0x80!=0&&(endpoint.attributes&3)==TransferType::Interrupt as u8
+    &&endpoint.max_packet_size>=expected_packet{
+    return Some(BootHidInterface{interface_number:d.number,alternate_setting:d.alternate_setting,
+     kind,interrupt_in_address:endpoint.address,max_packet_size:endpoint.max_packet_size,
+     interval:endpoint.interval});
+   }
+  }
+ }
+ None
 }
