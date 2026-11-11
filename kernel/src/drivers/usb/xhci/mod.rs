@@ -358,7 +358,7 @@ impl XhciController{
   if port==0||port>self.capabilities.max_ports{return Err(XhciError::InvalidCapability)}
   let value=io.read32(self.op(OP_PORT_BASE)+(port as usize-1)*OP_PORT_STRIDE)?;
   let speed=match (value>>10)&0xf{1=>Some(super::super::transfer::UsbSpeed::Full),2=>Some(super::super::transfer::UsbSpeed::Low),3=>Some(super::super::transfer::UsbSpeed::High),4=>Some(super::super::transfer::UsbSpeed::Super),5=>Some(super::super::transfer::UsbSpeed::SuperPlus),_=>None};
-  Ok(super::super::controller::PortStatus{connected:value&1!=0,enabled:value&2!=0,suspended:(value>>5)&0xf==3,over_current:value&(1<<3)!=0,speed})
+  Ok(super::super::controller::PortStatus{connected:value&1!=0,enabled:value&2!=0,suspended:((value>>5)&0xf)==3,over_current:value&(1<<3)!=0,speed})
  }
 }
 
