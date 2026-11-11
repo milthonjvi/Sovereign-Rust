@@ -194,7 +194,9 @@ impl LimineBootInfo {
             }
             // SAFETY: Each non-null entry pointer is owned by the boot response.
             let entry = unsafe { ptr::read(entry_ptr) };
-            let end = entry.base.checked_add(entry.length)?;
+            let Some(end) = entry.base.checked_add(entry.length) else {
+                continue;
+            };
             let header_end = physical.checked_add(36)?;
             if entry.kind != 4 && entry.kind != 7
                 && physical >= entry.base && header_end <= end
