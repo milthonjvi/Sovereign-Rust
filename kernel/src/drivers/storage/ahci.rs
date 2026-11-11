@@ -309,6 +309,9 @@ pub fn issue_command<R:AhciRegisterIo>(
     const ST:u32=1;
     const CR:u32=1<<15;
     if io.read32(cmd)?&(ST|CR)!=(ST|CR){return Err(AhciError::PortNotRunning);}
+    // Do not submit new work while an earlier fatal port condition remains latched.
+    let interrupt_status=io.read32(port_register(base,0x10)?)?;
+    if interrupt_status&AHCI_PORT_ERROR_INTERRUPT_MASK!=0{return Err(AhciError::DeviceFault);}
     let tfd=port_register(base,0x20)?;
     let mut ready=false;
     for _ in 0..polls{
@@ -388,6 +391,16 @@ mod port_tests {
         regs.0[0x10/4]=1<<27;
         assert_eq!(command_complete(&mut regs,0,3,true),Err(AhciError::DeviceFault));
     }
+    #[test]
+    fn refuses_submission_while_fatal_port_status_is_latched() {
+        let mut regs=Registers([0;64]);
+        regs.0[0x18/4]=(1<<0)|(1<<15);
+        regs.0[0x10/4]=1<<27; // Interface fatal error.
+        assert_eq!(issue_command(&mut regs,0,0,false,1),Err(AhciError::DeviceFault));
+        assert_eq!(regs.0[0x38/4],0);
+        assert_eq!(regs.0[0x10/4],1<<27); // Status remains available for recovery.
+    }
+
     #[test]
     fn non_ncq_submission_waits_for_all_ncq_commands_to_finish() {
         let mut regs=Registers([0;64]);
