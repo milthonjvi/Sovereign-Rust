@@ -25,6 +25,7 @@ pub enum InterruptInitError {
     AlreadyStarted,
     TssAlreadyInstalled,
     IdtConfiguration,
+    IncompleteIdt,
     IrqGateConfiguration,
     PicConfiguration,
 }
@@ -68,6 +69,9 @@ unsafe fn initialize_inner() -> Result<(), InterruptInitError> {
     // SAFETY: PIC vectors 0x20..=0x2F replace their fatal fallback gates.
     unsafe { irq::install_irq_gates(idt, irq::IRQ_VECTOR_OFFSET) }
         .map_err(|_| InterruptInitError::IrqGateConfiguration)?;
+    if idt.present_count() != 256 {
+        return Err(InterruptInitError::IncompleteIdt);
+    }
 
     // Remap and mask every legacy IRQ before loading the completed IDT.
     // SAFETY: Exclusive PIC ownership, CPL 0, and IF clear are guaranteed.
