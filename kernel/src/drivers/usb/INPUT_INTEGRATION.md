@@ -146,6 +146,7 @@ truncated or out-of-range fields.
   discard prior keyboard/button/contact state.
 - On transfer timeout, stall or controller error, do not parse the buffer as
   a fresh report. Recover/reset the endpoint according to USB policy.
+- For a STALL on a non-control endpoint, USB exposes `control::execute_clear_endpoint_halt`. The host-controller implementation must synchronize the endpoint data toggle to DATA0 as part of recovery; clearing the device feature alone is not sufficient controller bookkeeping.
 - Count dropped events if the SPSC queue is full; never block the USB transfer
   path waiting for input consumers.
 - Keep each interface/collection's previous report state separate. A composite
