@@ -328,6 +328,13 @@ fn normalize_absolute(value: i32, min: i32, max: i32) -> u16 {
     (((clamped - min as i64) * u16::MAX as i64) / span)
         .clamp(0, u16::MAX as i64) as u16
 }
+fn normalize_trigger(value: i32, min: i32, max: i32) -> i16 {
+    if max <= min { return value.clamp(0, i16::MAX as i32) as i16; }
+    let clamped = value.clamp(min, max) as i64;
+    let span = (max as i64) - (min as i64);
+    (((clamped - min as i64) * i16::MAX as i64) / span)
+        .clamp(0, i16::MAX as i64) as i16
+}
 fn normalize_axis(value: i32, min: i32, max: i32) -> i16 {
     if max <= min { return value.clamp(i16::MIN as i32, i16::MAX as i32) as i16; }
     let clamped = value.clamp(min, max) as i64;
@@ -431,6 +438,9 @@ impl HidReportDecoder {
                     old_values[element] = self.previous[field.value_slot as usize + element];
                 }
                 read_field_values(field, payload, &mut current_values)?;
+                if field.usage_page == 0x07 && current_values[..count].iter().any(|v| (1..=3).contains(v)) {
+                    return Err(HidReportError::InvalidField);
+                }
                 if field.usage_page == 0x07 || field.usage_page == 0x0C {
                     let page = field.usage_page;
                     for old_value in old_values[..count].iter().copied().filter(|v| *v > 0) {
@@ -573,9 +583,14 @@ impl HidReportDecoder {
                                 _ => GamepadAxis::Other(8),
                             };
                             if !had_old || old != value {
+                                let normalized = if axis == GamepadAxis::LeftTrigger
+                                    || axis == GamepadAxis::RightTrigger {
+                                    normalize_trigger(value, field.logical_min, field.logical_max)
+                                } else {
+                                    normalize_axis(value, field.logical_min, field.logical_max)
+                                };
                                 self.emit(InputEvent::GamepadAxis {
-                                    device: self.device, axis,
-                                    value: normalize_axis(value, field.logical_min, field.logical_max),
+                                    device: self.device, axis, value: normalized,
                                 }, producer, &mut stats);
                             }
                         }
