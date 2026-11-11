@@ -67,7 +67,12 @@ pub fn parse_bpb(sector: &[u8], device_block_size: u32) -> Result<FatBpb, FatErr
     let required = (clusters as u64 + 2).checked_mul(bits).and_then(|v| v.checked_add(7)).ok_or(FatError::FatTooSmall)? / 8;
     let available = (spf as u64).checked_mul(bps as u64).ok_or(FatError::FatTooSmall)?;
     if available < required { return Err(FatError::FatTooSmall); }
-    let (root_cluster, fs_info, backup, volume_id) = if kind == FatKind::Fat32 {
+    let (root_cluster, fs_info, backup, volume_id, mirroring, active_fat) = if kind == FatKind::Fat32 {
+        let ext_flags = le16(sector, 40);
+        let fat_version = le16(sector, 42);
+        let mirroring = ext_flags & 0x0080 == 0;
+        let active_fat = if mirroring { 0 } else { (ext_flags & 0x000F) as u8 };
+        if fat_version != 0 || active_fat >= fats { return Err(FatError::InvalidFat32Metadata); }
         let root = le32(sector, 44) & 0x0FFF_FFFF;
         let fs = le16(sector, 48);
         let bk = le16(sector, 50);
@@ -75,8 +80,8 @@ pub fn parse_bpb(sector: &[u8], device_block_size: u32) -> Result<FatBpb, FatErr
             || (fs != 0 && fs >= reserved) || (bk != 0 && bk >= reserved) {
             return Err(FatError::InvalidFat32Metadata);
         }
-        (Some(root), if fs == 0 { None } else { Some(fs) }, if bk == 0 { None } else { Some(bk) }, le32(sector, 67))
-    } else { (None, None, None, le32(sector, 39)) };
+        (Some(root), if fs == 0 { None } else { Some(fs) }, if bk == 0 { None } else { Some(bk) }, le32(sector, 67), mirroring, active_fat)
+    } else { (None, None, None, le32(sector, 39), true, 0) };
     Ok(FatBpb { kind, bytes_per_sector: bps, sectors_per_cluster: spc,
         reserved_sectors: reserved, fat_count: fats, root_entry_count: root_entries,
         total_sectors: total, sectors_per_fat: spf, root_directory_sectors: root_secs,
