@@ -282,11 +282,13 @@ impl X2ApicTimer {
         let mut apic = unsafe { X2Apic::new() };
         apic.configure_one_shot_timer(vector, divide.encoding())
             .map_err(map_x2apic_error)?;
-        let hpet_start = hpet.read_counter() & mask;
+        let hpet_before_start = hpet.read_counter() & mask;
         if apic.load_masked_one_shot_count(u32::MAX).is_err() {
             apic.stop_one_shot_timer();
             return Err(DriverError::InvalidConfiguration);
         }
+        let hpet_after_start = hpet.read_counter() & mask;
+        let hpet_start = midpoint_masked(hpet_before_start, hpet_after_start, mask);
 
         let mut reached_target = false;
         for _ in 0..max_spin_iterations {
@@ -303,8 +305,10 @@ impl X2ApicTimer {
             return Err(DriverError::HardwareFault);
         }
 
+        let hpet_before_end = hpet.read_counter() & mask;
         let current_count = apic.timer_current_count();
-        let hpet_end = hpet.read_counter() & mask;
+        let hpet_after_end = hpet.read_counter() & mask;
+        let hpet_end = midpoint_masked(hpet_before_end, hpet_after_end, mask);
         let elapsed_hpet = hpet_end.wrapping_sub(hpet_start) & mask;
         apic.stop_one_shot_timer();
 
@@ -408,6 +412,11 @@ impl X2ApicTimer {
     pub const fn vector(&self) -> u8 { self.vector }
     pub const fn divide(&self) -> ApicDivide { self.divide }
     pub const fn frequency_hz(&self) -> u64 { self.frequency_hz }
+}
+
+#[inline]
+fn midpoint_masked(a: u64, b: u64, mask: u64) -> u64 {
+    a.wrapping_add((b.wrapping_sub(a) & mask) / 2) & mask
 }
 
 fn map_x2apic_error(_error: X2ApicError) -> DriverError {
