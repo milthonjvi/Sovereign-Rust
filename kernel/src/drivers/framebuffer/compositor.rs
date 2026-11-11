@@ -395,6 +395,40 @@ mod tests {
     }
 
     #[test]
+    fn compositor_clips_layers_with_negative_origin() {
+        use crate::drivers::framebuffer::color::PixelFormat;
+        use crate::drivers::framebuffer::info::FramebufferInfo;
+        use crate::drivers::framebuffer::surface::FramebufferSurface;
+
+        let pixels = [
+            Color::opaque(10, 0, 0), Color::opaque(20, 0, 0),
+            Color::opaque(30, 0, 0), Color::opaque(40, 0, 0),
+        ];
+        let image = ImageView::new(&pixels, 2, 2, 2).unwrap();
+        let mut compositor = Compositor::<2, 4>::new(2, 2, Color::BLACK).unwrap();
+        compositor.add_layer(image, -1, -1, 255).unwrap();
+
+        let mut memory = [0u8; 2 * 2 * 4];
+        let info = FramebufferInfo {
+            address: 1,
+            width: 2,
+            height: 2,
+            pitch: 2 * 4,
+            bits_per_pixel: 32,
+            pixel_format: PixelFormat::Rgb,
+        };
+        // SAFETY: the backing array exactly covers the declared framebuffer.
+        let mut target = unsafe {
+            FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap()
+        };
+        compositor.render(&mut target).unwrap();
+        drop(target);
+
+        assert_eq!(&memory[0..4], &[40, 0, 0, 0]);
+        assert!(memory[4..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn rejects_stale_layer_handle_after_slot_reuse() {
         let pixels = [Color::opaque(1, 2, 3)];
         let image = ImageView::new(&pixels, 1, 1, 1).unwrap();
