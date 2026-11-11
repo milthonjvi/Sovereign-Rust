@@ -25,6 +25,6 @@ pub use pit_service::{PitTimerService, PitTimerServiceError};
 pub use tsc_clock::{monotonic_deadline_to_tsc, TscClockSource};
 pub use service::{TimerService, TimerServiceError};
 
-pub use interrupt::{register_timer_interrupt, unmask_timer_interrupt, unregister_timer_interrupt, take_timer_work_pending, timer_work_pending, TimerInterruptError};
+pub use interrupt::{register_timer_interrupt, register_countdown_timer_interrupt, unmask_timer_interrupt, unregister_timer_interrupt, take_timer_work_pending, timer_work_pending, TimerInterruptError};
 
 pub use apic_deadline::{BootstrapTimerInitError, TimerCancelReport, TimerProcessReport, TscDeadlineQueue, TscDeadlineQueueError};
