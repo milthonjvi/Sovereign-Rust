@@ -153,14 +153,16 @@ fn recursive_entry_address(
         return None;
     }
 
-    // The recursive alias uses [R, i0, ..., i(depth-1), R, ...]
-    // to walk back through the self-reference until the target table page.
-    let mut raw = recursive_slot as u64;
-    for index in 0..levels as usize - 1 {
-        let value = if index < depth {
-            indices[index] as u64
-        } else {
+    // The recursive alias uses [R repeated (levels-depth), i0, ...]
+    // so the walk repeatedly follows the root self-reference, then descends
+    // through the target path to the table page containing the desired entry.
+    let recursive_prefix = levels as usize - depth;
+    let mut raw = 0u64;
+    for index in 0..levels as usize {
+        let value = if index < recursive_prefix {
             recursive_slot as u64
+        } else {
+            indices[index - recursive_prefix] as u64
         };
         raw = (raw << 9) | value;
     }
