@@ -4,8 +4,10 @@
 
 mod irq;
 mod rx;
-pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, receive_statistics, UartIrqError, UartRxStatistics};
+mod tx;
+pub use irq::{attach_interrupts, detach_interrupts, receive_buffer, receive_statistics, transmit_async, UartIrqError, UartRxStatistics};
 pub use rx::UartRxBuffer;
+pub use tx::UartTxBuffer;
 
 use crate::arch::x86_64::io;
 use crate::drivers::api::{BusAddress, DeviceClass, DeviceInfo, Driver, DriverError};
