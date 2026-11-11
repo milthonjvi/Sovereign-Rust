@@ -736,6 +736,21 @@ mod tests {
     }
 
     #[test]
+    fn tx_batch_rolls_back_descriptor_ownership_when_tail_write_fails() {
+        let mut regs = MockRegisters::default();
+        regs.fail_register = Some(REG_TDT);
+        let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
+        let mut queue = E1000TxQueue::new(8).unwrap();
+        assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0x8000, 64), (0x9000, 96)]),
+            Err(E1000QueueError::Register(())));
+        assert_eq!(descriptors[0].status & TXD_STATUS_DD, TXD_STATUS_DD);
+        assert_eq!(descriptors[1].status & TXD_STATUS_DD, TXD_STATUS_DD);
+        assert_eq!(queue.pending, 0);
+        regs.fail_register = None;
+        assert_eq!(queue.submit_batch(&mut regs, &mut descriptors, &[(0xa000, 64)]), Ok(1));
+    }
+
+    #[test]
     fn tx_batch_publishes_multiple_descriptors_with_one_tail_update() {
         let mut regs = MockRegisters::default();
         let mut descriptors = [TxDescriptor { status: TXD_STATUS_DD, ..TxDescriptor::default() }; 8];
