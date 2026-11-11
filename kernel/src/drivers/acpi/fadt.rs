@@ -1003,7 +1003,8 @@ mod tests {
         assert_eq!(missing.validated_reset_register(), Err(AcpiError::InvalidGas));
 
         let mut invalid = valid_reset_gas();
-        invalid.address_space = 2; // PCI configuration space is not a reset GAS target.
+        invalid.address_space = GenericAddress::ADDRESS_SPACE_PCI_CONFIG;
+        invalid.address = 0x0001_0000_0000_0CF9; // Reserved PCI GAS bits must be zero.
         let fadt = Fadt::parse(&make_fadt(148, FADT_RESET_REG_SUP, Some(invalid), Some(6))).unwrap();
         assert_eq!(fadt.validated_reset_register(), Err(AcpiError::InvalidGas));
     }
