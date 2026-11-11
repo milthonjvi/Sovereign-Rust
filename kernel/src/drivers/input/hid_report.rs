@@ -425,7 +425,7 @@ impl HidReportDecoder {
         for field in map.fields[..map.field_count as usize].iter().flatten() {
             if field.report_id != report_id || field.usage_page != 0x07 || !field.is_variable() { continue; }
             for element in 0..field.report_count as usize {
-                let usage = field.usage_min.saturating_add(element as u16);
+                let usage = field_usage(*field, element);
                 if (0xE0..=0xE7).contains(&usage) {
                     let bit = field.bit_offset + element as u32 * field.report_size as u32;
                     let raw = extract_bits(payload, bit, field.report_size).ok_or(HidReportError::ReportTooShort)?;
