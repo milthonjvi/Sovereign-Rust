@@ -108,3 +108,64 @@ pub fn read_file_data<D: BlockDevice>(device: &mut D, volume: &FatVolume, entry:
     }
     Ok(())
 }
+
+
+/// Enumerate short-name records from a directory into a fixed-capacity caller array.
+/// Pass None for the FAT12/16 fixed root directory, or Some(cluster) for a
+/// FAT32 root/subdirectory. Long-name fragments are intentionally skipped.
+pub fn enumerate_directory<D: BlockDevice>(
+    device: &mut D,
+    volume: &FatVolume,
+    start_cluster: Option<u32>,
+    entries: &mut [Option<FatDirEntry>],
+    cluster_buf: &mut [u8],
+    fat_scratch: &mut [u8],
+) -> Result<usize, FatError> {
+    entries.fill(None);
+    let mut count = 0usize;
+    let bps = volume.bpb.bytes_per_sector as usize;
+    let mut stopped = false;
+    if start_cluster.is_none() {
+        if volume.bpb.kind == FatKind::Fat32 || cluster_buf.len() < bps {
+            return Err(FatError::InvalidDirectoryEntry);
+        }
+        let first = volume.bpb.reserved_sectors as u64
+            + volume.bpb.fat_count as u64 * volume.bpb.sectors_per_fat as u64;
+        for sector in 0..volume.bpb.root_directory_sectors as u64 {
+            device.read_blocks(BlockRange::new(first + sector, 1), &mut cluster_buf[..bps])
+                .map_err(FatError::Block)?;
+            for raw in cluster_buf[..bps].chunks_exact(32) {
+                if raw[0] == 0 { stopped = true; break; }
+                if let Some(entry) = FatDirEntry::parse(raw)? {
+                    if count == entries.len() { entries.fill(None); return Err(FatError::DirectoryFull); }
+                    entries[count] = Some(entry);
+                    count += 1;
+                }
+            }
+            if stopped { break; }
+        }
+        return Ok(count);
+    }
+    if cluster_buf.len() != volume.cluster_size_bytes() { return Err(FatError::ClusterBufferTooSmall); }
+    let mut cluster = start_cluster.unwrap();
+    let mut visited = 0u32;
+    loop {
+        if visited >= volume.bpb.cluster_count { entries.fill(None); return Err(FatError::ChainTooLong); }
+        read_cluster(device, volume, cluster, cluster_buf)?;
+        for raw in cluster_buf.chunks_exact(32) {
+            if raw[0] == 0 { stopped = true; break; }
+            if let Some(entry) = FatDirEntry::parse(raw)? {
+                if count == entries.len() { entries.fill(None); return Err(FatError::DirectoryFull); }
+                entries[count] = Some(entry);
+                count += 1;
+            }
+        }
+        if stopped { break; }
+        visited += 1;
+        match read_fat_entry(device, volume, cluster, fat_scratch)? {
+            FatChainValue::Next(next) => cluster = next,
+            FatChainValue::End => break,
+        }
+    }
+    Ok(count)
+}
