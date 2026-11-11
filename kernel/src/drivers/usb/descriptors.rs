@@ -146,10 +146,15 @@ impl ParsedConfiguration{
     _=>{}
    }
   }
-  if out.interface_len!=descriptor.interface_count{return Err(UsbError::MalformedDescriptor)}
+  let mut unique_interfaces=[false;256];
+  let mut unique_count=0u8;
   for iface in out.interfaces[..out.interface_len as usize].iter().flatten(){
    if iface.endpoint_count!=iface.descriptor.endpoint_count{return Err(UsbError::MalformedDescriptor)}
+   let n=iface.descriptor.number as usize;
+   if !unique_interfaces[n]{unique_interfaces[n]=true;unique_count=unique_count.saturating_add(1);}
   }
+  // bNumInterfaces counts distinct interface numbers, not alternate settings.
+  if unique_count!=descriptor.interface_count{return Err(UsbError::MalformedDescriptor)}
   Ok(out)
  }
 }
@@ -178,5 +183,21 @@ mod configuration_tests{
  #[test]fn rejects_endpoint_multiplier_on_bulk_endpoint(){
   let bytes=[7,5,0x81,2,0,10,0];
   assert_eq!(ParsedEndpoint::parse(&bytes),Err(UsbError::MalformedDescriptor));
+ }
+}
+
+#[cfg(test)]
+mod alternate_setting_tests{
+ use super::*;
+ #[test]fn alternate_settings_do_not_inflate_interface_count(){
+  let bytes:[u8;40]=[
+   9,2,40,0,1,1,0,0x80,50,
+   9,4,0,0,0,0xff,0,0,0,
+   9,4,0,1,1,0xff,0,0,0,
+   7,5,0x81,2,0,2,0,
+   9,4,1,0,0,0xff,0,0,0,
+  ];
+  let parsed=ParsedConfiguration::parse(&bytes).unwrap();
+  assert_eq!(parsed.interface_len,3);
  }
 }
