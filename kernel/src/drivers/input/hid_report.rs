@@ -302,6 +302,19 @@ fn extract_bits(bytes: &[u8], bit_offset: u32, bit_size: u8) -> Option<u32> {
     }
     Some(value)
 }
+fn read_field_values(
+    field: HidInputField,
+    payload: &[u8],
+    values: &mut [i32; MAX_HID_VALUES],
+) -> Result<(), HidReportError> {
+    for element in 0..field.report_count as usize {
+        let bit = field.bit_offset.checked_add(element as u32 * field.report_size as u32)
+            .ok_or(HidReportError::ArithmeticOverflow)?;
+        let raw = extract_bits(payload, bit, field.report_size).ok_or(HidReportError::ReportTooShort)?;
+        values[element] = decode_signed(raw, field.report_size, field.logical_min);
+    }
+    Ok(())
+}
 fn decode_signed(raw: u32, size: u8, logical_min: i32) -> i32 {
     if logical_min < 0 && size < 32 {
         let shift = 32 - size as u32;
@@ -406,6 +419,63 @@ impl HidReportDecoder {
         for field_index in 0..map.field_count as usize {
             let field = match map.fields[field_index] { Some(f) if f.report_id == report_id => f, _ => continue };
             if field.is_constant() { continue; }
+            let gamepad_buttons = field.usage_page == 0x09
+                && field.application_page == 0x01
+                && (field.application_usage == 0x04 || field.application_usage == 0x05);
+            if !field.is_variable()
+                && (field.usage_page == 0x07 || field.usage_page == 0x0C || gamepad_buttons) {
+                let count = field.report_count as usize;
+                let mut old_values = [0i32; MAX_HID_VALUES];
+                let mut current_values = [0i32; MAX_HID_VALUES];
+                for element in 0..count {
+                    old_values[element] = self.previous[field.value_slot as usize + element];
+                }
+                read_field_values(field, payload, &mut current_values)?;
+                if field.usage_page == 0x07 || field.usage_page == 0x0C {
+                    let page = field.usage_page;
+                    for old_value in old_values[..count].iter().copied().filter(|v| *v > 0) {
+                        if !current_values[..count].contains(&old_value) {
+                            self.emit(if page == 0x07 {
+                                InputEvent::HidKey { device: self.device, usage_page: page,
+                                    usage: old_value as u16, pressed: false, modifiers }
+                            } else {
+                                InputEvent::ConsumerControl { device: self.device, usage_page: page,
+                                    usage: old_value as u16, pressed: false }
+                            }, producer, &mut stats);
+                        }
+                    }
+                    for value in current_values[..count].iter().copied().filter(|v| *v > 0) {
+                        if !old_values[..count].contains(&value) {
+                            self.emit(if page == 0x07 {
+                                InputEvent::HidKey { device: self.device, usage_page: page,
+                                    usage: value as u16, pressed: true, modifiers }
+                            } else {
+                                InputEvent::ConsumerControl { device: self.device, usage_page: page,
+                                    usage: value as u16, pressed: true }
+                            }, producer, &mut stats);
+                        }
+                    }
+                } else {
+                    for old_value in old_values[..count].iter().copied().filter(|v| *v > 0) {
+                        if !current_values[..count].contains(&old_value) {
+                            self.emit(InputEvent::GamepadButton { device: self.device,
+                                button: old_value as u16, pressed: false }, producer, &mut stats);
+                        }
+                    }
+                    for value in current_values[..count].iter().copied().filter(|v| *v > 0) {
+                        if !old_values[..count].contains(&value) {
+                            self.emit(InputEvent::GamepadButton { device: self.device,
+                                button: value as u16, pressed: true }, producer, &mut stats);
+                        }
+                    }
+                }
+                for element in 0..count {
+                    let slot = field.value_slot as usize + element;
+                    self.previous[slot] = current_values[element];
+                    self.initialized[slot] = true;
+                }
+                continue;
+            }
             for element in 0..field.report_count as usize {
                 let bit_offset = field.bit_offset
                     .checked_add((element as u32).saturating_mul(field.report_size as u32))
