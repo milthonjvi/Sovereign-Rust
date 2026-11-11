@@ -16,3 +16,6 @@ pub use partition::{
     from_gpt, from_mbr_logical, from_mbr_primary, Partition, PartitionDevice,
     PartitionError, PartitionScheme, PartitionType,
 };
+
+pub mod volume;
+pub use volume::{VolumeError, VolumeTable};
