@@ -17,7 +17,6 @@ use super::e1000_hw::{
     read_link_state, reset, E1000QueueError, E1000Registers, E1000ResetError,
     E1000QueueConfig, E1000RxQueue, E1000TxQueue,
 };
-use super::ethernet::MacAddress;
 use super::e1000_irq::{E1000Interrupt, E1000_ICR_LSC, E1000_ICR_TXDW};
 
 /// Maximum Ethernet frame accepted by this non-jumbo adapter (header included,
