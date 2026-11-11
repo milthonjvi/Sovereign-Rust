@@ -226,6 +226,8 @@ pub unsafe fn detach_interrupts(uart: &mut Uart16550) -> Result<(), UartIrqError
     if !port.tx_queue.is_empty() {
         return Err(UartIrqError::TransmitPending);
     }
+    // Wait for the UART shift register to finish before disabling its IRQ source.
+    uart.flush().map_err(UartIrqError::Uart)?;
 
     let last_on_line = current & port.shared_line_mask == port.bit;
     if last_on_line {
