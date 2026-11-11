@@ -155,6 +155,75 @@ pub struct LimineBootInfo {
 
 impl LimineBootInfo {
 
+
+    /// Discover ACPI tables using Limine's HHDM and memory map.
+    ///
+    /// Each table is accepted only when its complete range lies inside a
+    /// reported memory-map entry.
+    ///
+    /// # Safety
+    /// Limine HHDM mappings and memory-map response storage must remain valid.
+    pub unsafe fn discover_acpi(
+        &self,
+        rsdp: &Rsdp,
+    ) -> Result<crate::drivers::acpi::discover::AcpiTables, AcpiError> {
+        crate::drivers::acpi::discover::AcpiTables::discover(rsdp, |physical| {
+            // SAFETY: The caller guarantees that Limine mappings remain active.
+            unsafe { self.map_acpi_table(physical) }
+        })
+    }
+
+    /// Map and validate one physical ACPI SDT through the HHDM.
+    ///
+    /// # Safety
+    /// HHDM and memory-map response pointers must remain valid.
+    pub unsafe fn map_acpi_table(&self, physical: u64) -> Option<&'static [u8]> {
+        if physical == 0 || self.memory_map_entries.is_null() || self.hhdm_offset == 0 {
+            return None;
+        }
+        if self.memory_map_count > 4096 {
+            return None;
+        }
+
+        let mut containing_end = None;
+        for index in 0..self.memory_map_count {
+            // SAFETY: Limine supplied an array with memory_map_count pointers.
+            let entry_ptr = unsafe { ptr::read(self.memory_map_entries.add(index)) };
+            if entry_ptr.is_null() {
+                continue;
+            }
+            // SAFETY: Each non-null entry pointer is owned by the boot response.
+            let entry = unsafe { ptr::read(entry_ptr) };
+            let end = entry.base.checked_add(entry.length)?;
+            let header_end = physical.checked_add(36)?;
+            if entry.kind != 4 && entry.kind != 7
+                && physical >= entry.base && header_end <= end
+            {
+                containing_end = Some(end);
+                break;
+            }
+        }
+        let region_end = containing_end?;
+        let virtual_address = self.hhdm_offset.checked_add(physical)?;
+        let virtual_ptr = usize::try_from(virtual_address).ok()? as *const u8;
+
+        // SAFETY: The SDT header lies inside the validated HHDM memory range.
+        let length_ptr = unsafe { virtual_ptr.add(4).cast::<u32>() };
+        // SAFETY: ACPI SDT length is a little-endian u32 at offset 4.
+        let length = unsafe { ptr::read_unaligned(length_ptr) } as usize;
+        if !(36..=16 * 1024 * 1024).contains(&length) {
+            return None;
+        }
+        let table_end = physical.checked_add(length as u64)?;
+        if table_end > region_end {
+            return None;
+        }
+
+        // SAFETY: The complete table range was checked against a Limine memory
+        // map entry and translated through the active HHDM.
+        Some(unsafe { core::slice::from_raw_parts(virtual_ptr, length) })
+    }
+
     /// Parse the firmware RSDP supplied by Limine.
     ///
     /// Limine base revision 6 supplies a virtual address, so this pointer must
