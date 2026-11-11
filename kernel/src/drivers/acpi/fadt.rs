@@ -10,6 +10,8 @@ const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
 /// Register access is deliberately left to architecture-specific code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fadt {
+    /// FADT revision from the common SDT header.
+    pub revision: u8,
     pub firmware_ctrl: u32,
     pub dsdt: u32,
     pub preferred_power_management_profile: u8,
@@ -125,6 +127,7 @@ impl Fadt {
         };
 
         Ok(Self {
+            revision: table.header.revision,
             firmware_ctrl: read_u32(b, 36)?,
             dsdt: read_u32(b, 40)?,
             preferred_power_management_profile: b[45],
@@ -193,6 +196,7 @@ impl Fadt {
         if self.pm_hardware_mode() != PmHardwareMode::HardwareReduced {
             return Ok(None);
         }
+        self.validate_hardware_mode()?;
         let (control, status) = match (
             self.sleep_control_register,
             self.sleep_status_register,
@@ -216,6 +220,14 @@ impl Fadt {
         Ok(Some((control, status)))
     }
 
+    /// Hardware-reduced ACPI requires FADT revision 5 or newer.
+    pub fn validate_hardware_mode(&self) -> Result<(), AcpiError> {
+        if self.pm_hardware_mode() == PmHardwareMode::HardwareReduced && self.revision < 5 {
+            return Err(AcpiError::MalformedTable);
+        }
+        Ok(())
+    }
+
     /// Select the PM model advertised by the FADT.
     pub const fn pm_hardware_mode(&self) -> PmHardwareMode {
         if self.flags & FADT_HW_REDUCED_ACPI != 0 { PmHardwareMode::HardwareReduced }
@@ -226,12 +238,12 @@ impl Fadt {
     /// This returns metadata only and never accesses a register.
     pub fn resolve_pm_register_map(&self) -> Result<PmRegisterMap, AcpiError> {
         let mode = self.pm_hardware_mode();
+        self.validate_pm_registers()?;
         if mode == PmHardwareMode::HardwareReduced {
             return Ok(PmRegisterMap { mode, pm1a_event: None, pm1b_event: None,
                 pm1a_control: None, pm1b_control: None, pm2_control: None,
                 pm_timer: None, gpe0: None, gpe1: None });
         }
-        self.validate_pm_registers()?;
         let ext = self.extended_pm_registers;
         let choose = |gas: Option<GenericAddress>, legacy: u32, length: u8|
             -> Result<Option<PmRegisterAddress>, AcpiError> {
@@ -272,7 +284,7 @@ impl Fadt {
         // ACPI requires OSPM to ignore the legacy fixed-register interface
         // entirely when HW_REDUCED_ACPI is set.
         if self.pm_hardware_mode() == PmHardwareMode::HardwareReduced {
-            return Ok(());
+            return self.validate_hardware_mode();
         }
         let lengths = self.register_block_lengths;
         let legacy = self.legacy_pm_registers;
@@ -814,6 +826,17 @@ mod tests {
         }
         let old = Fadt::parse(&make_fadt(268, 0, None, None)).unwrap();
         assert_eq!(old.hypervisor_vendor_identity, None);
+    }
+
+    #[test]
+    fn hardware_reduced_mode_requires_fadt_revision_five_or_newer() {
+        let mut b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        b[8] = 4;
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validate_hardware_mode(), Err(AcpiError::MalformedTable));
+        assert_eq!(fadt.resolve_pm_register_map(), Err(AcpiError::MalformedTable));
     }
 
     #[test]
