@@ -196,6 +196,8 @@ pub struct UartRxStatistics {
     pub fifo_errors: usize,
     /// Bytes discarded because the software SPSC queue had no free slot.
     pub software_queue_drops: usize,
+    /// Times RX reached its per-drain byte budget with hardware data still pending.
+    pub drain_budget_exhaustions: usize,
 }
 
 struct AtomicRxStatistics {
@@ -205,6 +207,7 @@ struct AtomicRxStatistics {
     breaks: AtomicUsize,
     fifo: AtomicUsize,
     software_drops: AtomicUsize,
+    drain_budget_exhaustions: AtomicUsize,
 }
 
 impl AtomicRxStatistics {
@@ -216,6 +219,7 @@ impl AtomicRxStatistics {
             breaks: AtomicUsize::new(0),
             fifo: AtomicUsize::new(0),
             software_drops: AtomicUsize::new(0),
+            drain_budget_exhaustions: AtomicUsize::new(0),
         }
     }
 
@@ -227,10 +231,15 @@ impl AtomicRxStatistics {
             break_interrupts: self.breaks.load(Ordering::Relaxed),
             fifo_errors: self.fifo.load(Ordering::Relaxed),
             software_queue_drops: self.software_drops.load(Ordering::Relaxed),
+            drain_budget_exhaustions: self.drain_budget_exhaustions.load(Ordering::Relaxed),
         }
     }
 
     fn record_software_drop(&self) { self.software_drops.fetch_add(1, Ordering::Relaxed); }
+
+    fn record_drain_budget_exhaustion(&self) {
+        self.drain_budget_exhaustions.fetch_add(1, Ordering::Relaxed);
+    }
 
     fn record_lsr(&self, status: u8) {
         if status & OVERRUN_ERROR != 0 { self.overrun.fetch_add(1, Ordering::Relaxed); }
@@ -596,14 +605,15 @@ fn drain_port(
     queue: &'static UartRxBuffer<RX_CAPACITY>,
     stats: &'static AtomicRxStatistics,
 ) {
-    for _ in 0..MAX_DRAIN_PER_PORT {
+    let mut drained = 0;
+    while drained < MAX_DRAIN_PER_PORT {
         // SAFETY: The attached UART owns this I/O range and the IRQ handler is
-        // the sole producer for its SPSC queue. Reading LSR acknowledges latched
+        // the sole producer for this SPSC queue. Reading LSR acknowledges latched
         // line-status errors on 16550-compatible devices.
         let status = unsafe { io::in8(base + LSR) };
         stats.record_lsr(status);
         if status & DATA_READY == 0 {
-            break;
+            return;
         }
         // SAFETY: LSR reports that the receive data register contains a byte.
         let byte = unsafe { io::in8(base + DATA) };
@@ -622,6 +632,16 @@ fn drain_port(
             // explicitly instead of silently conflating it with line errors.
             stats.record_software_drop();
         }
+        drained += 1;
+    }
+
+    // Probe once more to distinguish an exactly-full batch from a FIFO that
+    // still has pending data after the bounded drain.
+    // SAFETY: The attached IRQ handler owns the UART status register.
+    let status = unsafe { io::in8(base + LSR) };
+    stats.record_lsr(status);
+    if status & DATA_READY != 0 {
+        stats.record_drain_budget_exhaustion();
     }
 }
 
@@ -838,6 +858,8 @@ mod tests {
             framing_errors: 1,
             break_interrupts: 1,
             fifo_errors: 1,
+            software_queue_drops: 0,
+            drain_budget_exhaustions: 0,
         });
     }
 
@@ -905,6 +927,16 @@ mod tests {
         assert!(receive_high_watermark(0x1234).is_none());
     }
 
+
+    #[test]
+    fn rx_drain_budget_exhaustions_are_counted_independently() {
+        let stats = AtomicRxStatistics::new();
+        stats.record_drain_budget_exhaustion();
+        stats.record_drain_budget_exhaustion();
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.drain_budget_exhaustions, 2);
+        assert_eq!(snapshot.software_queue_drops, 0);
+    }
 
     #[test]
     fn receive_statistics_include_software_queue_drops() {
