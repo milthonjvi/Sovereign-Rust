@@ -9,7 +9,7 @@ impl Trb{
  pub const fn cycle_bit(self)->bool{self.control&1!=0}
  pub const fn with_cycle(mut self,cycle:bool)->Self{if cycle{self.control|=1}else{self.control&=!1}self}
 }
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum ControllerState{Detached,Discovered,Reset,Running,Halted,Failed}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum ControllerState{Detached,Discovered,Halted,Resetting,Reset,Running,Failed}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum XhciError{InvalidCapability,UnsupportedVersion,NotReady,HardwareFault,InvalidRing,RingFull}
 /// Bounds-checked access to an already mapped xHCI MMIO region.
 pub trait RegisterIo{fn read32(&self,offset:usize)->Result<u32,XhciError>;fn write32(&mut self,offset:usize,value:u32)->Result<(),XhciError>;}
@@ -207,5 +207,115 @@ mod trb_builder_tests{
   assert_eq!(event.completion_code,1);assert_eq!(event.endpoint_id,3);assert_eq!(event.slot_id,2);
   let command=Trb{parameter:0x8000,status:1<<24,control:((TrbType::CommandCompletion as u32)<<10)|(2<<24)};
   assert_eq!(CommandCompletionEvent::parse(command).unwrap().command_pointer,0x8000);
+ }
+}
+
+
+pub const OP_USBCMD:usize=0x00;
+pub const OP_USBSTS:usize=0x04;
+pub const OP_CRCR:usize=0x18;
+pub const OP_DCBAAP:usize=0x30;
+pub const OP_CONFIG:usize=0x38;
+pub const OP_PORT_BASE:usize=0x400;
+pub const OP_PORT_STRIDE:usize=0x10;
+pub const USBCMD_RUN:u32=1;
+pub const USBCMD_RESET:u32=1<<1;
+pub const USBSTS_HALTED:u32=1;
+pub const USBSTS_CONTROLLER_NOT_READY:u32=1<<11;
+
+/// Non-blocking xHCI bring-up. DMA memory and MMIO mapping are provided by
+/// kernel memory/PCI layers; every poll returns so the caller can enforce timeout.
+pub struct XhciController{pub state:ControllerState,pub capabilities:CapabilityRegisters,operational_base:usize,pub enabled_slots:u8}
+impl XhciController{
+ pub fn discover<I:RegisterIo>(io:&I)->Result<Self,XhciError>{
+  let cap0=io.read32(0)?;let hcs1=io.read32(4)?;
+  let capabilities=CapabilityRegisters::parse(cap0,hcs1)?;
+  Ok(Self{state:ControllerState::Discovered,capabilities,operational_base:capabilities.capability_length as usize,enabled_slots:0})
+ }
+ fn op(&self,offset:usize)->usize{self.operational_base+offset}
+ pub fn request_halt<I:RegisterIo>(&mut self,io:&mut I)->Result<(),XhciError>{
+  if self.state!=ControllerState::Discovered&&self.state!=ControllerState::Running{return Err(XhciError::InvalidState)}
+  let command=io.read32(self.op(OP_USBCMD))?;
+  io.write32(self.op(OP_USBCMD),command&!USBCMD_RUN)?;Ok(())
+ }
+ pub fn poll_halted<I:RegisterIo>(&mut self,io:&I)->Result<bool,XhciError>{
+  if self.state!=ControllerState::Discovered&&self.state!=ControllerState::Running{return Err(XhciError::InvalidState)}
+  if io.read32(self.op(OP_USBSTS))?&USBSTS_HALTED!=0{self.state=ControllerState::Halted;return Ok(true)}
+  Ok(false)
+ }
+ pub fn request_reset<I:RegisterIo>(&mut self,io:&mut I)->Result<(),XhciError>{
+  if self.state!=ControllerState::Halted{return Err(XhciError::InvalidState)}
+  let command=io.read32(self.op(OP_USBCMD))?;
+  io.write32(self.op(OP_USBCMD),command|USBCMD_RESET)?;self.state=ControllerState::Resetting;Ok(())
+ }
+ pub fn poll_reset<I:RegisterIo>(&mut self,io:&I)->Result<bool,XhciError>{
+  if self.state!=ControllerState::Resetting{return Err(XhciError::InvalidState)}
+  let command=io.read32(self.op(OP_USBCMD))?;let status=io.read32(self.op(OP_USBSTS))?;
+  if command&USBCMD_RESET==0&&status&USBSTS_CONTROLLER_NOT_READY==0{self.state=ControllerState::Reset;return Ok(true)}
+  Ok(false)
+ }
+ /// Addresses must be physical, DMA-visible and aligned as required by xHCI.
+ pub fn configure_dma<I:RegisterIo>(&mut self,io:&mut I,dcbaa:u64,command_ring:u64,slots:u8)->Result<(),XhciError>{
+  if self.state!=ControllerState::Reset{return Err(XhciError::InvalidState)}
+  if dcbaa&0x3f!=0||command_ring&0x3f!=0{return Err(XhciError::InvalidDmaAddress)}
+  if slots==0||slots>self.capabilities.max_device_slots{return Err(XhciError::InvalidCapability)}
+  io.write32(self.op(OP_DCBAAP)+4,(dcbaa>>32)as u32)?;
+  io.write32(self.op(OP_DCBAAP),dcbaa as u32)?;
+  io.write32(self.op(OP_CRCR)+4,(command_ring>>32)as u32)?;
+  io.write32(self.op(OP_CRCR),(command_ring as u32)|1)?;
+  io.write32(self.op(OP_CONFIG),slots as u32)?;
+  self.enabled_slots=slots;Ok(())
+ }
+ pub fn start<I:RegisterIo>(&mut self,io:&mut I)->Result<(),XhciError>{
+  if self.state!=ControllerState::Reset||self.enabled_slots==0{return Err(XhciError::InvalidState)}
+  let command=io.read32(self.op(OP_USBCMD))?;
+  io.write32(self.op(OP_USBCMD),command|USBCMD_RUN)?;Ok(())
+ }
+ pub fn poll_running<I:RegisterIo>(&mut self,io:&I)->Result<bool,XhciError>{
+  if self.state!=ControllerState::Reset{return Err(XhciError::InvalidState)}
+  let status=io.read32(self.op(OP_USBSTS))?;
+  if status&USBSTS_CONTROLLER_NOT_READY==0&&status&USBSTS_HALTED==0{self.state=ControllerState::Running;return Ok(true)}
+  Ok(false)
+ }
+ pub fn read_port_status<I:RegisterIo>(&self,io:&I,port:u8)->Result<super::super::controller::PortStatus,XhciError>{
+  if self.state!=ControllerState::Running{return Err(XhciError::NotReady)}
+  if port==0||port>self.capabilities.max_ports{return Err(XhciError::InvalidCapability)}
+  let value=io.read32(self.op(OP_PORT_BASE)+(port as usize-1)*OP_PORT_STRIDE)?;
+  let speed=match (value>>10)&0xf{1=>Some(super::super::transfer::UsbSpeed::Full),2=>Some(super::super::transfer::UsbSpeed::Low),3=>Some(super::super::transfer::UsbSpeed::High),4=>Some(super::super::transfer::UsbSpeed::Super),5=>Some(super::super::transfer::UsbSpeed::SuperPlus),_=>None};
+  Ok(super::super::controller::PortStatus{connected:value&1!=0,enabled:value&2!=0,suspended:(value>>5)&0xf==3,over_current:value&(1<<3)!=0,speed})
+ }
+}
+
+#[cfg(test)]
+mod controller_state_tests{
+ use super::*;
+ struct FakeRegisters{words:[u32;256]}
+ impl FakeRegisters{fn new()->Self{Self{words:[0;256]}}}
+ impl RegisterIo for FakeRegisters{
+  fn read32(&self,offset:usize)->Result<u32,XhciError>{self.words.get(offset/4).copied().ok_or(XhciError::HardwareFault)}
+  fn write32(&mut self,offset:usize,value:u32)->Result<(),XhciError>{
+   let index=offset/4;if index>=self.words.len(){return Err(XhciError::HardwareFault)}
+   self.words[index]=value;
+   if offset==0x40{
+    if value&USBCMD_RESET!=0{self.words[index]&=!USBCMD_RESET;}
+    if value&USBCMD_RUN!=0{self.words[index+1]&=!USBSTS_HALTED;}else{self.words[index+1]|=USBSTS_HALTED;}
+   }
+   Ok(())
+  }
+ }
+ #[test]fn runs_halt_reset_configure_and_start_sequence(){
+  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8|(1<<24);io.words[17]=USBSTS_HALTED;
+  let mut h=XhciController::discover(&io).unwrap();
+  h.request_halt(&mut io).unwrap();assert!(h.poll_halted(&io).unwrap());
+  h.request_reset(&mut io).unwrap();assert!(h.poll_reset(&io).unwrap());
+  h.configure_dma(&mut io,0x2000,0x3000,8).unwrap();
+  assert_eq!(io.words[0x40/4+OP_CONFIG/4],8);
+  h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());
+  assert_eq!(h.state,ControllerState::Running);
+ }
+ #[test]fn rejects_unaligned_dma_addresses(){
+  let mut io=FakeRegisters::new();io.words[0]=0x0101_0040;io.words[1]=8;
+  let mut h=XhciController::discover(&io).unwrap();h.state=ControllerState::Reset;
+  assert_eq!(h.configure_dma(&mut io,0x2001,0x3000,4),Err(XhciError::InvalidDmaAddress));
  }
 }
