@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn reduced_hardware_never_exposes_legacy_fixed_registers() {
-        let mut b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        let mut b = make_fadt(268, FADT_HW_REDUCED_ACPI, None, None);
         b[64..68].copy_from_slice(&0x404u32.to_le_bytes()); b[89] = 2;
         b[9] = 0; b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s,x| s.wrapping_add(*x)));
         let map = Fadt::parse(&b).unwrap().resolve_pm_register_map().unwrap();
