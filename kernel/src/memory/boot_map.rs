@@ -29,8 +29,8 @@ pub struct PhysicalRegion {
 }
 
 impl PhysicalRegion {
-    pub const fn byte_len(self) -> u64 {
-        self.end - self.start
+    pub const fn checked_byte_len(self) -> Option<u64> {
+        self.end.checked_sub(self.start)
     }
 }
 
@@ -45,7 +45,14 @@ impl<'map, 'buffer> BootMemoryMap<'map, 'buffer> {
         if descriptors.is_empty() {
             return Err(BootMemoryError::EmptyMap);
         }
-        Ok(Self { descriptors })
+        let map = Self { descriptors };
+        // Validate the complete descriptor array before exposing any region to
+        // an allocator. This prevents early allocations from a valid prefix of
+        // a later-corrupt or overlapping memory map.
+        for region in map.usable_regions() {
+            let _ = region?;
+        }
+        Ok(map)
     }
 
     /// Iterate only conventional RAM ranges that are safe to consider for
@@ -68,7 +75,9 @@ impl<'map, 'buffer> BootMemoryMap<'map, 'buffer> {
                 .ok_or(BootMemoryError::RangeOverflow)?;
             summary.page_count = summary.page_count.checked_add(region.page_count)
                 .ok_or(BootMemoryError::RangeOverflow)?;
-            summary.byte_count = summary.byte_count.checked_add(region.byte_len())
+            let bytes = region.checked_byte_len()
+                .ok_or(BootMemoryError::RangeOverflow)?;
+            summary.byte_count = summary.byte_count.checked_add(bytes)
                 .ok_or(BootMemoryError::RangeOverflow)?;
         }
         Ok(summary)
