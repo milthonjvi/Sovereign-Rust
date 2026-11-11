@@ -40,6 +40,8 @@ const LVT_TIMER_TSC_DEADLINE: u32 = 1 << 18;
 const LVT_TIMER_VECTOR_MASK: u32 = 0xFF;
 const SVR_SOFTWARE_ENABLE: u32 = 1 << 8;
 const ICR_DELIVERY_PENDING: u64 = 1 << 12;
+// Delivery mode 000b selects the architectural fixed-delivery operation.
+const ICR_FIXED_DELIVERY: u64 = 0b000 << 8;
 const ICR_DESTINATION_SHIFT: u32 = 32;
 const ICR_WAIT_LIMIT: usize = 1_000_000;
 
