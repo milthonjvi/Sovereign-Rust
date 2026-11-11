@@ -736,9 +736,7 @@ mod tests {
     use std::vec::Vec;
 
     fn mock_dma_buffer<'a>(address: u64, bytes: &'a mut [u8]) -> DmaBuffer<'a> {
-        // SAFETY: MockRegisters never accesses backing memory; synthetic DMA addresses
-        // are used only to exercise descriptor setup and queue ownership.
-        unsafe { DmaBuffer::new(address, bytes) }.unwrap()
+        DmaBuffer::new_for_test(address, bytes).unwrap()
     }
 
 
