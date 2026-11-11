@@ -42,8 +42,11 @@ existing PS/2 event pipeline.
 
 USB-side APIs already present:
 
-- `drivers::usb::hid::find_boot_interface`
-- `drivers::usb::hid::BootHidInterface`
+- `drivers::usb::hid::find_boot_interface` for boot keyboard/mouse compatibility.
+- `drivers::usb::hid_transport::find_interface` for generic report-protocol HID interfaces.
+- `drivers::usb::hid_transport::HidInterfaceInfo::interrupt_in_endpoint` to enumerate all interrupt-IN endpoints on a composite interface.
+- `drivers::usb::hid::BootHidInterface::read_report` for bounded raw report transport.
+- `drivers::usb::hid::get_report_descriptor` to construct the class-independent Report Descriptor request.
 - `drivers::usb::hid::BootKeyboardReport::parse`
 - `drivers::usb::hid::BootMouseReport::parse`
 - `drivers::usb::hid::BootMouseReportWheel::parse`
@@ -154,3 +157,10 @@ the existing input event vocabulary and mux.
 USB will continue improving discovery, control requests, endpoint scheduling,
 transfer reliability, DMA and disconnect handling. Any missing transport
 metadata should be requested from this module rather than duplicated in Input.
+
+
+## Generic HID interface discovery added
+
+The USB module now exposes `hid_transport::find_interface(configuration, interface_number, alternate_setting)`. It deliberately accepts non-boot HID interfaces (subclass/protocol zero included) and returns only transport metadata. `HidInterfaceInfo::interrupt_in_count` and `interrupt_in_endpoint` enumerate every interrupt-IN endpoint belonging to that interface. Input can therefore support report-protocol keyboards, mice, touchscreens, tablets, gamepads and vendor-defined collections without USB implementing their semantics.
+
+For the HID class descriptor, use `hid::HidDescriptor::parse` to obtain the Report Descriptor length, then `hid::get_report_descriptor(interface_number, report_length)` to build the request. The report parser in USB only accounts for per-report bit lengths and IDs; usage interpretation, logical ranges, collection semantics and normalized event publication remain Input responsibilities.
