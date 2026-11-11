@@ -49,7 +49,9 @@ impl E1000Interrupt {
     /// # Safety
     /// The vector must be a valid, exclusively assigned APIC vector and the
     /// corresponding device interrupt source must remain masked until `enable`.
-    pub unsafe fn install<E>(vector: u8, mask: u32) -> Result<Self, E1000InterruptError<E>> {
+    pub unsafe fn install(vector: u8, mask: u32)
+        -> Result<Self, E1000InterruptError<core::convert::Infallible>>
+    {
         if mask == 0 || mask & !E1000_DEFAULT_INTERRUPT_MASK != 0 {
             return Err(E1000InterruptError::InvalidMask);
         }
@@ -92,7 +94,9 @@ impl E1000Interrupt {
     /// # Safety
     /// No CPU may still be executing the registered callback, and the device
     /// interrupt source must already be masked.
-    pub unsafe fn uninstall<E>(self) -> Result<(), E1000InterruptError<E>> {
+    pub unsafe fn uninstall(self)
+        -> Result<(), E1000InterruptError<core::convert::Infallible>>
+    {
         // SAFETY: caller guarantees source masking and drained in-flight delivery.
         unsafe {
             crate::interrupts::apic::unregister_vector(self.vector, e1000_interrupt_handler)
