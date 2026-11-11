@@ -331,6 +331,45 @@ impl<'a> FramebufferSurface<'a> {
         }
     }
 
+    /// Render a bitmap glyph with integer horizontal and vertical scaling.
+    ///
+    /// Scale factors are in framebuffer pixels per source glyph pixel.
+    /// Zero factors produce no output; clipping is handled by fill_rect.
+    pub fn draw_char_scaled(
+        &mut self,
+        x: usize,
+        y: usize,
+        character: char,
+        scale_x: usize,
+        scale_y: usize,
+        foreground: Color,
+        background: Option<Color>,
+    ) {
+        use super::font::{glyph_rows, FONT_HEIGHT, FONT_WIDTH};
+        if scale_x == 0 || scale_y == 0 {
+            return;
+        }
+        let cell_width = FONT_WIDTH.saturating_mul(scale_x);
+        let cell_height = FONT_HEIGHT.saturating_mul(scale_y);
+        if let Some(background) = background {
+            self.fill_rect(x, y, cell_width, cell_height, background);
+        }
+
+        for (row, bits) in glyph_rows(character).iter().enumerate() {
+            for column in 0..FONT_WIDTH {
+                if (bits & (1 << (FONT_WIDTH - 1 - column))) != 0 {
+                    self.fill_rect(
+                        x.saturating_add(column.saturating_mul(scale_x)),
+                        y.saturating_add(row.saturating_mul(scale_y)),
+                        scale_x,
+                        scale_y,
+                        foreground,
+                    );
+                }
+            }
+        }
+    }
+
     /// Render ASCII text, handling newlines, tabs, and automatic line wrapping.
     /// Returns the cursor position immediately after the final character.
     pub fn draw_text(
