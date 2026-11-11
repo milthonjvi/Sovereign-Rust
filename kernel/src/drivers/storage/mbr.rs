@@ -138,6 +138,11 @@ pub fn enumerate_logical_partitions<D: super::block::BlockDevice>(
     loop {
         if current < base || current >= limit { return Err(MbrError::InvalidEbrLink); }
         if visited_ebr_lbas[..visited_count].contains(&current) { return Err(MbrError::EbrCycle); }
+        for partition in output[..output_count].iter().flatten() {
+            if current >= partition.start_lba && current < partition.end_lba_exclusive()? {
+                return Err(MbrError::OverlappingPartitions);
+            }
+        }
         if visited_count == visited_ebr_lbas.len() { return Err(MbrError::EbrTraversalLimit); }
         visited_ebr_lbas[visited_count] = current;
         visited_count += 1;
@@ -156,11 +161,15 @@ pub fn enumerate_logical_partitions<D: super::block::BlockDevice>(
         }
 
         if let Some((bootable, kind, relative, count)) = first {
-            if kind == 0 || count == 0 || relative == 0 { return Err(MbrError::InvalidEbrEntry); }
+            if kind == 0 || matches!(kind, 0x05 | 0x0F | 0x85) || count == 0 || relative == 0 {
+                return Err(MbrError::InvalidEbrEntry);
+            }
             let start = current.checked_add(relative as u64).ok_or(MbrError::AddressOverflow)?;
             let partition = LogicalPartition { bootable, partition_type: kind, start_lba: start, sector_count: count };
             let end = partition.end_lba_exclusive()?;
-            if start < base || end > limit || start == current { return Err(MbrError::InvalidPartitionRange); }
+            if start < base || end > limit || start == current
+                || visited_ebr_lbas[..visited_count].iter().any(|lba| *lba >= start && *lba < end)
+            { return Err(MbrError::InvalidPartitionRange); }
             if output_count == output.len() { return Err(MbrError::LogicalPartitionOutputFull); }
             for previous in output[..output_count].iter().flatten() {
                 if start < previous.end_lba_exclusive()? && previous.start_lba < end {
