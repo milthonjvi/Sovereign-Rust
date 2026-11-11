@@ -111,3 +111,120 @@ mod schedule_tests{
   assert_eq!(core::mem::size_of::<EhciQueueTransferDescriptor>(),32);
  }
 }
+
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub enum EhciState{Discovered,Halted,Resetting,Reset,Running,Failed}
+pub trait EhciRegisterIo{fn read32(&self,offset:usize)->Result<u32,UsbError>;fn write32(&mut self,offset:usize,value:u32)->Result<(),UsbError>;}
+pub struct EhciController{pub state:EhciState,pub version:u16,pub port_count:u8,pub address_64bit:bool,operational_base:usize,schedule_configured:bool,segment:u32}
+impl EhciController{
+ pub fn discover<I:EhciRegisterIo>(io:&I)->Result<Self,UsbError>{
+  let cap=io.read32(0)?;let length=(cap&0xff)as usize;let version=(cap>>16)as u16;
+  if length<0x10||version<0x0100{return Err(UsbError::MalformedDescriptor)}
+  let structural=io.read32(4)?;let ports=(structural&0x0f)as u8;
+  if ports==0{return Err(UsbError::MalformedDescriptor)}
+  let capability=io.read32(8)?;
+  Ok(Self{state:EhciState::Discovered,version,port_count:ports,address_64bit:capability&1!=0,operational_base:length,schedule_configured:false,segment:0})
+ }
+ fn op(&self,offset:usize)->usize{self.operational_base+offset}
+ pub fn request_halt<I:EhciRegisterIo>(&mut self,io:&mut I)->Result<(),UsbError>{
+  if self.state!=EhciState::Discovered&&self.state!=EhciState::Running{return Err(UsbError::Unsupported)}
+  let command=io.read32(self.op(USBCMD))?;
+  io.write32(self.op(USBCMD),command&!CMD_RUN)
+ }
+ pub fn poll_halted<I:EhciRegisterIo>(&mut self,io:&I)->Result<bool,UsbError>{
+  if self.state!=EhciState::Discovered&&self.state!=EhciState::Running{return Err(UsbError::Unsupported)}
+  if io.read32(self.op(USBSTS))?&STS_HALTED!=0{self.state=EhciState::Halted;return Ok(true)}
+  Ok(false)
+ }
+ pub fn request_reset<I:EhciRegisterIo>(&mut self,io:&mut I)->Result<(),UsbError>{
+  if self.state!=EhciState::Halted{return Err(UsbError::Unsupported)}
+  let command=io.read32(self.op(USBCMD))?;
+  io.write32(self.op(USBCMD),command|CMD_RESET)?;self.state=EhciState::Resetting;Ok(())
+ }
+ pub fn poll_reset<I:EhciRegisterIo>(&mut self,io:&I)->Result<bool,UsbError>{
+  if self.state!=EhciState::Resetting{return Err(UsbError::Unsupported)}
+  if io.read32(self.op(USBCMD))?&CMD_RESET==0{self.state=EhciState::Reset;return Ok(true)}
+  Ok(false)
+ }
+ /// Programs the periodic frame list and asynchronous QH using one 4-GiB
+ /// segment. Caller must provide pinned, coherent DMA memory at these addresses.
+ pub unsafe fn configure_schedules<I:EhciRegisterIo>(&mut self,io:&mut I,periodic_list:u64,async_head_qh:u64)->Result<(),UsbError>{
+  if self.state!=EhciState::Reset||self.schedule_configured{return Err(UsbError::Unsupported)}
+  if periodic_list&0xfff!=0||async_head_qh&0x1f!=0{return Err(UsbError::InvalidAddress)}
+  let periodic_segment=(periodic_list>>32)as u32;let async_segment=(async_head_qh>>32)as u32;
+  if periodic_segment!=async_segment||(!self.address_64bit&&periodic_segment!=0){return Err(UsbError::InvalidAddress)}
+  io.write32(self.op(CTRLDSSEGMENT),periodic_segment)?;
+  io.write32(self.op(PERIODICLISTBASE),periodic_list as u32)?;
+  io.write32(self.op(ASYNCLISTADDR),async_head_qh as u32)?;
+  io.write32(self.op(CONFIGFLAG),1)?;
+  self.segment=periodic_segment;self.schedule_configured=true;Ok(())
+ }
+ pub fn start<I:EhciRegisterIo>(&mut self,io:&mut I)->Result<(),UsbError>{
+  if self.state!=EhciState::Reset||!self.schedule_configured{return Err(UsbError::Unsupported)}
+  let command=io.read32(self.op(USBCMD))?;
+  io.write32(self.op(USBCMD),command|CMD_RUN|(1<<4)|(1<<5))
+ }
+ pub fn poll_running<I:EhciRegisterIo>(&mut self,io:&I)->Result<bool,UsbError>{
+  if self.state!=EhciState::Reset{return Err(UsbError::Unsupported)}
+  if io.read32(self.op(USBSTS))?&STS_HALTED==0{self.state=EhciState::Running;return Ok(true)}
+  Ok(false)
+ }
+ pub fn port_status<I:EhciRegisterIo>(&self,io:&I,port:u8)->Result<super::controller::PortStatus,UsbError>{
+  if self.state!=EhciState::Running{return Err(UsbError::ControllerUnavailable)}
+  if port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
+  let value=io.read32(self.op(PORTSC_BASE)+(port as usize-1)*4)?;
+  Ok(super::controller::PortStatus{connected:value&1!=0,enabled:value&(1<<2)!=0,
+   suspended:value&(1<<7)!=0,over_current:value&(1<<4)!=0,speed:None})
+ }
+ pub fn request_port_reset<I:EhciRegisterIo>(&self,io:&mut I,port:u8)->Result<(),UsbError>{
+  if self.state!=EhciState::Running||port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
+  let offset=self.op(PORTSC_BASE)+(port as usize-1)*4;let value=io.read32(offset)?;
+  if value&1==0{return Err(UsbError::ControllerUnavailable)}
+  io.write32(offset,(value&(1<<12))|(1<<8))
+ }
+ pub fn port_reset_complete<I:EhciRegisterIo>(&self,io:&I,port:u8)->Result<bool,UsbError>{
+  if port==0||port>self.port_count{return Err(UsbError::InvalidAddress)}
+  let value=io.read32(self.op(PORTSC_BASE)+(port as usize-1)*4)?;
+  Ok(value&(1<<8)==0&&value&(1<<2)!=0)
+ }
+ pub fn clear_port_changes<I:EhciRegisterIo>(&self,io:&mut I,port:u8,changes:u32)->Result<(),UsbError>{
+  const MASK:u32=(1<<1)|(1<<3)|(1<<5)|(1<<19);
+  if port==0||port>self.port_count||changes&!MASK!=0{return Err(UsbError::InvalidAddress)}
+  let offset=self.op(PORTSC_BASE)+(port as usize-1)*4;
+  let power=io.read32(offset)?&(1<<12);io.write32(offset,power|changes)
+ }
+}
+
+#[cfg(test)]
+mod controller_tests{
+ use super::*;
+ struct FakeEhci{registers:[u32;128]}
+ impl FakeEhci{fn new()->Self{Self{registers:[0;128]}}}
+ impl EhciRegisterIo for FakeEhci{
+  fn read32(&self,offset:usize)->Result<u32,UsbError>{self.registers.get(offset/4).copied().ok_or(UsbError::BufferTooShort)}
+  fn write32(&mut self,offset:usize,value:u32)->Result<(),UsbError>{
+   let index=offset/4;if index>=self.registers.len(){return Err(UsbError::BufferTooShort)}
+   self.registers[index]=value;
+   if offset==0x20{
+    if value&CMD_RESET!=0{self.registers[index]&=!CMD_RESET;}
+    if value&CMD_RUN!=0{self.registers[index+1]&=!STS_HALTED;}else{self.registers[index+1]|=STS_HALTED;}
+   }
+   Ok(())
+  }
+ }
+ #[test]fn halts_resets_configures_schedules_and_runs(){
+  let mut io=FakeEhci::new();io.registers[0]=0x0100_0020;io.registers[1]=4;io.registers[2]=1;io.registers[9]=STS_HALTED;
+  let mut h=EhciController::discover(&io).unwrap();
+  h.request_halt(&mut io).unwrap();assert!(h.poll_halted(&io).unwrap());
+  h.request_reset(&mut io).unwrap();assert!(h.poll_reset(&io).unwrap());
+  unsafe{h.configure_schedules(&mut io,0x1000,0x2000)}.unwrap();
+  h.start(&mut io).unwrap();assert!(h.poll_running(&io).unwrap());
+  assert_eq!(h.state,EhciState::Running);
+ }
+ #[test]fn rejects_misaligned_ehci_schedule_memory(){
+  let mut io=FakeEhci::new();io.registers[0]=0x0100_0020;io.registers[1]=4;
+  let mut h=EhciController::discover(&io).unwrap();h.state=EhciState::Reset;
+  assert_eq!(unsafe{h.configure_schedules(&mut io,0x1001,0x2000)},Err(UsbError::InvalidAddress));
+ }
+}
