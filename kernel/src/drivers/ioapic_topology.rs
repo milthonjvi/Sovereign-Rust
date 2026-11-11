@@ -80,6 +80,82 @@ pub fn resolve_isa_irq_route(
     })
 }
 
+/// Validate the hardware-discovered GSI intervals directly from mapped
+/// controllers. This avoids trusting a caller-maintained snapshot during route
+/// programming and keeps the operation allocation-free.
+fn validate_controller_topology(
+    controllers: &[super::ioapic::IoApicController],
+) -> Result<(), TopologyError> {
+    if controllers.is_empty() {
+        return Err(TopologyError::EmptyTopology);
+    }
+
+    for (index, controller) in controllers.iter().enumerate() {
+        let range = controller.gsi_range();
+        if range.redirection_count == 0
+            || range.redirection_count > MAX_REDIRECTION_ENTRIES
+        {
+            return Err(TopologyError::InvalidRedirectionCount);
+        }
+        let end = range.end_exclusive().ok_or(TopologyError::GsiRangeOverflow)?;
+
+        for previous_controller in &controllers[..index] {
+            let previous = previous_controller.gsi_range();
+            if previous.apic_id == range.apic_id {
+                return Err(TopologyError::DuplicateControllerId);
+            }
+            let previous_end = previous.end_exclusive()
+                .ok_or(TopologyError::GsiRangeOverflow)?;
+            if range.gsi_base < previous_end && previous.gsi_base < end {
+                return Err(TopologyError::OverlappingGsiRanges);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolve and program an ISA IRQ on the correct controller in a multi-I/O-APIC
+/// system. The route is always left masked; the interrupt layer must register
+/// its handler before separately enabling delivery. No allocation is used.
+pub fn configure_isa_irq_masked(
+    controllers: &mut [super::ioapic::IoApicController],
+    irq: u8,
+    overrides: &[crate::drivers::acpi::madt::InterruptSourceOverride],
+    vector: u8,
+    destination_apic_id: u8,
+) -> Result<IsaGsiRoute, IsaRouteError> {
+    validate_controller_topology(controllers).map_err(IsaRouteError::Topology)?;
+    let (gsi, mode) = super::ioapic::resolve_isa_irq(irq, overrides)
+        .map_err(IsaRouteError::Interrupt)?;
+
+    let mut target = None;
+    for (controller_index, controller) in controllers.iter().enumerate() {
+        let range = controller.gsi_range();
+        if range.contains(gsi) {
+            if target.is_some() {
+                return Err(IsaRouteError::Topology(TopologyError::OverlappingGsiRanges));
+            }
+            target = Some((controller_index, gsi - range.gsi_base));
+        }
+    }
+    let (controller_index, pin) =
+        target.ok_or(IsaRouteError::Topology(TopologyError::GsiNotCovered))?;
+
+    controllers[controller_index]
+        .configure_masked(
+            gsi,
+            super::ioapic::RedirectionEntry {
+                vector,
+                destination_apic_id,
+                masked: true,
+                mode,
+            },
+        )
+        .map_err(IsaRouteError::Interrupt)?;
+
+    Ok(IsaGsiRoute { gsi, controller_index, pin, mode })
+}
+
 /// Validate controller identity and GSI interval invariants.
 ///
 /// Call after reading each controller's actual redirection count. Duplicate
