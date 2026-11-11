@@ -364,9 +364,9 @@ pub fn issue_command<R:AhciRegisterIo>(
     let active=io.read32(sact)?;
     if ncq {
         if active&bit!=0{return Err(AhciError::SlotBusy);}
-        // PxCI without any active SACT slot represents an outstanding non-NCQ
-        // command; NCQ and non-NCQ commands must not overlap.
-        if active==0 && issued!=0{return Err(AhciError::SlotBusy);}
+        // PxCI bits not represented in PxSACT belong to non-NCQ commands.
+        // Reject mixed traffic even when other NCQ commands are still active.
+        if issued & !active != 0{return Err(AhciError::SlotBusy);}
         io.write32(sact,active|bit)?;
     } else if active!=0 || issued!=0 {
         // Non-NCQ commands are serialized against both NCQ and non-NCQ work.
@@ -456,6 +456,17 @@ mod port_tests {
         assert_eq!(issue_command(&mut regs,0,3,true,8),Err(AhciError::SlotBusy));
         assert_eq!(regs.0[0x34/4],0);
         assert_eq!(regs.0[0x38/4],1<<2);
+    }
+
+    #[test]
+    fn ncq_submission_rejects_non_ncq_command_while_other_ncq_is_active() {
+        let mut regs=Registers([0;64]);
+        regs.0[0x18/4]=(1<<0)|(1<<15);
+        regs.0[0x34/4]=1<<2; // Existing NCQ command.
+        regs.0[0x38/4]=(1<<2)|(1<<5); // NCQ plus an unrelated non-NCQ slot.
+        assert_eq!(issue_command(&mut regs,0,3,true,8),Err(AhciError::SlotBusy));
+        assert_eq!(regs.0[0x34/4],1<<2);
+        assert_eq!(regs.0[0x38/4],(1<<2)|(1<<5));
     }
 
     #[test]
