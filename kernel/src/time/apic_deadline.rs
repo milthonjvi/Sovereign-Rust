@@ -236,6 +236,18 @@ impl<S: ClockSource, const N: usize> TscDeadlineQueue<S, N> {
         unsafe { self.timer.arm(absolute_tsc) }
     }
 
+    /// Stop the local deadline comparator and unregister its interrupt handler.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, with no handler in flight and no remaining
+    /// users of this queue.
+    pub unsafe fn shutdown(&mut self) -> Result<(), super::interrupt::TimerInterruptError> {
+        // SAFETY: Caller guarantees this CPU owns the TSC-deadline MSR.
+        unsafe { self.timer.stop() };
+        // SAFETY: Same serialized BSP teardown contract.
+        unsafe { super::interrupt::unregister_timer_interrupt() }
+    }
+
     /// Next absolute deadline currently queued for this CPU.
     pub fn next_deadline(&self) -> Option<Deadline> {
         self.service.next_deadline()
