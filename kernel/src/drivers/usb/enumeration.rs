@@ -35,7 +35,7 @@ impl Default for DeviceAddressPool{fn default()->Self{Self::new()}}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub enum EnumerationStage{
- ReadInitialDeviceDescriptor,SetAddress,ReadDeviceDescriptor,
+ ReadInitialDeviceDescriptor,SetAddress,AddressSettle,ReadDeviceDescriptor,
  ReadConfigurationHeader,ReadConfiguration,SetConfiguration,Complete,Failed,
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -55,6 +55,7 @@ impl EnumerationSession{
   match self.stage{
    EnumerationStage::ReadInitialDeviceDescriptor=>Some(SetupPacket::get_descriptor(DESC_DEVICE,0,8)),
    EnumerationStage::SetAddress=>Some(SetupPacket::set_address(self.address?)),
+   EnumerationStage::AddressSettle=>None,
    EnumerationStage::ReadDeviceDescriptor=>Some(SetupPacket::get_descriptor(DESC_DEVICE,0,18)),
    EnumerationStage::ReadConfigurationHeader=>Some(SetupPacket::get_descriptor(DESC_CONFIGURATION,0,9)),
    EnumerationStage::ReadConfiguration=>Some(SetupPacket::get_descriptor(DESC_CONFIGURATION,0,self.configuration_length)),
@@ -73,8 +74,9 @@ impl EnumerationSession{
     }
     EnumerationStage::SetAddress=>{
      if !data.is_empty(){return Err(UsbError::MalformedDescriptor)}
-     self.stage=EnumerationStage::ReadDeviceDescriptor;
+     self.stage=EnumerationStage::AddressSettle;
     }
+    EnumerationStage::AddressSettle=>return Err(UsbError::Unsupported),
     EnumerationStage::ReadDeviceDescriptor=>{
      let d=DeviceDescriptor::parse(data)?;self.device=Some(d);self.stage=EnumerationStage::ReadConfigurationHeader;
     }
@@ -99,8 +101,15 @@ impl EnumerationSession{
    }
    Ok(())
   })();
-  if result.is_err(){self.stage=EnumerationStage::Failed;}
+  if result.is_err(){if let Some(address)=self.address.take(){let _=pool.release(address);}self.stage=EnumerationStage::Failed;}
   result
+ }
+ /// Advances the mandatory USB address-settle delay after SET_ADDRESS.
+ /// The USB specification requires at least 2 ms before the next request.
+ pub fn elapse_ms(&mut self,elapsed_ms:u16)->Result<(),UsbError>{
+  if self.stage!=EnumerationStage::AddressSettle{return Err(UsbError::Unsupported)}
+  if elapsed_ms<2{return Ok(())}
+  self.stage=EnumerationStage::ReadDeviceDescriptor;Ok(())
  }
  /// Releases the address after a failed or disconnected enumeration.
  pub fn release_address(&mut self,pool:&mut DeviceAddressPool)->Result<(),UsbError>{
@@ -128,7 +137,10 @@ mod tests{
   assert_eq!(s.stage(),EnumerationStage::SetAddress);
   assert_eq!(s.request().unwrap().request,SET_ADDRESS);
   s.complete(&[],&mut pool).unwrap();
-  assert_eq!(s.stage(),EnumerationStage::ReadDeviceDescriptor);
+  assert_eq!(s.stage(),EnumerationStage::AddressSettle);
+  assert_eq!(s.request(),None);
+  s.elapse_ms(1).unwrap();assert_eq!(s.stage(),EnumerationStage::AddressSettle);
+  s.elapse_ms(1).unwrap();assert_eq!(s.stage(),EnumerationStage::ReadDeviceDescriptor);
   assert_eq!(s.request().unwrap().length,18);
  }
  #[test]fn failed_enumeration_releases_allocated_address(){
