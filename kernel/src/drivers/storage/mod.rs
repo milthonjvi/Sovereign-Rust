@@ -1,7 +1,7 @@
 //! Block-device subsystem and partition metadata parsers.
 //!
-//! Hardware transports (AHCI, NVMe, VirtIO Block) remain separate and require
-//! PCI, DMA, MMIO, and interrupt services before hardware access is enabled.
+//! AHCI and NVMe protocol engines live here; PCI discovery, DMA allocation,
+//! MMIO mapping and interrupt delivery remain owned by their kernel subsystems.
 
 pub mod block;
 pub mod fat;
