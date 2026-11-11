@@ -95,6 +95,21 @@ pub struct IoApicController {
 }
 
 impl IoApicController {
+    /// Construct the controller and immediately mask every redirection input.
+    ///
+    /// # Safety
+    /// The caller must uphold the MMIO mapping and exclusive serialization
+    /// requirements of `new`. Call during early boot with CPU interrupts off.
+    pub unsafe fn new_masked(
+        base: NonNull<u8>,
+        descriptor: IoApic,
+    ) -> Result<Self, IoApicError> {
+        // SAFETY: Forwarded from this constructor's caller.
+        let mut controller = unsafe { Self::new(base, descriptor)? };
+        controller.mask_all();
+        Ok(controller)
+    }
+
     /// Construct and read the controller's ID/version registers.
     ///
     /// # Safety
