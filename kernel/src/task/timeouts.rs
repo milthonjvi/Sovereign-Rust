@@ -327,6 +327,37 @@ impl<S: ClockSource, const N: usize> ApicCountdownTaskTimeouts<S, N> {
     }
 }
 
+impl<'a, const N: usize>
+    ApicCountdownTaskTimeouts<crate::time::HpetClockSource<'a>, N>
+{
+    /// Initialize the countdown backend using HPET for monotonic timekeeping
+    /// and for local-APIC timer calibration.
+    ///
+    /// # Safety
+    /// BSP only, CPL 0, IF clear, after x2APIC bootstrap. The HPET must be
+    /// mapped, enabled, stable, and exclusively protected from reconfiguration.
+    pub unsafe fn initialize_bootstrap_hpet(
+        vector: u8,
+        divide: crate::drivers::timer::ApicDivide,
+        hpet: &'a crate::drivers::timer::Hpet,
+        initial_time_ns: u64,
+        sample_ms: u32,
+        max_spin_iterations: usize,
+    ) -> Result<Self, ApicCountdownInitError> {
+        let source = crate::time::HpetClockSource::new(hpet).ok_or(
+            ApicCountdownInitError::Queue(crate::time::ApicCountdownQueueError::Service(
+                crate::time::TimerServiceError::InvalidClockSource,
+            )),
+        )?;
+        // SAFETY: Forwarded from this method's BSP/x2APIC/HPET contract.
+        unsafe {
+            Self::initialize_bootstrap(
+                vector, divide, hpet, source, initial_time_ns, sample_ms, max_spin_iterations,
+            )
+        }
+    }
+}
+
 /// Legacy-PIT task timeout fallback for systems where the legacy PIC IRQ0
 /// route remains active. Wakeup precision is bounded by the PIT tick rate.
 pub struct PitTaskTimeouts<const N: usize> {
