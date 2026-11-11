@@ -53,8 +53,8 @@ impl<'a, 'dma, R: E1000Registers> E1000Device<'a, 'dma, R> {
         registers: &'a mut R,
         rx_descriptors: &'a mut [RxDescriptor],
         tx_descriptors: &'a mut [TxDescriptor],
-        rx_buffers: &'a mut [DmaBuffer<'a>],
-        tx_buffers: &'a mut [DmaBuffer<'a>],
+        rx_buffers: &'a mut [DmaBuffer<'dma>],
+        tx_buffers: &'a mut [DmaBuffer<'dma>],
         mac: MacAddress,
     ) -> Result<Self, E1000DeviceError> {
         if rx_descriptors.len() < 8
