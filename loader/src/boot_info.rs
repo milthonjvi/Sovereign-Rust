@@ -68,7 +68,7 @@ pub struct SovereignBootInfo {
 
 impl SovereignBootInfo {
     /// Validate fields that can be checked without dereferencing physical memory.
-    pub const fn is_well_formed(&self) -> bool {
+    pub fn is_well_formed(&self) -> bool {
         self.magic == BOOT_INFO_MAGIC
             && self.version == BOOT_INFO_VERSION
             && self.structure_size as usize == core::mem::size_of::<Self>()
