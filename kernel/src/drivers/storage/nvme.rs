@@ -53,15 +53,15 @@ impl NvmeCompletion {
     pub const fn successful(self)->bool { self.status_code()==0 && self.status_code_type()==0 }
 }
 
-pub struct NvmeSubmissionQueue<'a> { entries:&'a mut [NvmeCommand], depth:u16, head:u16, tail:u16 }
+pub struct NvmeSubmissionQueue<'a> { entries:&'a mut [NvmeCommand], depth:u32, head:u32, tail:u32 }
 impl<'a> NvmeSubmissionQueue<'a> {
-    pub fn new(entries:&'a mut [NvmeCommand], depth:u16)->Result<Self,NvmeError>{
+    pub fn new(entries:&'a mut [NvmeCommand], depth:u32)->Result<Self,NvmeError>{
         if depth<2 || depth as usize>entries.len(){return Err(NvmeError::InvalidQueueDepth);}
         entries[..depth as usize].fill(NvmeCommand::default());
         Ok(Self{entries,depth,head:0,tail:0})
     }
-    pub const fn tail(&self)->u16{self.tail}
-    pub fn update_head(&mut self,head:u16)->Result<(),NvmeError>{
+    pub const fn tail(&self)->u32{self.tail}
+    pub fn update_head(&mut self,head:u32)->Result<(),NvmeError>{
         if head>=self.depth{return Err(NvmeError::InvalidQueueDepth);} self.head=head; Ok(())
     }
     /// Returns the new tail for the submission doorbell.
@@ -72,13 +72,13 @@ impl<'a> NvmeSubmissionQueue<'a> {
     }
 }
 
-pub struct NvmeCompletionQueue<'a>{entries:&'a [NvmeCompletion],depth:u16,head:u16,phase:bool}
+pub struct NvmeCompletionQueue<'a>{entries:&'a [NvmeCompletion],depth:u32,head:u32,phase:bool}
 impl<'a> NvmeCompletionQueue<'a>{
     pub fn new(entries:&'a [NvmeCompletion],depth:u16)->Result<Self,NvmeError>{
         if depth<2 || depth as usize>entries.len(){return Err(NvmeError::InvalidQueueDepth);}
         Ok(Self{entries,depth,head:0,phase:true})
     }
-    pub const fn head(&self)->u16{self.head}
+    pub const fn head(&self)->u32{self.head}
     pub fn poll(&mut self)->Option<NvmeCompletion>{
         let c=self.entries[self.head as usize]; if c.phase()!=self.phase{return None;}
         self.head+=1; if self.head==self.depth{self.head=0;self.phase=!self.phase;} Some(c)
@@ -92,13 +92,13 @@ pub struct NvmePrpMapping{pub prp1:u64,pub prp2:u64,pub list_entries:usize}
 pub fn build_prps(buffer_phys:u64,byte_len:usize,page_size:u32,list_phys:u64,list:&mut[u64])->Result<NvmePrpMapping,NvmeError>{
     if byte_len==0 || !page_size.is_power_of_two() || page_size<4096{return Err(NvmeError::InvalidTransfer);}
     let page=page_size as u64;
-    let first=core::cmp::min(byte_len as u64,page-(buffer_phys&(page-1)));
+    let total=byte_len as u64;\n    buffer_phys.checked_add(total).ok_or(NvmeError::AddressOverflow)?;\n    let first=core::cmp::min(total,page-(buffer_phys&(page-1)));
     let remaining=byte_len as u64-first;
-    let pages=if remaining==0{0}else{(remaining+page-1)/page};
+    let pages=if remaining==0{0}else{remaining.checked_add(page-1).ok_or(NvmeError::AddressOverflow)?/page};
     if pages==0{return Ok(NvmePrpMapping{prp1:buffer_phys,prp2:0,list_entries:0});}
     let second=buffer_phys.checked_add(first).ok_or(NvmeError::AddressOverflow)?;
     if pages==1{return Ok(NvmePrpMapping{prp1:buffer_phys,prp2:second,list_entries:0});}
-    if list_phys&(page-1)!=0{return Err(NvmeError::InvalidAlignment);}
+    if list_phys&(page-1)!=0{return Err(NvmeError::InvalidAlignment);}\n    list_phys.checked_add(page).ok_or(NvmeError::AddressOverflow)?;
     if pages as usize>list.len() || pages*8>page{return Err(NvmeError::PrpListTooSmall);}
     for (i,slot) in list[..pages as usize].iter_mut().enumerate(){
         *slot=second.checked_add((i as u64).checked_mul(page).ok_or(NvmeError::AddressOverflow)?).ok_or(NvmeError::AddressOverflow)?;
@@ -136,7 +136,7 @@ pub fn write_command(cid:u16,nsid:u32,slba:u64,nlb:u32,prp1:u64,prp2:u64)->Resul
     io_command(0x01,cid,nsid,slba,nlb,prp1,prp2)
 }
 fn io_command(op:u8,cid:u16,nsid:u32,slba:u64,nlb:u32,prp1:u64,prp2:u64)->Result<NvmeCommand,NvmeError>{
-    if nsid==0 || nlb==0 || nlb>65_536{return Err(NvmeError::InvalidTransfer);}
+    if nsid==0 || nlb==0 || nlb>65_536 || slba.checked_add(nlb as u64).is_none(){return Err(NvmeError::InvalidTransfer);}
     Ok(NvmeCommand{opcode:op,command_id:cid,namespace_id:nsid,prp1,prp2,cdw10:slba as u32,cdw11:(slba>>32) as u32,cdw12:nlb-1,..NvmeCommand::default()})
 }
 
