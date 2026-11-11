@@ -174,6 +174,7 @@ mod tests {
         pipeline.feed(STATUS_AUXILIARY, 0x08);
         pipeline.feed(STATUS_AUXILIARY, 0x02);
         pipeline.feed(STATUS_AUXILIARY, 0x00);
+        assert_eq!(consumer.pop(), Some(InputEvent::DeviceStateReset { device: InputDeviceId(0) }));
         assert_eq!(consumer.pop(), Some(InputEvent::MouseMotion { dx: 2, dy: 0 }));
         assert_eq!(pipeline.stats().controller_errors, 1);
     }
