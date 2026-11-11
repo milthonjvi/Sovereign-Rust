@@ -7,6 +7,7 @@
 
 pub mod discover;
 pub mod fadt;
+pub mod facs;
 pub mod madt;
 pub mod rsdp;
 pub mod sdt;
