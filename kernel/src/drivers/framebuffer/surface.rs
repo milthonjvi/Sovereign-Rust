@@ -40,15 +40,26 @@ impl<'a> FramebufferSurface<'a> {
         if offset.checked_add(4).ok_or(FramebufferError::SizeOverflow)? > self.mapped_len {
             return Err(FramebufferError::BufferTooSmall);
         }
-        let bytes = color.memory_bytes(self.info.pixel_format);
         // SAFETY: the computed pixel range lies inside the validated mapping.
+        unsafe { self.write_pixel_unchecked(offset, color); }
+        Ok(())
+    }
+
+    /// Write one pixel at a previously validated byte offset.
+    ///
+    /// # Safety
+    /// The four bytes beginning at offset must be inside the mapped framebuffer.
+    #[inline]
+    unsafe fn write_pixel_unchecked(&mut self, offset: usize, color: Color) {
+        let bytes = color.memory_bytes(self.info.pixel_format);
+        // SAFETY: guaranteed by the caller; byte writes do not require alignment.
         unsafe {
             let destination = self.base.as_ptr().add(offset);
-            for (index, byte) in bytes.iter().enumerate() {
-                ptr::write_volatile(destination.add(index), *byte);
-            }
+            ptr::write_volatile(destination, bytes[0]);
+            ptr::write_volatile(destination.add(1), bytes[1]);
+            ptr::write_volatile(destination.add(2), bytes[2]);
+            ptr::write_volatile(destination.add(3), bytes[3]);
         }
-        Ok(())
     }
 
     pub fn clear(&mut self, color: Color) {
@@ -178,7 +189,7 @@ impl<'a> FramebufferSurface<'a> {
         foreground: Color,
         background: Option<Color>,
     ) {
-        use super::font::{glyph_rows, FONT_HEIGHT, FONT_WIDTH};
+        use super::font::{glyph_rows, FONT_WIDTH};
         let rows = glyph_rows(character);
         for (row, bits) in rows.iter().enumerate() {
             for column in 0..FONT_WIDTH {
@@ -188,7 +199,10 @@ impl<'a> FramebufferSurface<'a> {
                     let px = x.saturating_add(column);
                     let py = y.saturating_add(row);
                     if px < self.info.width && py < self.info.height {
-                        let _ = self.put_pixel(px, py, pixel_color);
+                        // SAFETY: clipping guarantees the pixel is inside the
+                        // validated framebuffer dimensions and mapping.
+                        let offset = py * self.info.pitch + px * 4;
+                        unsafe { self.write_pixel_unchecked(offset, pixel_color); }
                     }
                 }
             }
@@ -245,9 +259,23 @@ impl<'a> FramebufferSurface<'a> {
         let end_y = y.saturating_add(height).min(self.info.height);
         let start_x = x.min(self.info.width);
         let start_y = y.min(self.info.height);
+        if start_x == end_x || start_y == end_y {
+            return;
+        }
+
+        // Clipping and FramebufferInfo::validate() guarantee every computed
+        // pixel offset is inside the mapping. Keep the hot loop free of
+        // per-pixel Result handling and repeated bounds checks.
+        let first_column_offset = start_x * 4;
+        let row_bytes = (end_x - start_x) * 4;
         for row in start_y..end_y {
-            for column in start_x..end_x {
-                let _ = self.put_pixel(column, row, color);
+            let row_offset = row * self.info.pitch + first_column_offset;
+            for pixel_offset in (0..row_bytes).step_by(4) {
+                // SAFETY: row and column ranges are clipped to validated
+                // dimensions; pitch * height was checked at construction.
+                unsafe {
+                    self.write_pixel_unchecked(row_offset + pixel_offset, color);
+                }
             }
         }
     }
