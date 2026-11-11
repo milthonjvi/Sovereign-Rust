@@ -40,12 +40,8 @@ impl<'a, D: BlockDevice, const N: usize> BlockCache<'a, D, N> {
     fn touch(&mut self, index: usize) {
         self.clock = self.clock.wrapping_add(1);
         if self.clock == 0 {
-            let mut oldest = 0u64;
-            for line in &mut self.lines {
-                if line.valid { line.last_used = line.last_used.saturating_sub(oldest); }
-                oldest = oldest.max(line.last_used);
-            }
-            self.clock = oldest.saturating_add(1);
+            for line in &mut self.lines { line.last_used = 0; }
+            self.clock = 1;
         }
         self.lines[index].last_used = self.clock;
     }
@@ -86,9 +82,10 @@ impl<D: BlockDevice, const N: usize> BlockDevice for BlockCache<'_, D, N> {
             } else {
                 self.stats.misses = self.stats.misses.saturating_add(1);
                 if let Some(line) = self.slot(lba) {
-                    self.inner.read_blocks(BlockRange::new(lba, 1), self.line_mut(line))?;
+                    let start = line * block_size;
+                    self.inner.read_blocks(BlockRange::new(lba, 1), &mut self.storage[start..start + block_size])?;
                     self.touch(line);
-                    dst.copy_from_slice(self.line_mut(line));
+                    dst.copy_from_slice(&self.storage[start..start + block_size]);
                 } else {
                     self.inner.read_blocks(BlockRange::new(lba, 1), dst)?;
                 }
