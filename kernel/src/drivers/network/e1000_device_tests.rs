@@ -8,6 +8,7 @@ use super::*;
     struct MockRegisters {
         writes: Vec<(u32, u32)>,
         fail_register: Option<u32>,
+        write_barriers: usize,
     }
 
     unsafe impl E1000Registers for MockRegisters {
@@ -31,6 +32,7 @@ use super::*;
         }
 
         fn dma_write_barrier(&mut self) {
+            self.write_barriers += 1;
             core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
         }
 
@@ -141,6 +143,7 @@ use super::*;
         assert_eq!(device.tx_buffers[0].as_slice()[..64], first);
         assert_eq!(device.tx_buffers[1].as_slice()[..96], second);
         assert_eq!(device.registers.writes.iter().filter(|(reg, _)| *reg == REG_TDT).count(), 1);
+        assert_eq!(device.registers.write_barriers, 1);
         assert!(device.registers.writes.contains(&(REG_TDT, 2)));
 
         assert_eq!(
@@ -155,6 +158,7 @@ use super::*;
         assert_eq!(&device.tx_buffers[2].as_slice()[..32], &[0x44; 32]);
         assert_eq!(&device.tx_buffers[3].as_slice()[..33], &[0x45; 33]);
         assert!(device.registers.writes.contains(&(REG_TDT, 4)));
+        assert_eq!(device.registers.write_barriers, 2);
 
         let tdt_writes_before_rejected_batch = device.registers.writes
             .iter().filter(|(reg, _)| *reg == REG_TDT).count();
@@ -173,6 +177,7 @@ use super::*;
             device.registers.writes.iter().filter(|(reg, _)| *reg == REG_TDT).count(),
             tdt_writes_before_rejected_batch,
         );
+        assert_eq!(device.registers.write_barriers, 2);
         assert_eq!(device.tx_descriptors[4].status, TXD_STATUS_DD);
         assert_eq!(device.tx_descriptors[5].status, TXD_STATUS_DD);
 
