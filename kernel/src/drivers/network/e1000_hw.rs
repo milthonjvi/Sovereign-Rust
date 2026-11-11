@@ -745,6 +745,7 @@ mod tests {
         writes: Vec<(u32, u32)>,
         fail_register: Option<u32>,
         read_barriers: usize,
+        reset_stuck: bool,
     }
 
     unsafe impl E1000Registers for MockRegisters {
@@ -752,7 +753,7 @@ mod tests {
 
         fn read32(&mut self, offset: u32) -> Result<u32, Self::Error> {
             if offset == REG_CTRL {
-                return Ok(0);
+                return Ok(if self.reset_stuck { CTRL_RST } else { 0 });
             }
             if offset == REG_RAL0 { return Ok(0x4433_2211); }
             if offset == REG_STATUS { return Ok(STATUS_LU | STATUS_FD | (2 << STATUS_SPEED_SHIFT)); }
@@ -772,6 +773,20 @@ mod tests {
             self.read_barriers += 1;
             core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
         }
+    }
+
+    #[test]
+    fn reset_masks_interrupts_and_waits_for_self_clearing_control_bit() {
+        let mut regs = MockRegisters::default();
+        assert_eq!(reset(&mut regs), Ok(()));
+        assert!(regs.writes.contains(&(REG_IMC, u32::MAX)));
+        assert!(regs.writes.contains(&(REG_CTRL, CTRL_RST)));
+    }
+
+    #[test]
+    fn reset_reports_bounded_timeout_when_hardware_never_clears_reset() {
+        let mut regs = MockRegisters { reset_stuck: true, ..MockRegisters::default() };
+        assert_eq!(reset(&mut regs), Err(E1000ResetError::Timeout));
     }
 
     #[test]
