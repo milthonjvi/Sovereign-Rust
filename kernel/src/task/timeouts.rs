@@ -210,6 +210,23 @@ impl<const N: usize> TaskTimeouts<crate::time::TscClockSource, N> {
         sample_ms: u32,
         max_spin_iterations: usize,
     ) -> Result<Self, DetectedTaskTimeoutInitError> {
+        if !crate::interrupts::init::is_initialized() {
+            return Err(DetectedTaskTimeoutInitError::Timer(
+                BootstrapTimerInitError::Interrupt(crate::time::TimerInterruptError::NotInitialized),
+            ));
+        }
+        if crate::interrupts::init::local_apic_mode()
+            != crate::interrupts::init::LocalApicMode::X2Apic
+        {
+            return Err(DetectedTaskTimeoutInitError::Timer(
+                BootstrapTimerInitError::Interrupt(crate::time::TimerInterruptError::LocalApicUnavailable),
+            ));
+        }
+        if crate::arch::x86_64::cpuid::cpuid(1, 0).ecx & (1 << 24) == 0 {
+            return Err(DetectedTaskTimeoutInitError::Timer(
+                BootstrapTimerInitError::Interrupt(crate::time::TimerInterruptError::HardwareUnavailable),
+            ));
+        }
         let source = crate::time::TscClockSource::detect_or_calibrate(
             hpet, sample_ms, max_spin_iterations,
         ).ok_or(DetectedTaskTimeoutInitError::ClockSourceUnavailable)?;
