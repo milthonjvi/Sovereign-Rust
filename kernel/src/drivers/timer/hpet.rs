@@ -162,6 +162,12 @@ impl Hpet {
         if current & PERIODIC_CAPABLE == 0 {
             return Err(DriverError::UnsupportedDevice);
         }
+        let timer_supports_64_bit = current & (1 << 5) != 0;
+        if !timer_supports_64_bit
+            && (first_deadline > u32::MAX as u64 || period_ticks > u32::MAX as u64)
+        {
+            return Err(DriverError::InvalidConfiguration);
+        }
         let config = (current & !TIMER_WRITABLE_CONTROL)
             | TIMER_INTERRUPT_ENABLE
             | TIMER_PERIODIC_MODE
