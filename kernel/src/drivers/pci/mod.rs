@@ -17,5 +17,5 @@ pub use ecam::{parse_mcfg, physical_address, EcamAccess, McfgError};
 pub use enumeration::{scan_hierarchy, EnumerationReport};
 pub use mechanism::Mechanism1;
 pub use msi::{configure_msi, disable_msi, disable_msix, enable_msix_masked, set_msix_function_mask, MsiCapability, MsiConfigError, MsixCapability, MSI_CAPABILITY_ID, MSIX_CAPABILITY_ID};
-pub use msix_table::{MsixEntry, MsixTable, MsixTableError};
+pub use msix_table::{MsixEntry, MsixPendingBitArray, MsixTable, MsixTableError};
 pub use resources::{BarResource, ResourceError};
