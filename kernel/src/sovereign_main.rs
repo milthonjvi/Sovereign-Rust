@@ -90,6 +90,9 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
         if !rsdp_in_firmware_memory {
             fatal_halt();
         }
+        if !validate_identity_nx_range(rsdp_physical, rsdp_length) {
+            fatal_halt();
+        }
         // SAFETY: The loader mapped the complete validated RSDP range read-only.
         let rsdp_bytes = unsafe {
             slice::from_raw_parts(rsdp_physical as *const u8, rsdp_length as usize)
@@ -226,6 +229,46 @@ fn validate_boot_mappings(
     stack_mapping.writable
         && !stack_mapping.executable
         && !stack_mapping.user_accessible
+}
+
+fn validate_identity_nx_range(physical: u64, byte_len: u64) -> bool {
+    if byte_len == 0 {
+        return false;
+    }
+    let end = match physical.checked_add(byte_len) {
+        Some(end) => end,
+        None => return false,
+    };
+    let rounded_end = match end.checked_add(0xfff) {
+        Some(value) => value & !0xfff,
+        None => return false,
+    };
+    let mut page = physical & !0xfff;
+    // SAFETY: The kernel is in long mode at CPL 0 with interrupts disabled.
+    let levels = if unsafe { read_cr4() } & (1 << 12) != 0 { 5 } else { 4 };
+    // SAFETY: The loader installed the recursive root mapping at slot 510.
+    let page_tables = match unsafe { RecursivePageTable::new(levels, RECURSIVE_SLOT) } {
+        Ok(tables) => tables,
+        Err(_) => return false,
+    };
+    while page < rounded_end {
+        // SAFETY: The page-table walker reads the active recursive mappings.
+        let mapping = match unsafe { page_tables.translate(page) } {
+            Ok(mapping) => mapping,
+            Err(_) => return false,
+        };
+        if mapping.physical_address != page
+            || mapping.executable
+            || mapping.user_accessible
+        {
+            return false;
+        }
+        page = match page.checked_add(4096) {
+            Some(next) => next,
+            None => return false,
+        };
+    }
+    true
 }
 
 fn is_uefi_acpi_range(
