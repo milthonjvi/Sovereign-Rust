@@ -90,6 +90,9 @@ impl AcpiTables {
 }
 
 #[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
