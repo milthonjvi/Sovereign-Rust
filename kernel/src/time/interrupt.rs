@@ -119,7 +119,7 @@ pub unsafe fn unmask_timer_interrupt() -> Result<(), TimerInterruptError> {
     .map_err(|_| TimerInterruptError::HardwareUnavailable)
 }
 
-/// Mask the timer, disarm its TSC comparator, and unregister its handler.
+/// Mask/disarm the configured local timer mode and unregister its handler.
 ///
 /// # Safety
 /// BSP only, CPL 0, IF clear, with no handler in flight and no remaining
