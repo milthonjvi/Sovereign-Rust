@@ -1,4 +1,5 @@
 //! Boot framebuffer output and software drawing primitives.
+pub mod buffer;
 pub mod color;
 pub mod compositor;
 pub mod console;
@@ -8,6 +9,7 @@ pub mod fmt;
 pub mod image;
 pub mod info;
 pub mod surface;
+pub use buffer::{BufferError, DoubleBuffer, SoftwareBuffer};
 pub use color::{Color, PixelFormat};
 pub use compositor::{Compositor, CompositorError, LayerId};
 pub use console::FramebufferConsole;
