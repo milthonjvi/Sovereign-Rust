@@ -29,6 +29,7 @@ const EM_X86_64: u16 = 62;
 const PT_LOAD: u32 = 1;
 const PF_X: u32 = 1;
 const PF_W: u32 = 2;
+const PF_R: u32 = 4;
 const KERNEL_PATH: [u16; 31] = [
     92,69,70,73,92,66,79,79,84,92,115,111,118,101,114,101,105,103,110,45,
     107,101,114,110,101,108,46,101,108,102,0,
@@ -188,7 +189,11 @@ fn load_open_file(file: *mut EfiFileProtocol, boot: &mut EfiBootServices) -> Res
             memory_size: read_u64(&header_buf, 40),
             flags,
         };
-        if segment.file_size > segment.memory_size || flags & (PF_W | PF_X) == (PF_W | PF_X) {
+        if segment.file_size > segment.memory_size
+            || flags & !0x7 != 0
+            || flags & PF_R == 0
+            || flags & (PF_W | PF_X) == (PF_W | PF_X)
+        {
             return Err(EFI_COMPROMISED_DATA);
         }
         let file_end = segment.offset.checked_add(segment.file_size).ok_or(EFI_COMPROMISED_DATA)?;
