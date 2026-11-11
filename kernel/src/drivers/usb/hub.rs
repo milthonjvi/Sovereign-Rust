@@ -97,7 +97,7 @@ pub enum HubPortAction{PowerOn,PowerOff,Reset,WarmReset,Enable,Suspend,Resume,Wa
 impl HubPortAction{
  pub const fn feature(self)->u16{
   match self{
-   Self::PowerOn|Self::PowerOff=>8,Self::Reset=>4,Self::WarmReset=>28,Self::PortLinkState=>5,Self::Enable=>1,Self::Suspend|Self::Resume=>2,Self::WarmResume=>5,
+   Self::PowerOn|Self::PowerOff=>8,Self::Reset=>4,Self::WarmReset=>28,Self::Enable=>1,Self::Suspend|Self::Resume=>2,Self::WarmResume=>5,
    Self::ClearConnectionChange=>16,Self::ClearEnableChange=>17,Self::ClearSuspendChange=>18,
    Self::ClearOverCurrentChange=>19,Self::ClearResetChange=>20,
   }
