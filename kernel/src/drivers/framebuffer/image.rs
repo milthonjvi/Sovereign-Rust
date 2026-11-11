@@ -74,14 +74,15 @@ impl<'a> ImageView<'a> {
         destination_x: i64,
         destination_y: i64,
     ) -> Result<(), FramebufferError> {
+        let info = *target.info();
         self.draw_alpha_blended_clipped(
             target,
             destination_x,
             destination_y,
             0,
             0,
-            target.info().width,
-            target.info().height,
+            info.width,
+            info.height,
             255,
         )
     }
