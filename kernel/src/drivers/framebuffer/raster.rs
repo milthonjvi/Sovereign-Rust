@@ -534,6 +534,72 @@ fn cubic_adaptive(
     cubic_adaptive(target, center, e, c, end, tolerance, depth - 1, color);
 }
 
+/// Stroke an axis-aligned ellipse with antialiased adaptive Bézier arcs.
+///
+/// The four cubic arcs approximate a mathematical ellipse using the standard
+/// kappa constant (0.55228475). Coordinates that cannot be represented by the
+/// signed raster API are rejected before any framebuffer writes.
+pub fn stroke_ellipse_aa(
+    target: &mut FramebufferSurface<'_>,
+    center_x: i64,
+    center_y: i64,
+    radius_x: usize,
+    radius_y: usize,
+    color: Color,
+) -> Result<(), FramebufferError> {
+    if radius_x > i64::MAX as usize || radius_y > i64::MAX as usize {
+        return Err(FramebufferError::SizeOverflow);
+    }
+    let rx = radius_x as i128;
+    let ry = radius_y as i128;
+    let cx = center_x as i128;
+    let cy = center_y as i128;
+    let offset_x = (rx * 36_195 + 32_768) / 65_536;
+    let offset_y = (ry * 36_195 + 32_768) / 65_536;
+    let point = |x: i128, y: i128| -> Result<(i64, i64), FramebufferError> {
+        Ok((
+            i64::try_from(x).map_err(|_| FramebufferError::SizeOverflow)?,
+            i64::try_from(y).map_err(|_| FramebufferError::SizeOverflow)?,
+        ))
+    };
+
+    if radius_x == 0 || radius_y == 0 {
+        return stroke_line_aa(
+            target,
+            point(cx - rx, cy - ry)?,
+            point(cx + rx, cy + ry)?,
+            color,
+        );
+    }
+
+    // Preflight all control points so overflow cannot leave a partial ellipse.
+    let right = point(cx + rx, cy)?;
+    let bottom = point(cx, cy + ry)?;
+    let left = point(cx - rx, cy)?;
+    let top = point(cx, cy - ry)?;
+    let right_down = point(cx + rx, cy + offset_y)?;
+    let down_right = point(cx + offset_x, cy + ry)?;
+    let down_left = point(cx - offset_x, cy + ry)?;
+    let left_down = point(cx - rx, cy + offset_y)?;
+    let left_up = point(cx - rx, cy - offset_y)?;
+    let up_left = point(cx - offset_x, cy - ry)?;
+    let up_right = point(cx + offset_x, cy - ry)?;
+    let right_up = point(cx + rx, cy - offset_y)?;
+
+    stroke_cubic_bezier_aa(
+        target, right, right_down, down_right, bottom, 1, 10, color,
+    )?;
+    stroke_cubic_bezier_aa(
+        target, bottom, down_left, left_down, left, 1, 10, color,
+    )?;
+    stroke_cubic_bezier_aa(
+        target, left, left_up, up_left, top, 1, 10, color,
+    )?;
+    stroke_cubic_bezier_aa(
+        target, top, up_right, right_up, right, 1, 10, color,
+    )
+}
+
 /// Stroke a quadratic Bézier curve with adaptive subdivision and antialiased segments.
 pub fn stroke_quadratic_bezier_aa(
     target: &mut FramebufferSurface<'_>,
@@ -931,6 +997,28 @@ mod tests {
             assert_eq!(memory[vertical], 255);
             assert_eq!(memory[vertical + 3], 0);
         }
+    }
+
+    #[test]
+    fn antialiased_ellipse_renders_all_quadrants_and_rejects_overflow() {
+        use super::stroke_ellipse_aa;
+        let mut memory = [0u8; 16 * 16 * 4];
+        let mut target = surface(&mut memory);
+        target.clear(Color::BLACK);
+        stroke_ellipse_aa(&mut target, 8, 8, 5, 3, Color::WHITE).unwrap();
+        assert_eq!(
+            stroke_ellipse_aa(&mut target, i64::MAX, 0, 1, 1, Color::RED),
+            Err(FramebufferError::SizeOverflow),
+        );
+        drop(target);
+
+        for &(x, y) in &[(13usize, 8usize), (8, 11), (3, 8), (8, 5)] {
+            let offset = (y * 16 + x) * 4;
+            assert!(memory[offset] > 0 || memory[offset + 1] > 0 || memory[offset + 2] > 0);
+        }
+        assert!(memory.chunks_exact(4).any(|pixel| {
+            pixel[0] > 0 && pixel[0] < 255
+        }));
     }
 
     #[test]
