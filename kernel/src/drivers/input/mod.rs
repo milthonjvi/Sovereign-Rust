@@ -4,6 +4,7 @@
 //! activation remains an explicit boot-time operation after IDT/PIC setup.
 
 pub mod event;
+pub mod device;
 pub mod irq;
 pub mod hid_report;
 pub mod keyboard;
@@ -24,3 +25,5 @@ pub use mux::{InputEventMux, InputSourceId, SourcedInputEvent};
 pub use usb_hid_adapter::{HidInputError, HidPublishStats, InputDeviceIdAllocator, UsbBootKeyboardAdapter, UsbBootMouseAdapter};
 
 pub use hid_report::{HidInputField, HidReportDecoder, HidReportError, HidReportMap, MAX_HID_INPUT_FIELDS, MAX_HID_VALUES};
+
+pub use device::{InputDeviceRegistry, InputDeviceRegistryError, MAX_INPUT_DEVICES};
