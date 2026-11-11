@@ -7,6 +7,7 @@
 pub mod event;
 pub mod keyboard;
 pub mod mouse;
+pub mod ps2;
 pub mod queue;
 
 pub use event::{InputEvent, KeyCode, MouseButtons};
