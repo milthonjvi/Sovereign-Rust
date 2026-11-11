@@ -192,11 +192,13 @@ impl<'a> ImageView<'a> {
                 // when FramebufferSurface was constructed.
                 unsafe { target.write_pixel_unchecked(offset, color); }
 
-                source_x += source_step;
-                x_remainder += source_step_remainder;
-                if x_remainder >= destination_width_u128 {
-                    x_remainder -= destination_width_u128;
-                    source_x += 1;
+                if column + 1 < visible_right - visible_left {
+                    source_x += source_step;
+                    x_remainder += source_step_remainder;
+                    if x_remainder >= destination_width_u128 {
+                        x_remainder -= destination_width_u128;
+                        source_x += 1;
+                    }
                 }
             }
         }
