@@ -129,6 +129,7 @@ impl NvmeNamespace{
         if data[26]&0x30!=0 { return Err(NvmeError::UnsupportedLbaFormat); }
         if nsze==0 || ncap>nsze || nuse>ncap || flbas>nlbaf{return Err(NvmeError::InvalidNamespace);}
         let off=128+flbas as usize*4;
+        if off.checked_add(4).filter(|end| *end<=data.len()).is_none(){return Err(NvmeError::InvalidNamespace);}
         let metadata=u16::from_le_bytes([data[off],data[off+1]]);
         let shift=data[off+2];
         if metadata!=0 || !(9..=16).contains(&shift){return Err(NvmeError::UnsupportedLbaFormat);}
