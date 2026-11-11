@@ -77,7 +77,7 @@ impl MadtRecord<'_> {
     }
 
     pub fn local_x2apic(&self) -> Option<LocalX2Apic> {
-        if self.record_type != 9 || self.data.len() < 14 { return None; }
+        if self.record_type != 9 || self.data.len() < 16 { return None; }
         Some(LocalX2Apic {
             x2apic_id: u32::from_le_bytes([self.data[4], self.data[5], self.data[6], self.data[7]]),
             flags: u32::from_le_bytes([self.data[8], self.data[9], self.data[10], self.data[11]]),
