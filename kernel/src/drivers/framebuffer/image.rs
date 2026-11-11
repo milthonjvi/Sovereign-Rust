@@ -119,15 +119,34 @@ impl<'a> ImageView<'a> {
         let visible_right = usize::try_from(right).map_err(|_| FramebufferError::SizeOverflow)?;
         let visible_bottom = usize::try_from(bottom).map_err(|_| FramebufferError::SizeOverflow)?;
 
+        let visible_width = visible_right - visible_left;
+        let row_bytes = visible_width.checked_mul(4)
+            .ok_or(FramebufferError::SizeOverflow)?;
+        let first_column_bytes = visible_left.checked_mul(4)
+            .ok_or(FramebufferError::SizeOverflow)?;
         for target_y in visible_top..visible_bottom {
             let source_y = (target_y as i128 - destination_y as i128) as usize;
             let source_row = source_y * self.stride;
             let source_start_x = (visible_left as i128 - destination_x as i128) as usize;
-            let source_end_x = source_start_x + (visible_right - visible_left);
-            for (column, source_x) in (source_start_x..source_end_x).enumerate() {
+            let source_end_x = source_start_x + visible_width;
+            let mut target_offset = target_y.checked_mul(target_info.pitch)
+                .and_then(|row| row.checked_add(first_column_bytes))
+                .ok_or(FramebufferError::SizeOverflow)?;
+            let target_end = target_offset.checked_add(row_bytes)
+                .ok_or(FramebufferError::SizeOverflow)?;
+            if target_end > target.mapped_len() {
+                return Err(FramebufferError::BufferTooSmall);
+            }
+            for source_x in source_start_x..source_end_x {
                 let mut color = self.pixels[source_row + source_x];
                 color.alpha = ((color.alpha as u16 * opacity as u16 + 127) / 255) as u8;
-                target.blend_pixel(visible_left + column, target_y, color)?;
+                if color.alpha != 0 {
+                    // SAFETY: the clipped row range and its complete byte span
+                    // were validated against the target mapping above.
+                    unsafe { target.blend_pixel_unchecked(target_offset, color); }
+                }
+                target_offset = target_offset.checked_add(4)
+                    .ok_or(FramebufferError::SizeOverflow)?;
             }
         }
         Ok(())
