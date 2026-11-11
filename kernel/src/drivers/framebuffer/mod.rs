@@ -1,4 +1,7 @@
-//! Framebuffer discovery and display output.
-//!
-//! Initial target: boot-provided framebuffer. Later backends may include GOP or
-//! supported PCI display devices. Keep drawing primitives separate from hardware.
+//! Boot framebuffer output and software drawing primitives.
+pub mod color;
+pub mod info;
+pub mod surface;
+pub use color::{Color, PixelFormat};
+pub use info::{FramebufferError, FramebufferInfo};
+pub use surface::FramebufferSurface;
