@@ -138,8 +138,10 @@ pub unsafe fn configure_msi<A: ConfigAccess>(
         let vector = first_vector as u16 + offset as u16;
         if vector > u8::MAX as u16
             || !crate::interrupts::apic::is_apic_vector(vector as u8)
-            || !crate::interrupts::dispatch::is_registered(vector as u8)
         {
+            return Err(MsiConfigError::InvalidVectorBlock);
+        }
+        if !crate::interrupts::dispatch::is_registered(vector as u8) {
             return Err(MsiConfigError::HandlerNotRegistered);
         }
     }
