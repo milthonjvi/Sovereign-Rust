@@ -244,7 +244,7 @@ mod alternate_setting_tests{
 mod superspeed_companion_validation_tests{
  use super::*;
  #[test]fn validates_isochronous_companion_fields(){
-  let mut endpoint=ParsedEndpoint::parse(&[7,5,0x81,1,0,0,1]).unwrap();
+  let mut endpoint=ParsedEndpoint::parse(&[7,5,0x81,1,0,2,1]).unwrap();
   endpoint.apply_companion(&[6,0x30,2,1,0,4]).unwrap();
   assert_eq!(endpoint.max_burst,2);assert_eq!(endpoint.bytes_per_interval,1024);
  }
