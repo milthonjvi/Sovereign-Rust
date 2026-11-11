@@ -6,7 +6,7 @@ pub mod boot_info;
 pub mod page_tables;
 mod uefi;
 
-use core::{mem, panic::PanicInfo};
+use core::{mem, panic::PanicInfo, ptr};
 use crate::boot_info::{SovereignBootInfo, BOOT_INFO_MAGIC, BOOT_INFO_VERSION, MEMORY_MAP_FORMAT_UEFI};
 use crate::page_tables::{PagePermissions, PageTableBuilder, PageTableError, PageTableMemory};
 use uefi::{
@@ -88,6 +88,33 @@ pub extern "efiapi" fn efi_main(
         return EFI_COMPROMISED_DATA;
     }
 
+    // Reserve a dedicated 256 KiB kernel bootstrap stack. The transition
+    // never relies on the firmware-owned stack after CR3 is loaded.
+    const KERNEL_STACK_PAGES: usize = 64;
+    let mut kernel_stack_physical = 0u64;
+    // SAFETY: Boot Services remain active and the output slot is writable.
+    let stack_status = unsafe {
+        allocate_loader_pages(
+            &mut *(system_table.boot_services as *mut EfiBootServices),
+            KERNEL_STACK_PAGES,
+            &mut kernel_stack_physical,
+        )
+    };
+    if stack_status != EFI_SUCCESS {
+        return stack_status;
+    }
+    if kernel_stack_physical == 0 || kernel_stack_physical & 0xfff != 0 {
+        return EFI_COMPROMISED_DATA;
+    }
+    // SAFETY: AllocatePages returned KERNEL_STACK_PAGES writable pages.
+    unsafe {
+        ptr::write_bytes(
+            kernel_stack_physical as usize as *mut u8,
+            0,
+            KERNEL_STACK_PAGES * 4096,
+        );
+    }
+
     // NX must be enabled before any PTE with the NX bit is installed.
     // SAFETY: UEFI x86_64 applications execute at CPL 0; CPUID/MSR support is
     // checked by enable_nxe before the EFER bit is changed.
@@ -141,19 +168,11 @@ pub extern "efiapi" fn efi_main(
             return page_table_error_status(error);
         }
     }
-    let stack_pointer = current_stack_pointer();
-    let stack_start = match stack_pointer.checked_sub(256 * 1024) {
-        Some(value) => value & !0xfff,
-        None => return EFI_COMPROMISED_DATA,
-    };
-    let stack_end = match stack_pointer.checked_add(64 * 1024).and_then(align_page_up) {
-        Some(value) => value,
-        None => return EFI_COMPROMISED_DATA,
-    };
+    let kernel_stack_size = (KERNEL_STACK_PAGES as u64) * 4096;
     if let Err(error) = map_identity_range(
         &mut page_tables,
-        stack_start,
-        stack_end - stack_start,
+        kernel_stack_physical,
+        kernel_stack_size,
         PagePermissions::KERNEL_READ_WRITE,
     ) {
         return page_table_error_status(error);
@@ -263,19 +282,6 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
     }
 }
 
-
-fn current_stack_pointer() -> u64 {
-    let stack_pointer: u64;
-    // SAFETY: Reading RSP has no side effects and is valid in x86_64 UEFI mode.
-    unsafe {
-        core::arch::asm!(
-            "mov {}, rsp",
-            out(reg) stack_pointer,
-            options(nomem, nostack, preserves_flags)
-        );
-    }
-    stack_pointer
-}
 
 fn align_page_up(value: u64) -> Option<u64> {
     value.checked_add(0xfff).map(|rounded| rounded & !0xfff)
