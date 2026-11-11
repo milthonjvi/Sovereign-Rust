@@ -8,6 +8,8 @@ pub mod ehci;
 pub mod hub;
 pub mod ohci;
 pub mod transfer;
+pub mod topology;
+pub mod hid;
 pub mod uhci;
 pub mod xhci;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
