@@ -30,9 +30,10 @@ paths or redefine shared interfaces independently.
 3. Drivers consume kernel services through narrow interfaces; they must not
    implement their own memory allocator, interrupt controller, scheduler, or VFS.
 4. The Sovereign UEFI path publishes validated ACPI table addresses through
-   `kernel::boot::sovereign::acpi_tables()`. It identity-maps UEFI ACPI
-   reclaimable (type 9) and NVS (type 10) ranges; ACPI consumers must validate
-   each physical range and must not assume a higher-half direct map exists.
+   `kernel::boot::sovereign::acpi_tables()` and parsed MADT routing metadata
+   through `kernel::boot::sovereign::madt_topology()`. It identity-maps UEFI
+   ACPI reclaimable (type 9) and NVS (type 10) ranges; ACPI consumers must
+   validate each physical range and must not assume a higher-half direct map exists.
 5. Hardware-specific unsafe code stays inside the relevant architecture or
    driver module and must document its safety invariants.
 6. No driver may touch MMIO, port I/O, DMA, or interrupt registers until the
