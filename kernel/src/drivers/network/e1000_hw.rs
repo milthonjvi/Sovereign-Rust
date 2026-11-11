@@ -33,6 +33,9 @@ const STATUS_SPEED_SHIFT: u32 = 6;
 /// Implementors must ensure accesses target a live E1000 MMIO window, never
 /// access outside the mapped region, and provide barriers that correctly order
 /// CPU access to coherent DMA memory with device ownership transitions.
+/// A failed `write32` must be reported before any register write is issued;
+/// returning an error after a posted/possibly-visible write would make descriptor
+/// rollback unsafe because the device might already own the published buffers.
 pub unsafe trait E1000Registers {
     type Error;
 
