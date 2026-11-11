@@ -157,7 +157,10 @@ impl<'a> Rtl8139RxRing<'a> {
         }
         let raw_length = packet.frame_length.checked_add(RTL8139_FCS_SIZE)
             .ok_or(Rtl8139Error::InvalidPacketLength)?;
-        if !(RTL8139_MIN_FRAME_WITH_FCS..=RTL8139_MAX_FRAME_WITH_FCS).contains(&raw_length) {
+        if !(RTL8139_MIN_FRAME_WITH_FCS..=RTL8139_MAX_FRAME_WITH_FCS).contains(&raw_length)
+            || packet.status != self.read_u16(self.cursor)
+            || raw_length != self.read_u16(self.cursor + 2) as usize
+        {
             return Err(Rtl8139Error::InvalidPacketLength);
         }
         let aligned = (4 + raw_length + 3) & !3;
