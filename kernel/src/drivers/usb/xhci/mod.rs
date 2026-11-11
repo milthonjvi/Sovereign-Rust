@@ -10,7 +10,7 @@ impl Trb{
  pub const fn with_cycle(mut self,cycle:bool)->Self{if cycle{self.control|=1}else{self.control&=!1}self}
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum ControllerState{Detached,Discovered,Halted,Resetting,Reset,Running,Failed}
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum XhciError{InvalidCapability,UnsupportedVersion,NotReady,HardwareFault,InvalidRing,RingFull}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum XhciError{InvalidCapability,UnsupportedVersion,NotReady,HardwareFault,InvalidRing,RingFull,InvalidDmaAddress,InvalidState}
 /// Bounds-checked access to an already mapped xHCI MMIO region.
 pub trait RegisterIo{fn read32(&self,offset:usize)->Result<u32,XhciError>;fn write32(&mut self,offset:usize,value:u32)->Result<(),XhciError>;}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
