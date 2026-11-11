@@ -361,26 +361,23 @@ impl ExtendedPmRegisters {
     ) -> Result<(), AcpiError> {
         self.validate()?;
         let checks = [
-            (self.pm1a_event, lengths.pm1_event),
-            (self.pm1b_event, lengths.pm1_event),
-            (self.pm1a_control, lengths.pm1_control),
-            (self.pm1b_control, lengths.pm1_control),
-            (self.pm2_control, lengths.pm2_control),
-            (self.pm_timer, lengths.pm_timer),
-            (self.gpe0, lengths.gpe0),
-            (self.gpe1, lengths.gpe1),
+            (self.pm1a_event, lengths.pm1_event, false),
+            (self.pm1b_event, lengths.pm1_event, false),
+            (self.pm1a_control, lengths.pm1_control, false),
+            (self.pm1b_control, lengths.pm1_control, false),
+            (self.pm2_control, lengths.pm2_control, true),
+            (self.pm_timer, lengths.pm_timer, false),
+            (self.gpe0, lengths.gpe0, false),
+            (self.gpe1, lengths.gpe1, false),
         ];
-        for (gas, length) in checks {
+        for (gas, length, is_pm2_control) in checks {
             if !gas.is_present() {
                 continue;
             }
             if length == 0 || gas.bit_width as u16 != (length as u16) * 8 {
                 return Err(AcpiError::InvalidGas);
             }
-            if gas.address == self.pm2_control.address
-                && gas.address_space == self.pm2_control.address_space
-                && gas.bit_width != 8
-            {
+            if is_pm2_control && (gas.bit_width != 8 || gas.bit_offset != 0) {
                 return Err(AcpiError::InvalidGas);
             }
             let end = gas.address.checked_add(length as u64)
@@ -646,6 +643,52 @@ mod tests {
         let (control, status) = fadt.validated_sleep_registers().unwrap().unwrap();
         assert_eq!(control.address, 0x1000);
         assert_eq!(status.address, 0x1001);
+    }
+
+    #[test]
+    fn parses_hypervisor_vendor_identity_and_rejects_truncation() {
+        let mut b = make_fadt(276, 0, None, None);
+        b[268..276].copy_from_slice(&0x534F_5645_5245_4947u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.hypervisor_vendor_identity, Some(0x534F_5645_5245_4947));
+
+        for length in [269usize, 275] {
+            let truncated = make_fadt(length, 0, None, None);
+            assert_eq!(Fadt::parse(&truncated), Err(AcpiError::InvalidLength));
+        }
+        let old = Fadt::parse(&make_fadt(268, 0, None, None)).unwrap();
+        assert_eq!(old.hypervisor_vendor_identity, None);
+    }
+
+    #[test]
+    fn hardware_reduced_validation_ignores_legacy_pm_register_metadata() {
+        let mut b = make_fadt(244, FADT_HW_REDUCED_ACPI, None, None);
+        b[88] = 3; // Invalid PM1 event block length in legacy mode.
+        b[89] = 7; // Invalid PM1 control block length in legacy mode.
+        b[90] = 9; // Invalid PM2 control block length in legacy mode.
+        b[91] = 3; // Invalid PM timer length in legacy mode.
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validate_pm_registers(), Ok(()));
+        assert_eq!(fadt.resolve_pm_register_map().unwrap().pm1a_control, None);
+    }
+
+    #[test]
+    fn rejects_pm2_gas_with_nonzero_bit_offset() {
+        let mut b = make_fadt(244, 0, None, None);
+        b[90] = 1;
+        b[196] = GenericAddress::ADDRESS_SPACE_SYSTEM_IO;
+        b[197] = 8;
+        b[198] = 1; // PM2 register must start at bit zero.
+        b[199] = GenericAddress::ACCESS_WORD;
+        b[200..208].copy_from_slice(&0xB2u64.to_le_bytes());
+        b[9] = 0;
+        b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let fadt = Fadt::parse(&b).unwrap();
+        assert_eq!(fadt.validate_pm_registers(), Err(AcpiError::InvalidGas));
     }
 
     #[test]
