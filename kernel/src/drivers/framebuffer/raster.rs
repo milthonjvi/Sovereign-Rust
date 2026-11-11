@@ -184,6 +184,83 @@ pub fn stroke_polygon(
     }
 }
 
+/// Fill an axis-aligned ellipse using integer scan conversion.
+///
+/// Radii larger than i64::MAX are rejected before any framebuffer writes.
+/// The scan is clipped vertically and each emitted horizontal span is clipped
+/// to the target, so work is bounded by the visible framebuffer height.
+pub fn fill_ellipse(
+    target: &mut FramebufferSurface<'_>,
+    center_x: i64,
+    center_y: i64,
+    radius_x: usize,
+    radius_y: usize,
+    color: Color,
+) -> Result<(), FramebufferError> {
+    if radius_x > i64::MAX as usize || radius_y > i64::MAX as usize {
+        return Err(FramebufferError::SizeOverflow);
+    }
+    let info = *target.info();
+    if info.width == 0 || info.height == 0 { return Ok(()); }
+    let rx = radius_x as u128;
+    let ry = radius_y as u128;
+    let cx = center_x as i128;
+    let cy = center_y as i128;
+    if radius_y == 0 {
+        let left = (cx - rx as i128).max(0);
+        let right = (cx + rx as i128).min(info.width.saturating_sub(1) as i128);
+        if cy >= 0 && cy < info.height as i128 && left <= right {
+            let x = usize::try_from(left).map_err(|_| FramebufferError::SizeOverflow)?;
+            let width = usize::try_from(right - left + 1).map_err(|_| FramebufferError::SizeOverflow)?;
+            target.fill_rect(x, cy as usize, width, 1, color);
+        }
+        return Ok(());
+    }
+    if radius_x == 0 {
+        let first = (cy - ry as i128).max(0);
+        let last = (cy + ry as i128).min(info.height.saturating_sub(1) as i128);
+        if cx >= 0 && cx < info.width as i128 && first <= last {
+            for y in first..=last { target.fill_rect(cx as usize, y as usize, 1, 1, color); }
+        }
+        return Ok(());
+    }
+    let first_y = (cy - ry as i128).max(0);
+    let last_y = (cy + ry as i128).min(info.height.saturating_sub(1) as i128);
+    if first_y > last_y { return Ok(()); }
+    let ry_squared = ry * ry;
+    for y in first_y..=last_y {
+        let dy = (y - cy).unsigned_abs();
+        if dy > ry { continue; }
+        let remaining = ry_squared - dy * dy;
+        let horizontal = (rx * integer_sqrt(remaining)) / ry;
+        let left = (cx - horizontal as i128).max(0);
+        let right = (cx + horizontal as i128).min(info.width.saturating_sub(1) as i128);
+        if left <= right {
+            let x = usize::try_from(left).map_err(|_| FramebufferError::SizeOverflow)?;
+            let width = usize::try_from(right - left + 1).map_err(|_| FramebufferError::SizeOverflow)?;
+            target.fill_rect(x, y as usize, width, 1, color);
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+fn integer_sqrt(value: u128) -> u128 {
+    let mut remainder = value;
+    let mut result = 0u128;
+    let mut bit = 1u128 << 126;
+    while bit > remainder { bit >>= 2; }
+    while bit != 0 {
+        if remainder >= result + bit {
+            remainder -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+    result
+}
 /// Fill a triangle using integer scanline intersections.
 ///
 /// Horizontal edges are excluded from edge intersection generation, and each
@@ -317,6 +394,32 @@ mod tests {
         unsafe { FramebufferSurface::from_mapped(memory.as_mut_ptr(), memory.len(), info).unwrap() }
     }
 
+    #[test]
+    fn fills_clipped_ellipse_with_symmetric_scanlines() {
+        use super::fill_ellipse;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        fill_ellipse(&mut target, 3, 3, 2, 1, Color::RED).unwrap();
+        drop(target);
+        let pixel = |x: usize, y: usize| memory[(y * 8 + x) * 4] == 255;
+        assert!(pixel(3, 3));
+        assert!(pixel(1, 3));
+        assert!(pixel(5, 3));
+        assert!(pixel(3, 2));
+        assert!(pixel(3, 4));
+        assert!(!pixel(0, 3));
+    }
+
+    #[test]
+    fn rejects_unrepresentable_ellipse_radius_before_writing() {
+        use super::fill_ellipse;
+        let mut memory = [0u8; 8 * 8 * 4];
+        let mut target = surface(&mut memory);
+        assert_eq!(fill_ellipse(&mut target, 3, 3, usize::MAX, 1, Color::RED),
+            Err(crate::drivers::framebuffer::info::FramebufferError::SizeOverflow));
+        drop(target);
+        assert!(memory.iter().all(|byte| *byte == 0));
+    }
     #[test]
     fn strokes_closed_polygon_edges() {
         let mut memory = [0u8; 8 * 8 * 4];
