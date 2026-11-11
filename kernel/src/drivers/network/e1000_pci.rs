@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn rejects_prefetchable_register_bar() {
-        let nic = E1000PciDevice::from_function(&function(0x8086, DEVICE_82540EM, 0)).unwrap();
+        let nic = E1000PciDevice::from_function(&function(0x8086, DEVICE_82540EM, PCI_COMMAND_MEMORY_SPACE)).unwrap();
         let bars = [Bar { index: 0, kind: BarKind::Memory32, prefetchable: true, base: 0xfebc0000, raw_low: 0xfebc0008, raw_high: None }];
         assert_eq!(nic.mmio_bar(&bars), Err(E1000PciError::InvalidMmioBar));
     }
