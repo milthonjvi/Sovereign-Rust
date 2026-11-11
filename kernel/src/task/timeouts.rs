@@ -222,7 +222,7 @@ impl<const N: usize> PitTaskTimeouts<N> {
         &self,
         task: TaskId,
         deadline: Deadline,
-    ) -> Result<(), crate::time::TimerServiceError> {
+    ) -> Result<(), crate::time::PitTimerServiceError> {
         self.timers.schedule_at(TimerId(task.0), deadline, TASK_SLEEP_EVENT, 0)
     }
 
@@ -231,7 +231,7 @@ impl<const N: usize> PitTaskTimeouts<N> {
         &self,
         task: TaskId,
         duration_ns: u64,
-    ) -> Result<Deadline, crate::time::TimerServiceError> {
+    ) -> Result<Deadline, crate::time::PitTimerServiceError> {
         self.timers.schedule_after(TimerId(task.0), duration_ns, TASK_SLEEP_EVENT, 0)
     }
 
