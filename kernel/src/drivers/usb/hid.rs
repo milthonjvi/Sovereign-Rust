@@ -1,0 +1,116 @@
+//! USB HID class support primitives for boot keyboards and mice.
+use super::{UsbError,transfer::SetupPacket};
+
+pub const HID_CLASS:u8=3;
+pub const HID_SUBCLASS_BOOT:u8=1;
+pub const HID_PROTOCOL_KEYBOARD:u8=1;
+pub const HID_PROTOCOL_MOUSE:u8=2;
+pub const HID_DESCRIPTOR_TYPE:u8=0x21;
+pub const HID_REPORT_DESCRIPTOR_TYPE:u8=0x22;
+pub const HID_SET_PROTOCOL:u8=0x0b;
+pub const HID_SET_IDLE:u8=0x0a;
+pub const HID_GET_REPORT:u8=0x01;
+pub const HID_PROTOCOL_BOOT:u16=0;
+pub const HID_PROTOCOL_REPORT:u16=1;
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct HidDescriptor{pub hid_release:u16,pub country_code:u8,pub subordinate_count:u8,pub report_length:u16}
+impl HidDescriptor{
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<9||bytes[0]<9||bytes[1]!=HID_DESCRIPTOR_TYPE{return Err(UsbError::MalformedDescriptor)}
+  let count=bytes[5] as usize;
+  if count==0||bytes[0] as usize<6+3*count||bytes.len()<6+3*count{return Err(UsbError::MalformedDescriptor)}
+  let mut report_length=0;
+  for i in 0..count{
+   let off=6+i*3;
+   if bytes[off]==HID_REPORT_DESCRIPTOR_TYPE{
+    report_length=u16::from_le_bytes([bytes[off+1],bytes[off+2]]);
+    break;
+   }
+  }
+  if report_length==0{return Err(UsbError::MalformedDescriptor)}
+  Ok(Self{hid_release:u16::from_le_bytes([bytes[2],bytes[3]]),country_code:bytes[4],subordinate_count:count as u8,report_length})
+ }
+}
+pub const fn set_protocol(interface:u8,protocol:u16)->SetupPacket{
+ SetupPacket::new(0x21,HID_SET_PROTOCOL,protocol,interface as u16,0)
+}
+pub const fn set_idle(interface:u8,duration:u8,report_id:u8)->SetupPacket{
+ SetupPacket::new(0x21,HID_SET_IDLE,((duration as u16)<<8)|report_id as u16,interface as u16,0)
+}
+pub const fn get_report(interface:u8,report_type:u8,report_id:u8,length:u16)->SetupPacket{
+ SetupPacket::new(0xa1,HID_GET_REPORT,((report_type as u16)<<8)|report_id as u16,interface as u16,length)
+}
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct BootKeyboardReport{pub modifiers:u8,pub keys:[u8;6]}
+impl BootKeyboardReport{
+ pub const LENGTH:usize=8;
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<Self::LENGTH{return Err(UsbError::BufferTooShort)}
+  if bytes[2..8].iter().any(|key|*key==1){return Err(UsbError::MalformedDescriptor)}
+  let mut keys=[0;6];keys.copy_from_slice(&bytes[2..8]);
+  Ok(Self{modifiers:bytes[0],keys})
+ }
+ pub const fn modifier_down(self,bit:u8)->bool{bit<8&&self.modifiers&(1<<bit)!=0}
+ pub fn key_down(self,usage:u8)->bool{usage!=0&&self.keys.contains(&usage)}
+ pub fn pressed_since(self,previous:Self,output:&mut[u8;6])->usize{
+  let mut n=0;
+  for key in self.keys{
+   if key!=0&&!previous.keys.contains(&key)&&n<output.len(){output[n]=key;n+=1;}
+  }
+  n
+ }
+ pub fn released_since(self,previous:Self,output:&mut[u8;6])->usize{
+  let mut n=0;
+  for key in previous.keys{
+   if key!=0&&!self.keys.contains(&key)&&n<output.len(){output[n]=key;n+=1;}
+  }
+  n
+ }
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct BootMouseReport{pub buttons:u8,pub x:i8,pub y:i8}
+impl BootMouseReport{
+ pub const LENGTH:usize=3;
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<Self::LENGTH{return Err(UsbError::BufferTooShort)}
+  Ok(Self{buttons:bytes[0],x:bytes[1] as i8,y:bytes[2] as i8})
+ }
+ pub const fn button_down(self,button:u8)->bool{button>=1&&button<=8&&self.buttons&(1<<(button-1))!=0}
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub struct BootMouseReportWheel{pub base:BootMouseReport,pub wheel:i8}
+impl BootMouseReportWheel{
+ pub fn parse(bytes:&[u8])->Result<Self,UsbError>{
+  if bytes.len()<4{return Err(UsbError::BufferTooShort)}
+  Ok(Self{base:BootMouseReport::parse(bytes)?,wheel:bytes[3] as i8})
+ }
+}
+
+#[cfg(test)]
+mod tests{
+ use super::*;
+ #[test]fn parses_hid_report_descriptor_reference(){
+  let d=HidDescriptor::parse(&[9,0x21,0x11,0x01,0,1,0x22,63,0]).unwrap();
+  assert_eq!(d.hid_release,0x0111);assert_eq!(d.report_length,63);
+ }
+ #[test]fn builds_boot_protocol_request(){
+  let p=set_protocol(2,HID_PROTOCOL_BOOT);
+  assert_eq!(p.request_type,0x21);assert_eq!(p.request,HID_SET_PROTOCOL);
+  assert_eq!(p.index,2);assert_eq!(p.value,0);
+ }
+ #[test]fn detects_keyboard_key_edges(){
+  let old=BootKeyboardReport::parse(&[0,0,4,0,0,0,0,0]).unwrap();
+  let new=BootKeyboardReport::parse(&[2,0,4,5,0,0,0,0]).unwrap();
+  let mut keys=[0;6];assert_eq!(new.pressed_since(old,&mut keys),1);assert_eq!(keys[0],5);
+  assert_eq!(new.released_since(old,&mut keys),0);assert!(new.modifier_down(1));
+ }
+ #[test]fn decodes_signed_mouse_motion(){
+  let m=BootMouseReport::parse(&[1,0xfe,3]).unwrap();
+  assert!(m.button_down(1));assert_eq!(m.x,-2);assert_eq!(m.y,3);
+ }
+ #[test]fn rejects_keyboard_rollover_usage(){
+  assert_eq!(BootKeyboardReport::parse(&[0,0,1,0,0,0,0,0]),Err(UsbError::MalformedDescriptor));
+ }
+}
