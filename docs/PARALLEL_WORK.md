@@ -18,6 +18,7 @@ paths or redefine shared interfaces independently.
 | Storage and USB | `kernel/src/drivers/storage/**`, `kernel/src/drivers/usb/**` | driver API, PCI, memory allocator, interrupt internals |
 | Network and serial | `kernel/src/drivers/network/**`, `kernel/src/drivers/serial/**` | driver API, PCI, architecture internals |
 | Timer devices | `kernel/src/drivers/timer/**` | driver API, timekeeping policy, interrupt internals |
+| I/O APIC controller and GSI topology (coordinator) | `kernel/src/drivers/ioapic.rs`, `kernel/src/drivers/ioapic_topology.rs` | ACPI, PCI, interrupt dispatch, shared driver API |
 | Scheduler and tasks | `kernel/src/task/**` | boot pipeline, architecture internals, memory allocator |
 | Other kernel services | `kernel/src/sync/**`, `time/**`, `fs/**`, `ipc/**`, `syscall/**`, `power/**`, `security/**`, `logging/**` | shared APIs and other assigned workstreams |
 
