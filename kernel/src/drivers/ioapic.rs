@@ -59,6 +59,12 @@ impl InterruptMode {
     }
 }
 
+/// Validate vectors accepted by external I/O APIC routes.
+#[inline]
+pub const fn valid_redirection_vector(vector: u8) -> bool {
+    vector >= 32 && vector != 0xFF
+}
+
 /// One I/O APIC redirection entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RedirectionEntry {
@@ -192,7 +198,7 @@ impl IoApicController {
         gsi: u32,
         entry: RedirectionEntry,
     ) -> Result<(), IoApicError> {
-        if entry.vector < 32 {
+        if !valid_redirection_vector(entry.vector) {
             return Err(IoApicError::InvalidVector);
         }
         let index = self.redirection_index(gsi)?;
@@ -284,6 +290,15 @@ mod tests {
             bus: 1, source: 4, global_system_interrupt: 9, flags: 0,
         }];
         assert_eq!(resolve_isa_irq(4, &unsupported), Err(IoApicError::UnsupportedBus));
+    }
+
+    #[test]
+    fn external_routes_cannot_use_the_apic_spurious_vector() {
+        assert!(!valid_redirection_vector(0));
+        assert!(!valid_redirection_vector(31));
+        assert!(valid_redirection_vector(32));
+        assert!(valid_redirection_vector(0xFE));
+        assert!(!valid_redirection_vector(0xFF));
     }
 
     #[test]
