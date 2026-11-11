@@ -323,7 +323,6 @@ impl HidReportDecoder {
         producer: &mut SpscProducer<'_, InputEvent, N>,
     ) -> Result<HidPublishStats, HidReportError> {
         if bytes.is_empty() { return Err(HidReportError::ReportTooShort); }
-        let report_id = if map.report_bytes(0) == 0 { bytes[0] } else { 0 };
         let has_ids = map.fields[..map.field_count as usize].iter().flatten()
             .any(|field| field.report_id != 0);
         let report_id = if has_ids { bytes[0] } else { 0 };
@@ -336,6 +335,18 @@ impl HidReportDecoder {
         if payload.len() < expected { return Err(HidReportError::ReportTooShort); }
 
         let mut stats = HidPublishStats::default();
+        let mut modifiers = 0u8;
+        for field in map.fields[..map.field_count as usize].iter().flatten() {
+            if field.report_id != report_id || field.usage_page != 0x07 || !field.is_variable() { continue; }
+            for element in 0..field.report_count as usize {
+                let usage = field.usage_min.saturating_add(element as u16);
+                if (0xE0..=0xE7).contains(&usage) {
+                    let bit = field.bit_offset + element as u32 * field.report_size as u32;
+                    let raw = extract_bits(payload, bit, field.report_size).ok_or(HidReportError::ReportTooShort)?;
+                    if raw != 0 { modifiers |= 1 << (usage - 0xE0); }
+                }
+            }
+        }
         let mut pointer_x = 0i32;
         let mut pointer_y = 0i32;
         let mut pointer_changed = false;
@@ -362,46 +373,61 @@ impl HidReportDecoder {
                 let variable = field.is_variable();
 
                 if field.usage_page == 0x07 {
-                    let key_usage = if variable { usage } else { value.max(0) as u16 };
-                    let down = if variable { value != 0 } else { value != 0 };
-                    if key_usage != 0 && (!had_old || (old != value)) {
-                        if !had_old || (old == 0 && down) || (old != 0 && !down) {
+                    if variable {
+                        if usage != 0 && (!had_old || old != value) {
                             self.emit(InputEvent::HidKey {
-                                device: self.device, usage_page: 0x07, usage: key_usage,
-                                pressed: down, modifiers: 0,
+                                device: self.device, usage_page: 0x07, usage,
+                                pressed: value != 0, modifiers,
                             }, producer, &mut stats);
+                        }
+                    } else {
+                        if had_old && old > 0 && old != value {
+                            self.emit(InputEvent::HidKey { device: self.device, usage_page: 0x07,
+                                usage: old as u16, pressed: false, modifiers }, producer, &mut stats);
+                        }
+                        if value > 0 && (!had_old || old != value) {
+                            self.emit(InputEvent::HidKey { device: self.device, usage_page: 0x07,
+                                usage: value as u16, pressed: true, modifiers }, producer, &mut stats);
                         }
                     }
                 } else if field.usage_page == 0x09 {
-                    let button = if variable { usage } else { value.max(0) as u16 };
-                    let down = if variable { value != 0 } else { value != 0 };
-                    if button != 0 && (!had_old || old != value) {
-                        if field.application_page == 0x01
-                            && (field.application_usage == 0x04 || field.application_usage == 0x05) {
+                    let gamepad = field.application_page == 0x01
+                        && (field.application_usage == 0x04 || field.application_usage == 0x05);
+                    if gamepad {
+                        let button = if variable { usage } else { value.max(0) as u16 };
+                        if button != 0 && (!had_old || old != value) {
                             self.emit(InputEvent::GamepadButton {
-                                device: self.device, button, pressed: down,
+                                device: self.device, button, pressed: value != 0,
                             }, producer, &mut stats);
-                        } else {
-                            if button <= 32 && down { pointer_buttons |= 1 << (button - 1); }
-                            pointer_button_seen = true;
                         }
-                    } else if button <= 32 && down {
-                        pointer_buttons |= 1 << (button - 1);
-                        pointer_button_seen = true;
-                    }
+                    } else { pointer_button_seen = true; }
                 } else if field.usage_page == 0x0C {
-                    let control = if variable { usage } else { value.max(0) as u16 };
-                    let down = if variable { value != 0 } else { value != 0 };
-                    if control != 0 && (!had_old || old != value) {
-                        self.emit(InputEvent::ConsumerControl {
-                            device: self.device, usage_page: 0x0C, usage: control, pressed: down,
-                        }, producer, &mut stats);
+                    if variable {
+                        if usage != 0 && (!had_old || old != value) {
+                            self.emit(InputEvent::ConsumerControl { device: self.device,
+                                usage_page: 0x0C, usage, pressed: value != 0 }, producer, &mut stats);
+                        }
+                    } else {
+                        if had_old && old > 0 && old != value {
+                            self.emit(InputEvent::ConsumerControl { device: self.device,
+                                usage_page: 0x0C, usage: old as u16, pressed: false }, producer, &mut stats);
+                        }
+                        if value > 0 && (!had_old || old != value) {
+                            self.emit(InputEvent::ConsumerControl { device: self.device,
+                                usage_page: 0x0C, usage: value as u16, pressed: true }, producer, &mut stats);
+                        }
                     }
                 } else if field.usage_page == 0x01 {
                     match usage {
                         0x30 | 0x31 if field.is_relative() => {
                             if usage == 0x30 { pointer_x = value; } else { pointer_y = value; }
                             pointer_changed = true;
+                        }
+                        0x38 if field.is_relative() => {
+                            self.emit(InputEvent::PointerMotion { device: self.device,
+                                dx: 0, dy: 0, wheel_x: 0,
+                                wheel_y: value.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                                buttons: 0 }, producer, &mut stats);
                         }
                         0x30..=0x38 if field.application_usage == 0x04
                             || field.application_usage == 0x05 => {
@@ -424,6 +450,21 @@ impl HidReportDecoder {
                 }
                 self.previous[slot] = value;
                 self.initialized[slot] = true;
+            }
+        }
+        if pointer_button_seen {
+            for field in map.fields[..map.field_count as usize].iter().flatten() {
+                if field.report_id != report_id || field.usage_page != 0x09
+                    || (field.application_page == 0x01
+                        && (field.application_usage == 0x04 || field.application_usage == 0x05)) { continue; }
+                for element in 0..field.report_count as usize {
+                    let slot = field.value_slot as usize + element;
+                    let button = if field.is_variable() { field.usage_min.saturating_add(element as u16) }
+                        else { self.previous[slot].max(0) as u16 };
+                    if self.previous[slot] != 0 && (1..=32).contains(&button) {
+                        pointer_buttons |= 1u32 << (button - 1);
+                    }
+                }
             }
         }
         if pointer_changed || pointer_button_seen {
