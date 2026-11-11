@@ -67,7 +67,6 @@ impl RegisterFisH2d {
             feature_high:0,count_low:sectors as u8,count_high:(sectors>>8) as u8,
             icc:0,control:0,reserved:[0;4]})
     }
-    }
     pub fn read_fpdma_queued(lba:u64,sectors:u32,tag:u8)->Result<Self,AhciError>{
         Self::ncq(0x60,lba,sectors,tag)
     }
@@ -157,6 +156,13 @@ mod tests{
         let n=build_prdt(0x1000,4*1024*1024+512,&mut entries,true).unwrap();
         assert_eq!(n,2);assert_eq!(entries[0].byte_count(),4*1024*1024);
         assert_eq!(entries[1].byte_count(),512);assert!(entries[1].interrupt_on_completion());
+    }
+    #[test]fn ncq_fpdma_encodes_tag_and_sector_count(){
+        let fis=RegisterFisH2d::read_fpdma_queued(0x1234,0x2345,7).unwrap();
+        assert_eq!(fis.command,0x60);
+        assert_eq!(fis.count_low,7<<3);
+        assert_eq!(fis.feature_low,0x45);
+        assert_eq!(fis.feature_high,0x23);
     }
     #[test]fn identify_decodes_lba48_and_large_logical_sector(){
         let mut words=[0u16;256];
