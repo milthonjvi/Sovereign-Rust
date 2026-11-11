@@ -19,6 +19,7 @@ pub mod e1000_irq;
 pub mod e1000_mmio;
 pub mod e1000_pci;
 pub mod ethernet;
+pub mod rtl8139;
 
 pub use device::{LinkState, NetworkDevice, NetworkInterfaceInfo};
 pub use dma::{DmaBuffer, DmaBufferError, DMA_BUFFER_ALIGNMENT, E1000_RX_BUFFER_MIN_SIZE};
@@ -36,3 +37,4 @@ pub use e1000_pci::{
 pub use e1000_irq::{E1000Interrupt, E1000InterruptError, E1000_DEFAULT_INTERRUPT_MASK};
 pub use e1000_mmio::{E1000MmioError, VolatileE1000Registers, E1000_MMIO_MIN_LENGTH};
 pub use ethernet::{EthernetFrame, EthernetFrameError, MacAddress};
+pub use rtl8139::{Rtl8139Error, Rtl8139RxPacket, Rtl8139RxRing};
