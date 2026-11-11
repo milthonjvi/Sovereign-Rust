@@ -115,6 +115,27 @@ pub extern "efiapi" fn efi_main(
         );
     }
 
+    // Reserve an emergency IDT page whose handlers remain mapped across CR3.
+    let mut emergency_idt_physical = 0u64;
+    // SAFETY: Boot Services remain active and the output slot is writable.
+    let idt_status = unsafe {
+        allocate_loader_pages(
+            &mut *(system_table.boot_services as *mut EfiBootServices),
+            1,
+            &mut emergency_idt_physical,
+        )
+    };
+    if idt_status != EFI_SUCCESS {
+        return idt_status;
+    }
+    if emergency_idt_physical == 0 || emergency_idt_physical & 0xfff != 0 {
+        return EFI_COMPROMISED_DATA;
+    }
+    // SAFETY: AllocatePages returned one writable page for 256 IDT gates.
+    unsafe {
+        build_emergency_idt(emergency_idt_physical)?;
+    }
+
     // NX must be enabled before any PTE with the NX bit is installed.
     // SAFETY: UEFI x86_64 applications execute at CPL 0; CPUID/MSR support is
     // checked by enable_nxe before the EFER bit is changed.
@@ -168,6 +189,29 @@ pub extern "efiapi" fn efi_main(
             return page_table_error_status(error);
         }
     }
+
+    // Preserve the active firmware GDT for exception-gate selector resolution.
+    let (gdt_base, gdt_limit) = current_gdt();
+    if gdt_base == 0 || gdt_limit < 0x0f {
+        return EFI_COMPROMISED_DATA;
+    }
+    if let Err(error) = map_identity_range_allow_existing(
+        &mut page_tables,
+        gdt_base,
+        (gdt_limit as u64) + 1,
+        PagePermissions::KERNEL_READ_ONLY,
+    ) {
+        return page_table_error_status(error);
+    }
+    if let Err(error) = map_identity_range(
+        &mut page_tables,
+        emergency_idt_physical,
+        4096,
+        PagePermissions::KERNEL_READ_ONLY,
+    ) {
+        return page_table_error_status(error);
+    }
+
     let kernel_stack_size = (KERNEL_STACK_PAGES as u64) * 4096;
     if let Err(error) = map_identity_range(
         &mut page_tables,
@@ -304,6 +348,7 @@ pub extern "efiapi" fn efi_main(
         loaded_kernel.entry,
         boot_info_physical,
         kernel_stack_top,
+        emergency_idt_physical,
     );
 }
 
@@ -314,6 +359,77 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
     }
 }
 
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct IdtEntry {
+    offset_low: u16,
+    selector: u16,
+    ist: u8,
+    attributes: u8,
+    offset_middle: u16,
+    offset_high: u32,
+    reserved: u32,
+}
+
+#[repr(C, packed)]
+struct DescriptorTablePointer {
+    limit: u16,
+    base: u64,
+}
+
+unsafe fn build_emergency_idt(physical_base: u64) -> Result<(), EfiStatus> {
+    let selector: u16;
+    // SAFETY: Reading CS is valid in x86_64 UEFI long mode.
+    unsafe {
+        core::arch::asm!(
+            "mov {0:x}, cs",
+            out(reg) selector,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    let handler = sovereign_emergency_fault as usize as u64;
+    let gate = IdtEntry {
+        offset_low: handler as u16,
+        selector,
+        ist: 0,
+        attributes: 0x8e,
+        offset_middle: (handler >> 16) as u16,
+        offset_high: (handler >> 32) as u32,
+        reserved: 0,
+    };
+    let table = physical_base as usize as *mut IdtEntry;
+    for vector in 0..256 {
+        // SAFETY: The caller reserved a page for exactly 256 16-byte gates.
+        unsafe { ptr::write(table.add(vector), gate) };
+    }
+    Ok(())
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn sovereign_emergency_fault() -> ! {
+    loop {
+        // SAFETY: Emergency exception path; do not return to an unknown state.
+        unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)); }
+    }
+}
+
+fn current_gdt() -> (u64, u16) {
+    let mut pointer = DescriptorTablePointer { limit: 0, base: 0 };
+    // SAFETY: SGDT writes the current GDT descriptor to this 10-byte buffer.
+    unsafe {
+        core::arch::asm!(
+            "sgdt [{}]",
+            in(reg) &mut pointer,
+            options(nostack, preserves_flags)
+        );
+    }
+    // SAFETY: The descriptor is packed and may be unaligned.
+    let base = unsafe { ptr::addr_of!(pointer.base).read_unaligned() };
+    // SAFETY: The first two bytes are the descriptor limit.
+    let limit = unsafe { ptr::addr_of!(pointer.limit).read_unaligned() };
+    (base, limit)
+}
 
 fn align_page_up(value: u64) -> Option<u64> {
     value.checked_add(0xfff).map(|rounded| rounded & !0xfff)
@@ -338,6 +454,28 @@ fn map_identity_range<M: PageTableMemory>(
     Ok(())
 }
 
+fn map_identity_range_allow_existing<M: PageTableMemory>(
+    tables: &mut PageTableBuilder<M>,
+    base: u64,
+    size: u64,
+    permissions: PagePermissions,
+) -> Result<(), PageTableError> {
+    if size == 0 {
+        return Err(PageTableError::MisalignedAddress);
+    }
+    let end = base.checked_add(size).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
+    let mut page = base & !0xfff;
+    let rounded_end = align_page_up(end).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
+    while page < rounded_end {
+        match tables.map_4k(page, page, permissions) {
+            Ok(()) | Err(PageTableError::AlreadyMapped) => {}
+            Err(error) => return Err(error),
+        }
+        page = page.checked_add(0x1000).ok_or(PageTableError::PhysicalAddressOutOfRange)?;
+    }
+    Ok(())
+}
+
 fn page_table_error_status(error: PageTableError) -> EfiStatus {
     match error {
         PageTableError::AllocationFailed => EFI_OUT_OF_RESOURCES,
@@ -351,6 +489,7 @@ fn transition_to_kernel(
     kernel_entry: u64,
     boot_info_physical: u64,
     stack_top: u64,
+    emergency_idt_physical: u64,
 ) -> ! {
     let new_stack = match (stack_top & !0xf).checked_sub(8) {
         Some(stack) => stack,
@@ -361,14 +500,15 @@ fn transition_to_kernel(
     // SAFETY: The dedicated stack is a live writable EFI_LOADER_DATA allocation.
     unsafe { ptr::write(new_stack as usize as *mut u64, 0) };
 
-    // SAFETY: ExitBootServices has succeeded. Every instruction fetched before
-    // the jump belongs to the mapped loader image; the new stack, boot-info
-    // page, and kernel entry are mapped in the supplied root. IF is cleared
-    // before CR3 changes and no firmware services are called afterward.
+    let idtr = DescriptorTablePointer { limit: 4095, base: emergency_idt_physical };
+    // SAFETY: ExitBootServices succeeded. The emergency IDT page and loader
+    // handler are mapped in the new root; the IDTR descriptor itself is read
+    // before RSP/CR3 change while the firmware stack is still active.
     unsafe {
         core::arch::asm!(
             "cli",
             "cld",
+            "lidt [r9]",
             "mov cr3, rax",
             "mov rdi, rdx",
             "mov rsp, rcx",
@@ -377,6 +517,7 @@ fn transition_to_kernel(
             in("rdx") boot_info_physical,
             in("rcx") new_stack,
             in("r8") kernel_entry,
+            in("r9") &idtr,
             options(noreturn)
         );
     }
