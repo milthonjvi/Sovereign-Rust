@@ -134,6 +134,25 @@ impl Uart16550 {
         Ok(unsafe { io::in8(self.port(LSR)) } & THR_EMPTY != 0)
     }
 
+    /// Enables receive-data-available interrupts only.
+    ///
+    /// Register the matching kernel IRQ handler and keep the PIC line masked
+    /// before calling this method. The caller unmasks the PIC line last.
+    pub fn enable_receive_interrupt(&mut self) -> Result<(), UartError> {
+        self.ensure_initialized()?;
+        // SAFETY: This instance owns the UART; IER bit 0 enables RX-ready IRQ.
+        unsafe { io::out8(self.port(IER), 1); }
+        Ok(())
+    }
+
+    /// Disables all UART interrupt sources.
+    pub fn disable_interrupts(&mut self) -> Result<(), UartError> {
+        self.ensure_initialized()?;
+        // SAFETY: This instance owns the UART.
+        unsafe { io::out8(self.port(IER), 0); }
+        Ok(())
+    }
+
     /// Non-blocking receive; None means no byte is available.
     pub fn try_read_byte(&self) -> Result<Option<u8>, UartError> {
         self.ensure_initialized()?;
