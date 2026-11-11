@@ -197,3 +197,31 @@ impl FatDirEntry {
     }
     pub const fn is_directory(&self) -> bool { self.attributes & 0x10 != 0 }
 }
+
+#[cfg(test)]
+mod fat_policy_tests {
+    use super::*;
+    fn fat32_boot(flags: u16) -> [u8; 512] {
+        let mut b = [0u8;512]; b[0..3].copy_from_slice(&[0xEB,0x58,0x90]);
+        b[11..13].copy_from_slice(&512u16.to_le_bytes()); b[13]=1;
+        b[14..16].copy_from_slice(&32u16.to_le_bytes()); b[16]=2;
+        b[32..36].copy_from_slice(&70_000u32.to_le_bytes());
+        b[36..40].copy_from_slice(&600u32.to_le_bytes());
+        b[40..42].copy_from_slice(&flags.to_le_bytes());
+        b[44..48].copy_from_slice(&2u32.to_le_bytes());
+        b[48..50].copy_from_slice(&1u16.to_le_bytes()); b[50..52].copy_from_slice(&6u16.to_le_bytes());
+        b[510]=0x55; b[511]=0xAA; b
+    }
+    #[test]
+    fn fat32_honors_active_fat_selection() {
+        let parsed = parse_bpb(&fat32_boot(0x0081), 512).unwrap();
+        assert!(!parsed.fat_mirroring_enabled);
+        assert_eq!(parsed.active_fat, 1);
+    }
+    #[test]
+    fn fat32_mirroring_uses_primary_copy() {
+        let parsed = parse_bpb(&fat32_boot(0), 512).unwrap();
+        assert!(parsed.fat_mirroring_enabled);
+        assert_eq!(parsed.active_fat, 0);
+    }
+}
