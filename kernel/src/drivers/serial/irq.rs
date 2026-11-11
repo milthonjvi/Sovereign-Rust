@@ -388,6 +388,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn receive_irq_mask_keeps_line_errors_enabled_without_modem_irqs() {
+        assert_eq!(RX_IRQ_ENABLES, 0b0000_0101);
+        assert_eq!(RX_IRQ_ENABLES & THRE_INTERRUPT_ENABLE, 0);
+        // IER bit 3 is modem-status interrupt enable and must remain clear.
+        assert_eq!(RX_IRQ_ENABLES & (1 << 3), 0);
+        assert_eq!(RX_IRQ_ENABLES | THRE_INTERRUPT_ENABLE, 0b0000_0111);
+    }
+
+    #[test]
     fn legacy_uart_irq_sharing_is_correct() {
         assert_eq!(binding(0x3F8).map(|port| port.irq).unwrap_or(0), 4);
         assert_eq!(binding(0x3E8).map(|port| port.irq).unwrap_or(0), 4);
