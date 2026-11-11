@@ -13,7 +13,7 @@ use crate::{
     drivers::api::DriverError,
 };
 
-use super::{apic::{calibrate_bus_clock_hz, calibrated_periodic_initial_count, periodic_initial_count, ApicDivide}, hpet::Hpet};
+use super::{apic::{calibrate_bus_clock_hz, ApicDivide}, hpet::Hpet};
 
 /// x2APIC one-shot countdown timer using the architectural initial-count MSR.
 ///
@@ -384,6 +384,7 @@ fn map_x2apic_error(error: X2ApicError) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::apic::{calibrated_periodic_initial_count, periodic_initial_count};
 
     #[test]
     fn calculates_periodic_count() {
