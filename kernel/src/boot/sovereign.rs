@@ -73,6 +73,7 @@ impl SovereignBootInfo {
         if self.memory_map_format != MEMORY_MAP_FORMAT_UEFI
             || self.memory_descriptor_version != MEMORY_DESCRIPTOR_VERSION
             || self.memory_descriptor_size < core::mem::size_of::<EfiMemoryDescriptor>() as u64
+            || self.memory_descriptor_size & 7 != 0
             || self.memory_map_size == 0
             || self.memory_map_size % self.memory_descriptor_size != 0
             || self.memory_map_size / self.memory_descriptor_size > MAX_MEMORY_DESCRIPTORS
