@@ -68,7 +68,63 @@ pub fn scan_bus<A: ConfigAccess>(
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub enum BarKind{Io,MemoryBelow1M,Memory32,Memory64}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct Bar{pub index:u8,pub kind:BarKind,pub prefetchable:bool,pub base:u64,pub raw_low:u32,pub raw_high:Option<u32>}
-impl Bar{pub const fn decode(index:u8,low:u32,high:Option<u32>)->Option<Self>{if low&1!=0{return Some(Self{index,kind:BarKind::Io,prefetchable:false,base:(low&!3)as u64,raw_low:low,raw_high:None})}let ty=(low>>1)&3;if ty==0{Some(Self{index,kind:BarKind::Memory32,prefetchable:low&8!=0,base:(low&!15)as u64,raw_low:low,raw_high:None})}else if ty==1{Some(Self{index,kind:BarKind::MemoryBelow1M,prefetchable:low&8!=0,base:(low&0x000f_fff0)as u64,raw_low:low,raw_high:None})}else if ty==2{match high{Some(hi)=>Some(Self{index,kind:BarKind::Memory64,prefetchable:low&8!=0,base:((hi as u64)<<32)|(low as u64&!15),raw_low:low,raw_high:Some(hi)}),None=>None}}else{None}}}
+impl Bar {
+    /// Decode a BAR value. Reserved encodings and reserved address bits are rejected.
+    pub const fn decode(index: u8, low: u32, high: Option<u32>) -> Option<Self> {
+        if low & 1 != 0 {
+            // Bit 1 of an I/O BAR is reserved and must read as zero.
+            if low & 0x2 != 0 {
+                return None;
+            }
+            return Some(Self {
+                index,
+                kind: BarKind::Io,
+                prefetchable: false,
+                base: (low & !3) as u64,
+                raw_low: low,
+                raw_high: None,
+            });
+        }
+
+        let memory_type = (low >> 1) & 3;
+        match memory_type {
+            0 => Some(Self {
+                index,
+                kind: BarKind::Memory32,
+                prefetchable: low & 8 != 0,
+                base: (low & !15) as u64,
+                raw_low: low,
+                raw_high: None,
+            }),
+            1 => {
+                // A below-1-MiB BAR has only address bits 19:4.
+                if low & 0xfff0_0000 != 0 {
+                    return None;
+                }
+                Some(Self {
+                    index,
+                    kind: BarKind::MemoryBelow1M,
+                    prefetchable: low & 8 != 0,
+                    base: (low & 0x000f_fff0) as u64,
+                    raw_low: low,
+                    raw_high: None,
+                })
+            }
+            2 => match high {
+                Some(upper) => Some(Self {
+                    index,
+                    kind: BarKind::Memory64,
+                    prefetchable: low & 8 != 0,
+                    base: ((upper as u64) << 32) | (low as u64 & !15),
+                    raw_low: low,
+                    raw_high: Some(upper),
+                }),
+                None => None,
+            },
+            _ => None,
+        }
+    }
+}
 /// PCIe ECAM window descriptor, normally sourced from ACPI MCFG.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct EcamWindow{pub segment:u16,pub start_bus:u8,pub end_bus:u8,pub physical_base:u64}
 impl EcamWindow{pub const fn contains(self,a:PciAddress)->bool{a.segment==self.segment&&a.bus>=self.start_bus&&a.bus<=self.end_bus}pub const fn offset(self,a:PciAddress,register:u16)->Option<u64>{if !self.contains(a)||a.device>=MAX_DEVICES||a.function>=MAX_FUNCTIONS||register>=PCIE_CONFIG_SIZE||register&3!=0{return None}Some((((a.bus-self.start_bus)as u64)<<20)|((a.device as u64)<<15)|((a.function as u64)<<12)|register as u64)}}
@@ -174,4 +230,12 @@ mod scan_report_tests {
         assert_eq!(report.devices_found, 2);
         assert!(!report.truncated);
     }
+
+    #[test]
+    fn rejects_reserved_bar_encodings_and_address_bits() {
+        assert!(Bar::decode(0, 0x1003, None).is_none());
+        assert!(Bar::decode(0, 0x0010_1002, None).is_none());
+        assert!(Bar::decode(0, 0x0008_1002, None).is_some());
+    }
+
 }
