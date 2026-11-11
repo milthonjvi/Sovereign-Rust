@@ -110,6 +110,15 @@ pub extern "C" fn _start(boot_info_pointer: *const SovereignBootInfo) -> ! {
             let _ = unsafe {
                 sovereign_kernel::boot::sovereign::install_acpi_tables(tables)
             };
+            if let Ok(topology) = tables.interrupt_topology(
+                |physical| map_uefi_acpi_sdt(&memory_map, physical),
+            ) {
+                // SAFETY: The topology is constructed from validated MADT
+                // records and is published once before APs or IRQs start.
+                let _ = unsafe {
+                    sovereign_kernel::boot::sovereign::install_madt_topology(topology)
+                };
+            }
         }
     }
 
