@@ -176,11 +176,21 @@ impl Fadt {
         })
     }
 
+    /// Return the preferred nonzero FACS pointer (extended before legacy).
+    ///
+    /// This is a raw preference, not a proof that the address is mappable or
+    /// usable by the current CPU. Consumers must retry the legacy pointer when
+    /// the extended address cannot be used, as the discovery layer does.
     pub fn firmware_control_address(&self) -> u64 {
         self.x_firmware_ctrl.filter(|address| *address != 0)
             .unwrap_or(self.firmware_ctrl as u64)
     }
 
+    /// Return the preferred nonzero DSDT pointer (extended before legacy).
+    ///
+    /// This is a raw preference, not a proof that the address is mappable or
+    /// usable by the current CPU. Consumers must retry the legacy pointer when
+    /// the extended address cannot be used, as the discovery layer does.
     pub fn dsdt_address(&self) -> u64 {
         self.x_dsdt.filter(|address| *address != 0)
             .unwrap_or(self.dsdt as u64)
