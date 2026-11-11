@@ -4,6 +4,7 @@
 //! configure the PIC/IOAPIC before enabling either device interrupt.
 
 use crate::arch::x86_64::io;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 const DATA: u16 = 0x60;
 const STATUS_COMMAND: u16 = 0x64;
@@ -67,7 +68,7 @@ pub struct Ps2DataByte {
 /// Exclusive owner of the legacy i8042 controller.
 pub struct Ps2Controller {
     poll_limit: usize,
-    config: u8,
+    config: AtomicU8,
     initialized: bool,
     keyboard_available: bool,
     mouse_available: bool,
@@ -81,7 +82,7 @@ impl Ps2Controller {
     pub const unsafe fn new() -> Self {
         Self {
             poll_limit: DEFAULT_POLL_LIMIT,
-            config: 0,
+            config: AtomicU8::new(0),
             initialized: false,
             keyboard_available: false,
             mouse_available: false,
@@ -170,7 +171,7 @@ impl Ps2Controller {
         config |= CONFIG_TRANSLATION;
         self.command(CMD_WRITE_CONFIG)?;
         self.write_data(config)?;
-        self.config = config;
+        self.config.store(config, Ordering::Release);
 
         self.command(CMD_TEST_KEYBOARD)?;
         let keyboard_port = self.read_data()?;
@@ -284,28 +285,48 @@ impl Ps2Controller {
         Ok(protocol)
     }
 
-    /// Enables IRQ generation only after the caller has installed and unmasked
-    /// the corresponding interrupt path.
-    ///
-    /// # Safety
-    /// The caller must have a functioning IRQ1 handler and routing configured.
-    pub unsafe fn enable_keyboard_irq(&mut self) -> Result<(), Ps2Error> {
+    fn update_irq_config(&self, set: u8, clear: u8) -> Result<(), Ps2Error> {
         self.ensure_initialized()?;
-        self.config |= CONFIG_IRQ_KEYBOARD;
+        let current = self.config.load(Ordering::Acquire);
+        let next = (current | set) & !clear;
         self.command(CMD_WRITE_CONFIG)?;
-        self.write_data(self.config)
+        self.write_data(next)?;
+        self.config.store(next, Ordering::Release);
+        Ok(())
     }
 
-    /// Enables IRQ generation only after the caller has installed and unmasked
-    /// the corresponding interrupt path.
+    /// Enables IRQ1 after its handler has been registered and its PIC line
+    /// remains masked. The caller unmasks the PIC only after all setup finishes.
     ///
     /// # Safety
-    /// The caller must have a functioning IRQ12 handler and routing configured.
-    pub unsafe fn enable_mouse_irq(&mut self) -> Result<(), Ps2Error> {
-        self.ensure_initialized()?;
-        self.config |= CONFIG_IRQ_MOUSE;
-        self.command(CMD_WRITE_CONFIG)?;
-        self.write_data(self.config)
+    /// Must be serialized with every other i8042 operation and run with IF clear.
+    pub unsafe fn enable_keyboard_irq(&self) -> Result<(), Ps2Error> {
+        self.update_irq_config(CONFIG_IRQ_KEYBOARD, 0)
+    }
+
+    /// Enables IRQ12 after its handler has been registered and its PIC line
+    /// remains masked. The caller unmasks the PIC only after all setup finishes.
+    ///
+    /// # Safety
+    /// Must be serialized with every other i8042 operation and run with IF clear.
+    pub unsafe fn enable_mouse_irq(&self) -> Result<(), Ps2Error> {
+        self.update_irq_config(CONFIG_IRQ_MOUSE, 0)
+    }
+
+    /// Disables IRQ1 without disabling the keyboard port.
+    ///
+    /// # Safety
+    /// Must be serialized with every other i8042 operation and run with IF clear.
+    pub unsafe fn disable_keyboard_irq(&self) -> Result<(), Ps2Error> {
+        self.update_irq_config(0, CONFIG_IRQ_KEYBOARD)
+    }
+
+    /// Disables IRQ12 without disabling the auxiliary mouse port.
+    ///
+    /// # Safety
+    /// Must be serialized with every other i8042 operation and run with IF clear.
+    pub unsafe fn disable_mouse_irq(&self) -> Result<(), Ps2Error> {
+        self.update_irq_config(0, CONFIG_IRQ_MOUSE)
     }
 
     pub const fn keyboard_available(&self) -> bool { self.keyboard_available }
