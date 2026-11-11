@@ -121,9 +121,11 @@ mod ring_tests{
  }
  #[test]fn event_ring_consumes_only_matching_cycle(){
   let mut entries=[Trb::EMPTY;2];
-  entries[0]=Trb{parameter:7,status:0,control:1};
-  entries[1]=Trb{parameter:8,status:0,control:1};
   let mut ring=unsafe{XhciEventRing::new(&mut entries)}.unwrap();
+  unsafe{
+   core::ptr::write_volatile(&mut ring.entries[0],Trb{parameter:7,status:0,control:1});
+   core::ptr::write_volatile(&mut ring.entries[1],Trb{parameter:8,status:0,control:1});
+  }
   assert_eq!(ring.pop().unwrap().parameter,7);assert_eq!(ring.pop().unwrap().parameter,8);
   assert_eq!(ring.pop(),None);assert_eq!(ring.dequeue_index(),0);assert!(!ring.consumer_cycle());
  }
